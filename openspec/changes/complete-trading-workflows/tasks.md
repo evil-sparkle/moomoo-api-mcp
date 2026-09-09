@@ -71,10 +71,10 @@ Recorded 2026-09-10, after implementing R1-R8.
 
 ### Automated
 
-- `pytest`: 403 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
+- `pytest`: 444 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
   development environment) and on Python 3.10.21 with `mcp` 1.10.0, the lowest
   supported combination.
-- `ruff check .`: 76 diagnostics, against a 110-diagnostic baseline at commit
+- `ruff check .`: 74 diagnostics, against a 110-diagnostic baseline at commit
   `90c5045`. No new diagnostic in any file; the reduction is incidental to
   rewriting files that already carried lint debt.
 - `openspec validate complete-trading-workflows --strict --no-interactive`:
@@ -105,10 +105,32 @@ FastMCP` raises at import. The lower bound was also understated, since the typed
 tool results depend on structured output, added in `mcp` 1.10.0. The range is
 now `>=1.10.0,<2`. This was a pre-existing defect, not a regression from R1-R8.
 
+### Defects found in review and fixed
+
+Review after the first pass found five defects the mocked coverage missed.
+Each was reproduced against the installed SDK, not a fixture, and each now has
+a regression test:
+
+| # | Defect | Why the mocks missed it |
+| --- | --- | --- |
+| 1 | Startup hung when OpenD was unreachable, so `check_health` never became callable | The tests modelled connection failure as an exception; the SDK instead retries forever and never returns |
+| 2 | Blocking SDK calls froze the event loop, delaying concurrent requests including health | Single-call tests never exercise concurrency. FastMCP also runs plain `def` tools on the loop, so the trading tools blocked too |
+| 3 | Preview returned the string `"N/A"` where it documents `null` | The fixtures used NaN; the SDK decoder writes `"N/A"` |
+| 4 | `K_5MIN` silently returned daily candles and `UNADJUSTED` silently returned QFQ | No test passed an invalid interval or adjustment |
+| 5 | Account tools told agents to unlock before reading, which READ_ONLY denies | Tool descriptions were not checked against the policy they now coexist with |
+
+Two structural guards were added so 1, 2 and 4 cannot silently return: a
+static check that no tool calls a service method directly on the event loop, a
+decoder-driven test for the missing-value sentinel, and assertions that tool
+descriptions do not mandate an unlock that policy denies.
+
 ### Not verified
 
-- 4.5 read-only gateway smoke checks were **not** run: no authorized OpenD
-  instance is available in this environment. Every requirement above is covered
+- 4.5 read-only gateway smoke checks were **not** run against an authorized
+  account: no authorized OpenD instance is available in this environment. An
+  *unauthenticated* check against a closed port was used to reproduce and
+  verify the startup-hang fix (the lifespan now yields in 5.0s and
+  `check_health` answers in 3.0s with `status=disconnected`). Every requirement above is covered
   by mocked SDK responses; no live order, unlock, or subscription release was
   issued. The smoke checks remain outstanding for whoever has gateway access,
   and the following are the values to confirm against a real gateway: the
