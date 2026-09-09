@@ -24,6 +24,43 @@ SUBSCRIPTION_TYPES = tuple(
     value for value in SubType.get_all_key_list() if value != "N/A"
 )
 
+# Candle intervals and adjustments, named as the tools document them. Taken
+# from the SDK's own attributes so the accepted set cannot drift from what
+# the SDK supports. AuType's wire values are lowercase ('qfq'), so the
+# uppercase name is what a caller passes and the value is what is forwarded.
+KLINE_TYPES = tuple(
+    name for name in vars(KLType) if name.isupper() and name != "NONE"
+)
+ADJUSTMENT_TYPES = tuple(
+    name for name in vars(AuType) if name.isupper()
+)
+
+
+def validate_candle_filters(ktype: str, autype: str) -> tuple[str, str]:
+    """Resolve a candle interval and adjustment, rejecting unknown values.
+
+    These were previously resolved with a defaulting getattr, so 'K_5MIN'
+    silently became daily candles and 'UNADJUSTED' silently became forward
+    adjustment. The caller got a valid-looking series answering a different
+    question than the one asked, with nothing in the response to say so — and
+    for the paginated tool, a cursor stamped with the interval that was
+    requested rather than the one that was served. An unknown value is an
+    error instead.
+
+    Args:
+        ktype: Candle interval name, e.g. 'K_DAY'.
+        autype: Adjustment name: 'QFQ', 'HFQ', or 'NONE'.
+
+    Returns:
+        The SDK enum values to forward.
+
+    Raises:
+        ValueError: If either name is not supported.
+    """
+    interval = validate_choice("ktype", ktype, KLINE_TYPES)
+    adjustment = validate_choice("autype", autype, ADJUSTMENT_TYPES)
+    return getattr(KLType, interval), getattr(AuType, adjustment)
+
 # Markets the provider will return a trading calendar for. NONE is excluded:
 # it is the SDK's 'unspecified' placeholder, not a market a caller can mean.
 TRADING_DAY_MARKETS = tuple(
@@ -189,9 +226,7 @@ class MarketDataService:
         if not self.quote_ctx:
             raise RuntimeError("Quote context not connected")
 
-        # Convert string ktype to enum
-        ktype_enum = getattr(KLType, ktype, KLType.K_DAY)
-        autype_enum = getattr(AuType, autype, AuType.QFQ)
+        ktype_enum, autype_enum = validate_candle_filters(ktype, autype)
 
         ret, data, _ = self.quote_ctx.request_history_kline(
             code=code,
@@ -242,8 +277,7 @@ class MarketDataService:
         if not self.quote_ctx:
             raise RuntimeError("Quote context not connected")
 
-        ktype_enum = getattr(KLType, ktype, KLType.K_DAY)
-        autype_enum = getattr(AuType, autype, AuType.QFQ)
+        ktype_enum, autype_enum = validate_candle_filters(ktype, autype)
 
         ret, data, next_page_req_key = self.quote_ctx.request_history_kline(
             code=code,

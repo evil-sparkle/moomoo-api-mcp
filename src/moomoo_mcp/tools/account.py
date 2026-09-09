@@ -6,6 +6,7 @@ from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.tools.offload import run_blocking
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
@@ -17,9 +18,10 @@ async def get_accounts(
 
     Returns list of account dictionaries with acc_id, trd_env (REAL/SIMULATE), etc.
 
-    IMPORTANT: This returns both REAL and SIMULATE accounts. To access REAL account
-    data via other tools (get_assets, get_positions, etc.), you must first call
-    unlock_trade with the trading password.
+    IMPORTANT: This returns both REAL and SIMULATE accounts. Listing accounts is
+    a read and never requires unlocking. Reading a REAL account's data through
+    the other tools may require unlock_trade, but attempt the read first — see
+    unlock_trade for why calling it up front can fail unnecessarily.
 
     Returns:
         List of account dictionaries containing acc_id, trd_env, and other metadata.
@@ -31,7 +33,7 @@ async def get_accounts(
         to a number at any point.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    accounts = trade_service.get_accounts()
+    accounts = await run_blocking(trade_service.get_accounts)
     await ctx.info(f"Retrieved {len(accounts)} accounts")
     return serialize_identifiers(accounts)
 
@@ -50,12 +52,16 @@ async def get_account_summary(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
-    - For REAL accounts, you must call unlock_trade first with the trading password.
+    - Reading REAL account data may require unlock_trade, depending on the
+      gateway. Try the read FIRST and only call unlock_trade if it fails
+      asking to be unlocked. Do not unlock pre-emptively: in the default
+      READ_ONLY trading mode unlock is denied outright, so calling it first
+      turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
     Args:
-        trd_env: Trading environment. 'REAL' (default, requires unlock_trade first)
-            or 'SIMULATE' (no unlock needed, for testing).
+        trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
+            testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().
 
     Returns:
@@ -67,8 +73,12 @@ async def get_account_summary(
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
 
-    assets = trade_service.get_assets(trd_env=trd_env, acc_id=acc_id)
-    positions = trade_service.get_positions(trd_env=trd_env, acc_id=acc_id)
+    assets = await run_blocking(
+        trade_service.get_assets, trd_env=trd_env, acc_id=acc_id
+    )
+    positions = await run_blocking(
+        trade_service.get_positions, trd_env=trd_env, acc_id=acc_id
+    )
 
     await ctx.info(f"Retrieved summary for {trd_env} account: {len(positions)} positions")
 
@@ -93,12 +103,16 @@ async def get_assets(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
-    - For REAL accounts, you must call unlock_trade first with the trading password.
+    - Reading REAL account data may require unlock_trade, depending on the
+      gateway. Try the read FIRST and only call unlock_trade if it fails
+      asking to be unlocked. Do not unlock pre-emptively: in the default
+      READ_ONLY trading mode unlock is denied outright, so calling it first
+      turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
     Args:
-        trd_env: Trading environment. 'REAL' (default, requires unlock_trade first)
-            or 'SIMULATE' (no unlock needed, for testing).
+        trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
+            testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().
         refresh_cache: Whether to refresh the cache.
         currency: Filter by currency (e.g., 'HKD', 'USD'). Leave None for default.
@@ -109,7 +123,8 @@ async def get_assets(
         numbers.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    assets = trade_service.get_assets(
+    assets = await run_blocking(
+        trade_service.get_assets,
         trd_env=trd_env,
         acc_id=acc_id,
         refresh_cache=refresh_cache,
@@ -136,7 +151,11 @@ async def get_positions(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
-    - For REAL accounts, you must call unlock_trade first with the trading password.
+    - Reading REAL account data may require unlock_trade, depending on the
+      gateway. Try the read FIRST and only call unlock_trade if it fails
+      asking to be unlocked. Do not unlock pre-emptively: in the default
+      READ_ONLY trading mode unlock is denied outright, so calling it first
+      turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
     Args:
@@ -144,8 +163,8 @@ async def get_positions(
         market: Filter by market (e.g., 'US', 'HK', 'CN', 'SG', 'JP').
         pl_ratio_min: Minimum profit/loss ratio filter.
         pl_ratio_max: Maximum profit/loss ratio filter.
-        trd_env: Trading environment. 'REAL' (default, requires unlock_trade first)
-            or 'SIMULATE' (no unlock needed, for testing).
+        trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
+            testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().
         refresh_cache: Whether to refresh cache.
         show_option_strategy_view: Group multi-leg option positions into strategies.
@@ -168,7 +187,8 @@ async def get_positions(
         any point.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    positions = trade_service.get_positions(
+    positions = await run_blocking(
+        trade_service.get_positions,
         code=code,
         market=market,
         pl_ratio_min=pl_ratio_min,
@@ -198,7 +218,11 @@ async def get_max_tradable(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
-    - For REAL accounts, you must call unlock_trade first with the trading password.
+    - Reading REAL account data may require unlock_trade, depending on the
+      gateway. Try the read FIRST and only call unlock_trade if it fails
+      asking to be unlocked. Do not unlock pre-emptively: in the default
+      READ_ONLY trading mode unlock is denied outright, so calling it first
+      turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
     Args:
@@ -207,15 +231,16 @@ async def get_max_tradable(
         price: Target price for the order.
         order_id: Optional order ID for modification scenarios.
         adjust_limit: Adjust limit percentage.
-        trd_env: Trading environment. 'REAL' (default, requires unlock_trade first)
-            or 'SIMULATE' (no unlock needed, for testing).
+        trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
+            testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().
 
     Returns:
         Dictionary with max_cash_buy, max_cash_and_margin_buy, max_position_sell, etc.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    max_qty = trade_service.get_max_tradable(
+    max_qty = await run_blocking(
+        trade_service.get_max_tradable,
         order_type=order_type,
         code=code,
         price=price,
@@ -242,7 +267,7 @@ async def get_margin_ratio(
         List of margin ratio dictionaries.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    ratios = trade_service.get_margin_ratio(code_list=code_list)
+    ratios = await run_blocking(trade_service.get_margin_ratio, code_list=code_list)
     await ctx.info(f"Retrieved margin ratios for {len(code_list)} stocks")
     return ratios
 
@@ -259,25 +284,32 @@ async def get_cash_flow(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
-    - For REAL accounts, you must call unlock_trade first with the trading password.
+    - Reading REAL account data may require unlock_trade, depending on the
+      gateway. Try the read FIRST and only call unlock_trade if it fails
+      asking to be unlocked. Do not unlock pre-emptively: in the default
+      READ_ONLY trading mode unlock is denied outright, so calling it first
+      turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
     Args:
         clearing_date: Filter by clearing date (YYYY-MM-DD format).
-        trd_env: Trading environment. 'REAL' (default, requires unlock_trade first)
-            or 'SIMULATE' (no unlock needed, for testing).
+        trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
+            testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().
 
     Returns:
         List of cash flow record dictionaries.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    cash_flows = trade_service.get_cash_flow(
+    cash_flows = await run_blocking(
+        trade_service.get_cash_flow,
         clearing_date=clearing_date,
         trd_env=trd_env,
         acc_id=acc_id,
     )
-    await ctx.info(f"Retrieved {len(cash_flows)} cash flow records from {trd_env} account")
+    await ctx.info(
+        f"Retrieved {len(cash_flows)} cash flow records from {trd_env} account"
+    )
     return cash_flows
 
 
@@ -290,18 +322,25 @@ async def unlock_trade(
 ) -> dict[str, Any]:
     """Unlock trade to access REAL account data.
 
-    IMPORTANT: You MUST call this tool before accessing REAL account data via other
-    tools (get_assets, get_positions, get_max_tradable, get_cash_flow with trd_env='REAL').
+    Unlocking is about the GATEWAY's trading lock. It is a separate thing from
+    this server's trading mode, and from whether you can read account data.
 
-    This is NOT required for SIMULATE accounts - they work without unlocking.
+    DO NOT call this pre-emptively. It is denied unless MOOMOO_TRADING_MODE is
+    REAL — the default is READ_ONLY — so calling it "just in case" before a read
+    produces a policy error for a read that would have succeeded on its own.
 
     Workflow for accessing REAL account data:
-    1. First call unlock_trade(). It will try to use environment variables first.
-       - Checks MOOMOO_TRADE_PASSWORD (plain text)
-       - Checks MOOMOO_TRADE_PASSWORD_MD5 (md5 hash)
-    2. If that fails or if you want to provide credentials explicitly, call
+    1. Call the read you actually want (get_assets, get_positions,
+       get_account_summary, get_max_tradable, get_cash_flow) with
+       trd_env='REAL'. Many gateways serve these without any unlock.
+    2. Only if that read fails asking for trading to be unlocked, call
+       unlock_trade(). It tries MOOMOO_TRADE_PASSWORD, then
+       MOOMOO_TRADE_PASSWORD_MD5, from the environment.
+    3. If the environment holds no usable credential, call
        unlock_trade(password='your_trading_password').
-    3. Then call other tools with trd_env='REAL'.
+    4. Retry the read.
+
+    SIMULATE accounts never need unlocking.
 
     Args:
         password: Plain text trade password (the password you set in Moomoo app).
@@ -351,6 +390,8 @@ async def unlock_trade(
         await ctx.info("Attempting to unlock using provided credentials")
 
     trade_service = ctx.request_context.lifespan_context.trade_service
-    trade_service.unlock_trade(password=password, password_md5=password_md5)
+    await run_blocking(
+        trade_service.unlock_trade, password=password, password_md5=password_md5
+    )
     await ctx.info("Trade unlocked successfully - REAL account data is now accessible")
     return {"status": "unlocked", "message": "You can now access REAL account data by setting trd_env='REAL' in other tools"}

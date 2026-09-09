@@ -269,3 +269,73 @@ class TestGetOrderBook:
 
         with pytest.raises(RuntimeError, match="Quote context not connected"):
             service.get_order_book("HK.00700")
+
+
+class TestCandleFilterValidation:
+    """An unsupported interval or adjustment must not become a different one."""
+
+    @pytest.fixture
+    def kline_ctx(self, mock_quote_ctx):
+        mock_quote_ctx.request_history_kline.return_value = (
+            0,
+            pd.DataFrame([{"code": "US.AAPL", "time_key": "2026-01-02 00:00:00"}]),
+            None,
+        )
+        return mock_quote_ctx
+
+    @pytest.mark.parametrize(
+        "ktype,expected", [("K_5M", "K_5M"), ("K_60M", "K_60M"), ("K_DAY", "K_DAY")]
+    )
+    def test_supported_intervals_are_forwarded(
+        self, market_data_service, kline_ctx, ktype, expected
+    ):
+        market_data_service.get_historical_klines(code="US.AAPL", ktype=ktype)
+
+        assert kline_ctx.request_history_kline.call_args.kwargs["ktype"] == expected
+
+    @pytest.mark.parametrize(
+        "autype,expected", [("QFQ", "qfq"), ("HFQ", "hfq"), ("NONE", "None")]
+    )
+    def test_supported_adjustments_are_forwarded(
+        self, market_data_service, kline_ctx, autype, expected
+    ):
+        market_data_service.get_historical_klines(code="US.AAPL", autype=autype)
+
+        assert kline_ctx.request_history_kline.call_args.kwargs["autype"] == expected
+
+    def test_unknown_interval_is_rejected_not_defaulted_to_daily(
+        self, market_data_service, kline_ctx
+    ):
+        """'K_5MIN' silently became K_DAY, answering a different question."""
+        with pytest.raises(ValueError, match="ktype must be one of"):
+            market_data_service.get_historical_klines(code="US.AAPL", ktype="K_5MIN")
+
+        kline_ctx.request_history_kline.assert_not_called()
+
+    def test_unknown_adjustment_is_rejected_not_defaulted_to_qfq(
+        self, market_data_service, kline_ctx
+    ):
+        with pytest.raises(ValueError, match="autype must be one of"):
+            market_data_service.get_historical_klines(
+                code="US.AAPL", autype="UNADJUSTED"
+            )
+
+        kline_ctx.request_history_kline.assert_not_called()
+
+    def test_the_placeholder_interval_is_rejected(
+        self, market_data_service, kline_ctx
+    ):
+        with pytest.raises(ValueError, match="ktype must be one of"):
+            market_data_service.get_historical_klines(code="US.AAPL", ktype="NONE")
+
+        kline_ctx.request_history_kline.assert_not_called()
+
+    def test_paginated_query_rejects_the_same_values(
+        self, market_data_service, kline_ctx
+    ):
+        with pytest.raises(ValueError, match="ktype must be one of"):
+            market_data_service.get_historical_klines_page(
+                code="US.AAPL", ktype="K_5MIN"
+            )
+
+        kline_ctx.request_history_kline.assert_not_called()

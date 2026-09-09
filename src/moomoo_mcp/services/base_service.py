@@ -8,6 +8,7 @@ from moomoo import RET_OK, OpenQuoteContext
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.health import (
     HEALTH_DEADLINE_SECONDS,
+    SYNC_CONNECT_TIMEOUT_SECONDS,
     BoundedProbe,
     aggregate_status,
     failure,
@@ -27,9 +28,26 @@ class MoomooService:
         self._quote_probe = BoundedProbe("quote")
 
     def connect(self) -> None:
-        """Initialize connection to OpenD."""
-        # OpenQuoteContext connects on initialization
-        self.quote_ctx = OpenQuoteContext(host=self.host, port=self.port)
+        """Start the quote connection to OpenD without waiting for it.
+
+        OpenQuoteContext's default constructor does not raise when OpenD is
+        unreachable: it loops on a six-second retry forever. Calling it inline
+        would hang the MCP lifespan before it ever yields, so the server would
+        never start and check_health — the one tool an operator needs at exactly
+        that moment — would never become reachable.
+
+        ``is_async_connect=True`` returns immediately and leaves the SDK to
+        connect in the background, so the context object exists but may not be
+        connected. That is precisely why probe_quote asks the gateway rather
+        than trusting the object's existence.
+        """
+        self.quote_ctx = OpenQuoteContext(
+            host=self.host, port=self.port, is_async_connect=True
+        )
+        # Without this, a sync query against a context that is still trying to
+        # connect waits in an unbounded loop. The bound keeps a probe worker's
+        # lifetime finite even after the health deadline has abandoned it.
+        self.quote_ctx.set_sync_query_connect_timeout(SYNC_CONNECT_TIMEOUT_SECONDS)
 
     def close(self) -> None:
         """Close connection and release the health probe worker."""

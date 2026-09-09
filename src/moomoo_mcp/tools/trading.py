@@ -6,11 +6,12 @@ from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.tools.offload import run_blocking
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
 @mcp.tool()
-def place_order(
+async def place_order(
     ctx: Context[ServerSession, AppContext],
     code: str,
     price: float,
@@ -83,7 +84,8 @@ def place_order(
         time_in_force, etc.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.place_order(
+    return await run_blocking(
+        trade_service.place_order,
         code=code,
         price=price,
         qty=qty,
@@ -102,7 +104,7 @@ def place_order(
 
 
 @mcp.tool()
-def place_combo_order(
+async def place_combo_order(
     ctx: Context[ServerSession, AppContext],
     combo_legs: list[dict],
     price: float,
@@ -173,7 +175,8 @@ def place_combo_order(
         Dictionary with order details including order_id and order_status.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.place_combo_order(
+    return await run_blocking(
+        trade_service.place_combo_order,
         combo_legs=combo_legs,
         price=price,
         qty=qty,
@@ -186,7 +189,7 @@ def place_combo_order(
 
 
 @mcp.tool()
-def preview_combo_order(
+async def preview_combo_order(
     ctx: Context[ServerSession, AppContext],
     combo_legs: list[dict],
     price: float,
@@ -245,7 +248,8 @@ def preview_combo_order(
         successful preview does not mean the order would fill.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    preview = trade_service.preview_combo_order(
+    preview = await run_blocking(
+        trade_service.preview_combo_order,
         combo_legs=combo_legs,
         price=price,
         qty=qty,
@@ -257,7 +261,7 @@ def preview_combo_order(
 
 
 @mcp.tool()
-def modify_order(
+async def modify_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,
     modify_order_op: str,
@@ -301,7 +305,8 @@ def modify_order(
         Dictionary with modified order details.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.modify_order(
+    return await run_blocking(
+        trade_service.modify_order,
         order_id=order_id,
         modify_order_op=modify_order_op,
         qty=qty,
@@ -313,7 +318,7 @@ def modify_order(
 
 
 @mcp.tool()
-def cancel_order(
+async def cancel_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,
     trd_env: str = "REAL",
@@ -344,7 +349,8 @@ def cancel_order(
         Dictionary with cancelled order details.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.cancel_order(
+    return await run_blocking(
+        trade_service.cancel_order,
         order_id=order_id,
         trd_env=trd_env,
         acc_id=acc_id,
@@ -352,7 +358,7 @@ def cancel_order(
 
 
 @mcp.tool()
-def get_orders(
+async def get_orders(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     status_filter_list: list[str] | None = None,
@@ -383,7 +389,8 @@ def get_orders(
         order_type, order_status, created_time, updated_time, etc.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.get_orders(
+    return await run_blocking(
+        trade_service.get_orders,
         code=code,
         status_filter_list=status_filter_list,
         trd_env=trd_env,
@@ -393,7 +400,7 @@ def get_orders(
 
 
 @mcp.tool()
-def get_deals(
+async def get_deals(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     trd_env: str = "REAL",
@@ -421,7 +428,8 @@ def get_deals(
         trd_side, create_time, etc.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.get_deals(
+    return await run_blocking(
+        trade_service.get_deals,
         code=code,
         trd_env=trd_env,
         acc_id=acc_id,
@@ -430,7 +438,7 @@ def get_deals(
 
 
 @mcp.tool()
-def get_history_orders(
+async def get_history_orders(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     status_filter_list: list[str] | None = None,
@@ -458,7 +466,8 @@ def get_history_orders(
         List of historical order dictionaries.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.get_history_orders(
+    return await run_blocking(
+        trade_service.get_history_orders,
         code=code,
         status_filter_list=status_filter_list,
         start=start,
@@ -469,7 +478,7 @@ def get_history_orders(
 
 
 @mcp.tool()
-def get_history_deals(
+async def get_history_deals(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     start: str = "",
@@ -495,7 +504,8 @@ def get_history_deals(
         List of historical deal dictionaries.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.get_history_deals(
+    return await run_blocking(
+        trade_service.get_history_deals,
         code=code,
         start=start,
         end=end,

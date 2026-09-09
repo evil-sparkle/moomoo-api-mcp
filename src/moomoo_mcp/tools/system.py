@@ -2,11 +2,11 @@
 
 from typing import Any
 
-import anyio.to_thread
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.tools.offload import run_blocking
 
 
 @mcp.tool()
@@ -44,8 +44,8 @@ async def check_health(
 
     # The SDK probes are blocking, so they run off the event loop: a stuck
     # gateway must not stall the MCP session that is asking about it.
-    status = await anyio.to_thread.run_sync(
-        lambda: moomoo_service.check_health(trade_service=trade_service)
+    status = await run_blocking(
+        moomoo_service.check_health, trade_service=trade_service
     )
 
     await ctx.info(f"Health check status: {status.get('status')}")

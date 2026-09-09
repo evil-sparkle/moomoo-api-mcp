@@ -2,12 +2,18 @@
 
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from moomoo_mcp.services.base_service import MoomooService
-from moomoo_mcp.services.health import BoundedProbe, aggregate_status, sanitize_error
+from moomoo_mcp.services.health import (
+    HEALTH_DEADLINE_SECONDS,
+    SYNC_CONNECT_TIMEOUT_SECONDS,
+    BoundedProbe,
+    aggregate_status,
+    sanitize_error,
+)
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 
@@ -323,3 +329,135 @@ class TestHealthReportsTradingMode:
         health = moomoo_service.check_health(trade_service=trade_service)
 
         assert health["trading_mode"] == "READ_ONLY"
+
+
+class TestConnectDoesNotBlockStartup:
+    """The SDK retries a refused connection forever instead of raising."""
+
+    def test_quote_connect_uses_async_connect(self):
+        """Without is_async_connect the constructor never returns.
+
+        OpenContextBase.__init__ loops on a six-second retry while
+        _auto_reconnect is set, so an inline construction hangs the lifespan
+        before it yields and check_health never becomes reachable.
+        """
+        service = MoomooService(host="10.0.0.5", port=22222)
+        with patch(
+            "moomoo_mcp.services.base_service.OpenQuoteContext"
+        ) as ctx_class:
+            service.connect()
+
+        assert ctx_class.call_args.kwargs["is_async_connect"] is True
+        service.close()
+
+    def test_quote_connect_bounds_sync_queries(self):
+        """A query against a not-yet-ready context must not wait forever."""
+        service = MoomooService()
+        with patch(
+            "moomoo_mcp.services.base_service.OpenQuoteContext"
+        ) as ctx_class:
+            service.connect()
+
+        timeout = ctx_class.return_value.set_sync_query_connect_timeout.call_args
+        assert timeout.args[0] == SYNC_CONNECT_TIMEOUT_SECONDS
+        # Shorter than the health deadline, so a probe returns the gateway's own
+        # diagnostic instead of being cut off by the deadline.
+        assert SYNC_CONNECT_TIMEOUT_SECONDS < HEALTH_DEADLINE_SECONDS
+        service.close()
+
+    def test_trade_connect_returns_when_the_gateway_never_answers(self):
+        """OpenSecTradeContext has no async-connect option, so it is bounded."""
+        started = threading.Event()
+        release = threading.Event()
+
+        def never_connects(**_):
+            started.set()
+            release.wait(30)
+            return MagicMock()
+
+        service = TradeService()
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            side_effect=never_connects,
+        ):
+            begin = time.monotonic()
+            service.connect(timeout=0.3)
+            elapsed = time.monotonic() - begin
+
+            assert started.wait(5), "the connection attempt never started"
+            assert elapsed < 3.0, f"connect blocked startup for {elapsed:.2f}s"
+            assert service.trade_ctx is None
+
+            # Health stays answerable and reports the trade side honestly.
+            health = MoomooService().check_health(trade_service=service, deadline=1.0)
+            assert health["trade"]["reason"] == "not_initialized"
+
+            release.set()
+            service.close()
+
+    def test_repeated_connects_do_not_stack_attempts(self):
+        attempts = []
+        release = threading.Event()
+
+        def never_connects(**_):
+            attempts.append(1)
+            release.wait(30)
+            return MagicMock()
+
+        service = TradeService()
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            side_effect=never_connects,
+        ):
+            for _ in range(4):
+                service.connect(timeout=0.1)
+
+            assert len(attempts) == 1
+            release.set()
+            service.close()
+
+    def test_a_late_connection_is_closed_if_shutdown_already_ran(self):
+        """A worker that finally connects after close() must not leak it."""
+        release = threading.Event()
+        built = MagicMock()
+
+        def slow_connect(**_):
+            release.wait(30)
+            return built
+
+        service = TradeService()
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            side_effect=slow_connect,
+        ):
+            service.connect(timeout=0.1)
+            service.close()
+            release.set()
+            time.sleep(0.3)
+
+        assert service.trade_ctx is None
+        built.close.assert_called_once()
+
+    def test_a_connection_that_arrives_late_is_published(self):
+        release = threading.Event()
+        built = MagicMock()
+
+        def slow_connect(**_):
+            release.wait(30)
+            return built
+
+        service = TradeService()
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            side_effect=slow_connect,
+        ):
+            service.connect(timeout=0.1)
+            assert service.trade_ctx is None
+
+            release.set()
+            deadline = time.monotonic() + 5
+            while service.trade_ctx is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+
+            assert service.trade_ctx is built
+            service.close()

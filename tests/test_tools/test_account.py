@@ -223,3 +223,55 @@ async def test_get_assets_string_id(mcp_context, mock_trade_service):
         refresh_cache=False,
         currency=None
     )
+
+
+class TestGuidanceMatchesPolicy:
+    """Tool descriptions must not tell an agent to do something policy denies.
+
+    READ_ONLY is the default trading mode and it denies unlock while permitting
+    reads. Instructing an agent to unlock before reading therefore manufactures
+    a policy failure for a read that would have worked.
+    """
+
+    READ_TOOLS = [
+        get_accounts,
+        get_account_summary,
+        get_assets,
+        get_positions,
+        get_max_tradable,
+        get_cash_flow,
+    ]
+
+    @pytest.mark.parametrize("tool", READ_TOOLS, ids=lambda t: t.__name__)
+    def test_no_read_tool_mandates_unlocking_first(self, tool):
+        doc = " ".join((tool.__doc__ or "").split()).lower()
+
+        assert "you must call unlock_trade first" not in doc
+        assert "must first call unlock_trade" not in doc
+        assert "requires unlock_trade first" not in doc
+
+    @pytest.mark.parametrize("tool", READ_TOOLS, ids=lambda t: t.__name__)
+    def test_read_tools_that_mention_unlocking_qualify_it(self, tool):
+        doc = " ".join((tool.__doc__ or "").split())
+
+        if "unlock_trade" not in doc:
+            return
+        assert "may require unlock_trade" in doc or "unlock_trade for why" in doc
+
+    def test_unlock_tool_warns_against_calling_it_pre_emptively(self):
+        doc = " ".join((unlock_trade.__doc__ or "").split())
+
+        assert "DO NOT call this pre-emptively" in doc
+        assert "READ_ONLY" in doc
+
+    @pytest.mark.asyncio
+    async def test_a_real_read_needs_no_unlock_in_read_only_mode(
+        self, call_tool, mock_trade_service
+    ):
+        """The behaviour the guidance now describes: read first, no unlock."""
+        mock_trade_service.get_positions.return_value = [{"code": "US.AAPL", "qty": 1}]
+
+        result = await call_tool("get_positions", {"trd_env": "REAL"})
+
+        assert result.structured["result"][0]["qty"] == 1
+        mock_trade_service.unlock_trade.assert_not_called()

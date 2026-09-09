@@ -259,9 +259,15 @@ When using this MCP server, AI agents **MUST**:
 
    > "I'm about to access your **REAL trading account**. This will show your actual portfolio and balances."
 
-2. **Follow the unlock workflow** for REAL accounts:
-   - First call `unlock_trade` (it handles env vars automatically, or pass password if needed).
-   - Then call account/trading tools (they default to `trd_env='REAL'`).
+2. **Read first, unlock only if the read says so.** Unlocking is the
+   *gateway's* trading lock and is separate from reading account data. Do not
+   call `unlock_trade` pre-emptively: it is denied unless
+   `MOOMOO_TRADING_MODE=REAL`, so an unnecessary unlock turns a read that would
+   have succeeded into a policy error.
+   - Call the read you want (`get_account_summary`, `get_positions`, …) with
+     `trd_env='REAL'`.
+   - Only if it fails asking for trading to be unlocked, call `unlock_trade`
+     (it uses the env vars automatically, or takes a password), then retry.
 
 3. **Only use SIMULATE accounts when explicitly requested** by the user. To use simulation:
    - Pass `trd_env='SIMULATE'` parameter explicitly.
@@ -276,7 +282,8 @@ Agent Response:
 "I'm accessing your REAL trading account to show your portfolio.
 If you prefer to use a simulation account instead, please let me know."
 
-[Proceeds to unlock_trade → get_account_summary]
+[Proceeds to get_account_summary; only if that reports trading is locked
+ does it call unlock_trade and retry]
 ```
 
 ### Managing Subscriptions

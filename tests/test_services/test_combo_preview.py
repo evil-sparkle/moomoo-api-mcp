@@ -343,3 +343,81 @@ class TestUnavailableValues:
             )
 
         assert_no_writes(ctx)
+
+
+class TestAgainstTheRealDecoder:
+    """Missing-value handling checked against the SDK's own decoder.
+
+    A hand-written fixture can only assert what its author guessed the gateway
+    returns. These build a protobuf response with the impact fields unset and
+    run it through ComboOrderTradingInfoQuery.unpack_rsp, so the sentinel under
+    test is whatever the installed SDK actually produces.
+    """
+
+    @staticmethod
+    def _decode_response_with_unset_impact_fields():
+        from moomoo.common.pb import Trd_GetComboMaxTrdQtys_pb2 as pb
+        from moomoo.trade.trade_query import ComboOrderTradingInfoQuery
+
+        rsp = pb.Response()
+        rsp.retType = 0
+        rsp.s2c.header.trdEnv = 0
+        rsp.s2c.header.accID = 123
+        rsp.s2c.header.trdMarket = 1
+        rsp.s2c.maxTrdQtys.SetInParent()  # present, but every field omitted
+
+        ret, _, data = ComboOrderTradingInfoQuery.unpack_rsp(rsp)
+        assert ret == 0
+        return data
+
+    def test_sdk_reports_missing_fields_as_a_string_not_nan(self):
+        """Pin the real contract: the sentinel is 'N/A', not NaN."""
+        decoded = self._decode_response_with_unset_impact_fields()
+
+        assert decoded[0]["option_bp"] == "N/A"
+        assert all(value == "N/A" for value in decoded[0].values())
+
+    def test_preview_nulls_every_field_the_decoder_marked_missing(self, service, ctx):
+        decoded = self._decode_response_with_unset_impact_fields()
+        ctx.comboorder_tradinginfo_query.return_value = (
+            0,
+            pd.DataFrame(decoded, columns=IMPACT_COLUMNS),
+        )
+
+        preview = service.preview_combo_order(
+            combo_legs=_opening_legs(), price=2.5, qty=1, acc_id=456
+        )
+
+        for field in IMPACT_COLUMNS:
+            assert preview[field] is None, f"{field} leaked the SDK sentinel"
+
+    def test_preview_keeps_supplied_values_and_nulls_only_the_gaps(
+        self, service, ctx
+    ):
+        decoded = self._decode_response_with_unset_impact_fields()
+        decoded[0]["nlv_change"] = -12.5
+        ctx.comboorder_tradinginfo_query.return_value = (
+            0,
+            pd.DataFrame(decoded, columns=IMPACT_COLUMNS),
+        )
+
+        preview = service.preview_combo_order(
+            combo_legs=_opening_legs(), price=2.5, qty=1, acc_id=456
+        )
+
+        assert preview["nlv_change"] == -12.5
+        assert preview["option_bp"] is None
+
+    def test_zero_is_never_substituted_for_a_missing_value(self, service, ctx):
+        """Null means 'not reported'; 0.0 would mean 'no impact'."""
+        decoded = self._decode_response_with_unset_impact_fields()
+        ctx.comboorder_tradinginfo_query.return_value = (
+            0,
+            pd.DataFrame(decoded, columns=IMPACT_COLUMNS),
+        )
+
+        preview = service.preview_combo_order(
+            combo_legs=_opening_legs(), price=2.5, qty=1, acc_id=456
+        )
+
+        assert not any(preview[field] == 0 for field in IMPACT_COLUMNS)

@@ -19,6 +19,18 @@ from typing import Any
 # Total wall-clock budget for a full health check, per the system-health spec.
 HEALTH_DEADLINE_SECONDS = 5.0
 
+# How long a synchronous SDK query may wait for a connection that is not yet
+# ready. The SDK otherwise spins in an unbounded loop, so an abandoned probe
+# worker would live forever. Deliberately *shorter* than
+# HEALTH_DEADLINE_SECONDS so a probe against a down gateway comes back with
+# the gateway's own 'Connect timeout' diagnostic rather than being cut off by
+# the health deadline, which can only report that something took too long.
+#
+# This bounds the wait for the socket to become ready, not the query itself
+# (the SDK caps that separately at 12s). On a healthy connection it is never
+# reached.
+SYNC_CONNECT_TIMEOUT_SECONDS = 3.0
+
 # Error text is echoed from the gateway, so it is truncated and flattened before
 # it reaches a client. Health must not become a channel for account contents.
 _MAX_ERROR_CHARS = 200

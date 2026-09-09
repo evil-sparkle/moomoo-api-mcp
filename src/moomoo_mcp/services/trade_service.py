@@ -1,7 +1,10 @@
 """Trade service for managing Moomoo trading context and account operations."""
 
+import logging
 import math
-from concurrent.futures import Future
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any
 
 from moomoo import (
@@ -14,17 +17,40 @@ from moomoo import (
 )
 
 from moomoo_mcp.services.clock import utc_now_iso
-from moomoo_mcp.services.health import BoundedProbe, failure
+from moomoo_mcp.services.health import (
+    SYNC_CONNECT_TIMEOUT_SECONDS,
+    BoundedProbe,
+    failure,
+)
 from moomoo_mcp.services.trading_policy import TradingPolicy
+
+logger = logging.getLogger(__name__)
+
+# How long startup waits for the trade connection before carrying on
+# without it. The worker keeps trying in the background.
+CONNECT_TIMEOUT_SECONDS = 5.0
+
+
+# What the SDK's decoders substitute for a field the gateway did not send.
+# Confirmed against ComboOrderTradingInfoQuery.unpack_rsp, which writes this
+# string — not a number and not NaN — for every absent impact field.
+SDK_MISSING_SENTINEL = "N/A"
 
 
 def _null_if_missing(value: Any) -> Any:
-    """Normalize a pandas gap to None.
+    """Normalize the SDK's missing-value markers to None.
 
-    A field the gateway omitted arrives as NaN once the SDK builds its frame.
-    Reporting it as null says "not supplied"; reporting 0.0 would claim the
-    package has no effect on that measure, which is a different statement.
+    A field the gateway omitted reaches us as the string "N/A" from the SDK's
+    decoder, or as NaN if it went through a pandas frame that widened a column.
+    Both mean "not supplied".
+
+    Reporting null says exactly that. Passing "N/A" through would put a string
+    in a numeric field, and substituting 0.0 would claim the package has no
+    effect on that measure — a different statement, and a dangerous one when the
+    measure is a margin requirement.
     """
+    if isinstance(value, str) and value.strip() == SDK_MISSING_SENTINEL:
+        return None
     if isinstance(value, float) and math.isnan(value):
         return None
     return value
@@ -57,6 +83,10 @@ class TradeService:
         self.policy = policy or TradingPolicy()
         self.trade_ctx: OpenSecTradeContext | None = None
         self._trade_probe = BoundedProbe("trade")
+        self._connect_lock = threading.Lock()
+        self._connect_executor: ThreadPoolExecutor | None = None
+        self._connect_future: Future | None = None
+        self._closed = False
 
     def _convert_status_filter(
         self, status_filter_list: list[str] | None
@@ -150,9 +180,8 @@ class TradeService:
             f"Available accounts support: {unique_supported}"
         )
 
-    def connect(self) -> None:
-        """Initialize connection to OpenD trade context."""
-        # Build kwargs for OpenSecTradeContext
+    def _open_trade_context(self) -> None:
+        """Construct the SDK trade context and publish it when it is ready."""
         kwargs = {"host": self.host, "port": self.port}
 
         # Add security_firm if specified
@@ -162,14 +191,79 @@ class TradeService:
             if firm_enum:
                 kwargs["security_firm"] = firm_enum
 
-        self.trade_ctx = OpenSecTradeContext(**kwargs)
+        trade_ctx = OpenSecTradeContext(**kwargs)
+        trade_ctx.set_sync_query_connect_timeout(SYNC_CONNECT_TIMEOUT_SECONDS)
+
+        with self._connect_lock:
+            if self._closed:
+                # close() ran while this was still retrying. Publishing the
+                # context now would leak a live connection past shutdown.
+                should_close = True
+            else:
+                self.trade_ctx = trade_ctx
+                should_close = False
+        if should_close:
+            trade_ctx.close()
+
+    def connect(self, timeout: float | None = None) -> None:
+        """Start the trade connection, waiting at most ``timeout`` seconds.
+
+        OpenSecTradeContext offers no async-connect option and its constructor
+        does not raise when OpenD is unreachable — it retries every six seconds
+        forever. Calling it inline would hang the MCP lifespan before it yields,
+        taking check_health down with the gateway it exists to diagnose.
+
+        So it runs on a single background worker. If the gateway is down this
+        returns once the timeout elapses, health reports the trade service as
+        unavailable, and the worker publishes the context if OpenD later
+        appears. Only one such worker ever exists: repeated calls join the one
+        in flight rather than stacking up connection attempts.
+
+        Args:
+            timeout: Seconds to wait for the connection before returning.
+                Defaults to ``CONNECT_TIMEOUT_SECONDS``.
+        """
+        if timeout is None:
+            timeout = CONNECT_TIMEOUT_SECONDS
+
+        with self._connect_lock:
+            self._closed = False
+            if self._connect_executor is None:
+                self._connect_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="trade-connect"
+                )
+            future = self._connect_future
+            if future is None or future.done():
+                future = self._connect_executor.submit(self._open_trade_context)
+                self._connect_future = future
+
+        try:
+            future.result(timeout=timeout)
+        except FutureTimeoutError:
+            logger.warning(
+                f"Trade connection to {self.host}:{self.port} is still being "
+                f"established after {timeout:.0f}s. The server remains available; "
+                "check_health reports the trade service until it connects."
+            )
+        except Exception as exc:  # noqa: BLE001 - startup must stay available
+            logger.error(f"Trade connection failed: {exc}")
 
     def close(self) -> None:
-        """Close trade context connection and release the health probe worker."""
+        """Close trade context connection and release background workers."""
         self._trade_probe.close()
-        if self.trade_ctx:
-            self.trade_ctx.close()
+        with self._connect_lock:
+            # Set before releasing the lock so a worker that is still retrying
+            # closes whatever it eventually builds instead of publishing it.
+            self._closed = True
+            executor = self._connect_executor
+            self._connect_executor = None
+            self._connect_future = None
+            trade_ctx = self.trade_ctx
             self.trade_ctx = None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+        if trade_ctx:
+            trade_ctx.close()
 
     def probe_trade(self) -> dict[str, Any]:
         """Actively check trade connectivity with a read-only account listing.

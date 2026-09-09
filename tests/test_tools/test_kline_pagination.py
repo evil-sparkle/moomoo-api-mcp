@@ -440,3 +440,52 @@ class TestSerializerShape:
         from moomoo_mcp.tools.serialization import serialize_identifiers
 
         assert serialize_identifiers(({"acc_id": 7},)) == [{"acc_id": "7"}]
+
+
+class TestFilterValidationBeforeCursor:
+    """An unsupported filter must never be bound into a cursor."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_interval_is_rejected_before_the_gateway(
+        self, kline_context, quote_ctx
+    ):
+        with pytest.raises(Exception, match="ktype must be one of"):
+            await call_mcp_tool(
+                kline_context,
+                "get_historical_klines_page",
+                {**BASE_QUERY, "ktype": "K_5MIN"},
+            )
+
+        quote_ctx.request_history_kline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unknown_adjustment_is_rejected_before_the_gateway(
+        self, kline_context, quote_ctx
+    ):
+        with pytest.raises(Exception, match="autype must be one of"):
+            await call_mcp_tool(
+                kline_context,
+                "get_historical_klines_page",
+                {**BASE_QUERY, "autype": "UNADJUSTED"},
+            )
+
+        quote_ctx.request_history_kline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_served_page_matches_the_interval_its_cursor_claims(
+        self, kline_context, quote_ctx
+    ):
+        """The cursor must not promise an interval the gateway never served."""
+        quote_ctx.request_history_kline.return_value = (0, _candles(2), b"tok-1")
+
+        page = await call_mcp_tool(
+            kline_context,
+            "get_historical_klines_page",
+            {**BASE_QUERY, "ktype": "K_5M"},
+        )
+
+        assert quote_ctx.request_history_kline.call_args.kwargs["ktype"] == "K_5M"
+        # The cursor round-trips only against the interval that was served.
+        decode_cursor(page.structured["next_cursor"], {**BASE_QUERY, "ktype": "K_5M"})
+        with pytest.raises(CursorError, match="different query"):
+            decode_cursor(page.structured["next_cursor"], BASE_QUERY)

@@ -8,11 +8,13 @@ from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.services.market_data_service import validate_candle_filters
 from moomoo_mcp.tools.kline_cursor import (
     decode_cursor,
     encode_cursor,
     resolve_date_range,
 )
+from moomoo_mcp.tools.offload import run_blocking
 
 
 @mcp.tool()
@@ -41,7 +43,7 @@ async def get_stock_quote(
         - And other quote fields
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    quotes = market_data_service.get_stock_quote(codes)
+    quotes = await run_blocking(market_data_service.get_stock_quote, codes)
     await ctx.info(f"Retrieved quotes for {len(codes)} stocks")
     return quotes
 
@@ -74,6 +76,8 @@ async def get_historical_klines(
             - K_MON: Monthly
             - K_QUARTER: Quarterly
             - K_YEAR: Yearly
+            An unrecognized value is rejected, not quietly replaced with daily
+            candles.
         start: Start date in YYYY-MM-DD format. Defaults to 365 days before end.
         end: End date in YYYY-MM-DD format. Defaults to today.
         max_count: Maximum number of candles to return (default 100, max 1000).
@@ -81,6 +85,7 @@ async def get_historical_klines(
             - QFQ: Forward adjustment (default)
             - HFQ: Backward adjustment
             - NONE: No adjustment
+            An unrecognized value is rejected, not quietly replaced with QFQ.
 
     Returns:
         A SINGLE PAGE of K-line dictionaries. The provider's continuation token
@@ -99,7 +104,8 @@ async def get_historical_klines(
         - change_rate: Price change rate
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    klines = market_data_service.get_historical_klines(
+    klines = await run_blocking(
+        market_data_service.get_historical_klines,
         code=code,
         ktype=ktype,
         start=start,
@@ -138,7 +144,9 @@ async def get_option_expiration_date(
         failure or a missing permission raises instead.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    expirations = market_data_service.get_option_expiration_date(code)
+    expirations = await run_blocking(
+        market_data_service.get_option_expiration_date, code
+    )
     await ctx.info(f"Retrieved {len(expirations)} option expirations for {code}")
     return expirations
 
@@ -187,7 +195,8 @@ async def get_option_chain(
         never handed a partial chain believing it is complete.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    contracts = market_data_service.get_option_chain(
+    contracts = await run_blocking(
+        market_data_service.get_option_chain,
         code=code,
         start=start,
         end=end,
@@ -230,13 +239,16 @@ async def get_historical_klines_page(
 
     Args:
         code: Stock code (e.g., 'US.AAPL').
-        ktype: K-line type: K_1M, K_3M, K_5M, K_15M, K_30M, K_60M, K_DAY
-            (default), K_WEEK, K_MON, K_QUARTER, K_YEAR.
+        ktype: K-line type: K_1M, K_3M, K_5M, K_10M, K_15M, K_30M, K_60M,
+            K_120M, K_180M, K_240M, K_DAY (default), K_WEEK, K_MON, K_QUARTER,
+            K_YEAR. An unrecognized value is rejected rather than quietly
+            treated as daily.
         start: Start date 'YYYY-MM-DD'. Defaults to 365 days before end.
         end: End date 'YYYY-MM-DD'. Defaults to today.
         max_count: Maximum candles per page (default 100).
         autype: Adjustment for splits/dividends: 'QFQ' (forward, default),
-            'HFQ' (backward), or 'NONE'.
+            'HFQ' (backward), or 'NONE'. An unrecognized value is rejected
+            rather than quietly treated as QFQ.
         cursor: The next_cursor from the previous page. Omit for the first page.
             Pass every other argument unchanged alongside it — a cursor belongs
             to one specific query, and changing a filter mid-traversal is a new
@@ -261,6 +273,11 @@ async def get_historical_klines_page(
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
 
+    # Before touching a cursor: an unsupported interval or adjustment must not
+    # be bound into one, and the error should name the bad filter rather than
+    # surfacing later as a confusing cursor mismatch.
+    validate_candle_filters(ktype, autype)
+
     query = {
         "code": code,
         "ktype": ktype,
@@ -277,7 +294,8 @@ async def get_historical_klines_page(
         page_req_key, resolved = decode_cursor(cursor, query)
 
     resolved_start, resolved_end = resolved
-    rows, next_token = market_data_service.get_historical_klines_page(
+    rows, next_token = await run_blocking(
+        market_data_service.get_historical_klines_page,
         code=code,
         ktype=ktype,
         start=resolved_start,
@@ -328,7 +346,7 @@ async def get_market_snapshot(
         - And many more fields
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    snapshots = market_data_service.get_market_snapshot(codes)
+    snapshots = await run_blocking(market_data_service.get_market_snapshot, codes)
     await ctx.info(f"Retrieved snapshots for {len(codes)} stocks")
     return snapshots
 
@@ -356,7 +374,9 @@ async def get_order_book(
         - Ask: List of ask levels, each as (price, volume, order_count, details)
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    order_book = market_data_service.get_order_book(code, num=num)
+    order_book = await run_blocking(
+        market_data_service.get_order_book, code, num=num
+    )
     await ctx.info(f"Retrieved order book for {code} with {num} levels")
     return order_book
 
@@ -389,7 +409,7 @@ async def get_market_state(
         different states in the same response.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    states = market_data_service.get_market_state(codes)
+    states = await run_blocking(market_data_service.get_market_state, codes)
     await ctx.info(f"Retrieved market state for {len(codes)} instruments")
     return {"checked_at": utc_now_iso(), "data": states}
 
@@ -437,7 +457,9 @@ async def get_trading_days(
         for what may actually be traded.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    days = market_data_service.get_trading_days(market=market, start=start, end=end)
+    days = await run_blocking(
+        market_data_service.get_trading_days, market=market, start=start, end=end
+    )
     await ctx.info(f"Retrieved {len(days)} trading days for {market}")
     return {
         "market": market,
@@ -494,7 +516,7 @@ async def get_subscriptions(
         headroom.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    report = market_data_service.get_subscriptions()
+    report = await run_blocking(market_data_service.get_subscriptions)
 
     connection: dict[str, Any] = {"subscriptions": report.get("sub_list", {})}
     for source, name in _CONNECTION_QUOTA_FIELDS.items():
@@ -558,7 +580,9 @@ async def unsubscribe_market_data(
         sent.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    market_data_service.unsubscribe(codes=codes, sub_types=sub_types)
+    await run_blocking(
+        market_data_service.unsubscribe, codes=codes, sub_types=sub_types
+    )
     await ctx.info(f"Requested release of {len(codes)} subscriptions")
     return {
         "requested_at": utc_now_iso(),
@@ -590,7 +614,9 @@ async def get_user_security_group(
         - group_id: Unique identifier for the group
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    groups = market_data_service.get_user_security_group(group_type=group_type)
+    groups = await run_blocking(
+        market_data_service.get_user_security_group, group_type=group_type
+    )
     await ctx.info(f"Retrieved {len(groups)} security groups")
     return groups
 
@@ -615,6 +641,8 @@ async def get_user_security(
         - stock_type: Type of security
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    securities = market_data_service.get_user_security(group_name)
+    securities = await run_blocking(
+        market_data_service.get_user_security, group_name
+    )
     await ctx.info(f"Retrieved {len(securities)} securities from group '{group_name}'")
     return securities
