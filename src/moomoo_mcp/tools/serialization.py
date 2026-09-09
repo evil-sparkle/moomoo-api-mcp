@@ -97,6 +97,8 @@ def serialize_identifiers(payload: Any) -> Any:
             for key, value in payload.items()
         }
     if isinstance(payload, (list, tuple)):
-        converted = [serialize_identifiers(item) for item in payload]
-        return type(payload)(converted) if isinstance(payload, tuple) else converted
+        # Both become a JSON array on the wire, so a list is the honest result.
+        # Rebuilding the original type would also break on a namedtuple, which
+        # takes positional fields rather than one iterable.
+        return [serialize_identifiers(item) for item in payload]
     return payload

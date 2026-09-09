@@ -20,6 +20,8 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
+from moomoo_mcp.services.validation import validate_date_range
+
 CURSOR_VERSION = 1
 
 # Large enough for a protobuf continuation token plus the bound query, small
@@ -55,16 +57,22 @@ def resolve_date_range(
 
     Returns:
         The concrete ``(start, end)`` pair to send to the SDK.
+
+    Raises:
+        ValueError: If a bound is malformed or start follows end. Validating
+            here keeps a bad range from reaching the gateway as an opaque
+            protocol error.
     """
+    parsed_start, parsed_end = validate_date_range(start, end)
     span = timedelta(days=DEFAULT_RANGE_DAYS)
     current = today or date.today()
 
-    if start and end:
-        return start, end
-    if end and not start:
-        return (date.fromisoformat(end) - span).isoformat(), end
-    if start and not end:
-        return start, (date.fromisoformat(start) + span).isoformat()
+    if parsed_start and parsed_end:
+        return parsed_start.isoformat(), parsed_end.isoformat()
+    if parsed_end:
+        return (parsed_end - span).isoformat(), parsed_end.isoformat()
+    if parsed_start:
+        return parsed_start.isoformat(), (parsed_start + span).isoformat()
     return (current - span).isoformat(), current.isoformat()
 
 

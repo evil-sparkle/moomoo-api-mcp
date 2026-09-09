@@ -405,3 +405,38 @@ class TestLegacyToolUnchanged:
             "2026-01-05 00:00:00",
         ]
         assert "next_cursor" not in result.structured
+
+
+class TestPageQueryValidation:
+    """A bad range fails before the gateway, naming the field."""
+
+    @pytest.mark.asyncio
+    async def test_reversed_dates_are_rejected(self, kline_context, quote_ctx):
+        with pytest.raises(Exception, match="is after end"):
+            await call_mcp_tool(
+                kline_context,
+                "get_historical_klines_page",
+                {**BASE_QUERY, "start": "2026-03-31", "end": "2026-01-01"},
+            )
+
+        quote_ctx.request_history_kline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_malformed_date_is_rejected(self, kline_context, quote_ctx):
+        with pytest.raises(Exception, match="YYYY-MM-DD"):
+            await call_mcp_tool(
+                kline_context,
+                "get_historical_klines_page",
+                {**BASE_QUERY, "start": "01/01/2026"},
+            )
+
+        quote_ctx.request_history_kline.assert_not_called()
+
+
+class TestSerializerShape:
+    """Nested sequences survive identifier serialization as JSON arrays."""
+
+    def test_tuples_become_lists(self):
+        from moomoo_mcp.tools.serialization import serialize_identifiers
+
+        assert serialize_identifiers(({"acc_id": 7},)) == [{"acc_id": "7"}]
