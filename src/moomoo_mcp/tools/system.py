@@ -6,7 +6,7 @@ from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
-from moomoo_mcp.tools.offload import run_blocking
+from moomoo_mcp.tools.offload import await_futures
 
 
 @mcp.tool()
@@ -42,11 +42,14 @@ async def check_health(
     moomoo_service = lifespan_context.moomoo_service
     trade_service = lifespan_context.trade_service
 
-    # The SDK probes are blocking, so they run off the event loop: a stuck
-    # gateway must not stall the MCP session that is asking about it.
-    status = await run_blocking(
-        moomoo_service.check_health, trade_service=trade_service
-    )
+    # Both probes start immediately on their own dedicated workers, so health
+    # never queues behind ordinary SDK traffic, and the deadline covers every
+    # wait from this point on. Awaiting the probe futures directly — rather than
+    # parking a shared worker thread on them — keeps the event loop free to
+    # answer while a stuck gateway is still being diagnosed.
+    check = moomoo_service.start_health_check(trade_service=trade_service)
+    await await_futures(check.futures, check.remaining())
+    status = check.result()
 
     await ctx.info(f"Health check status: {status.get('status')}")
 

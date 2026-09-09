@@ -13,16 +13,26 @@ import threading
 import time
 from unittest.mock import MagicMock
 
+import anyio.to_thread
 import pandas as pd
 import pytest
 
 from moomoo_mcp.services.base_service import MoomooService
+from moomoo_mcp.services.health import HEALTH_DEADLINE_SECONDS
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
+from moomoo_mcp.tools.offload import run_blocking
 from tests.conftest import call_mcp_tool
 
 SERVICE_NAMES = {"trade_service", "market_data_service", "moomoo_service"}
+
+# Service methods that touch no socket and return without waiting, so calling
+# them on the event loop is safe. Everything else must go through run_blocking.
+NON_BLOCKING_METHODS = {
+    # Submits both probes to their own dedicated workers and returns a handle.
+    "start_health_check",
+}
 
 
 def _direct_service_calls(path: pathlib.Path) -> list[str]:
@@ -31,7 +41,11 @@ def _direct_service_calls(path: pathlib.Path) -> list[str]:
     for node in ast.walk(ast.parse(path.read_text())):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             target = node.func.value
-            if isinstance(target, ast.Name) and target.id in SERVICE_NAMES:
+            if (
+                isinstance(target, ast.Name)
+                and target.id in SERVICE_NAMES
+                and node.func.attr not in NON_BLOCKING_METHODS
+            ):
                 found.append(
                     f"{path.name}:{node.lineno} {target.id}.{node.func.attr}()"
                 )
@@ -55,42 +69,44 @@ def test_no_tool_calls_a_service_directly():
     )
 
 
+@pytest.fixture
+def slow_context(mcp_app_context):
+    """Real services on a mock SDK whose option-chain call blocks until released."""
+    release = threading.Event()
+
+    quote_ctx = MagicMock()
+
+    def slow_chain(**_):
+        release.wait(10)
+        return (0, pd.DataFrame([{"code": "US.XYZ260116C100000"}]))
+
+    quote_ctx.get_option_chain.side_effect = slow_chain
+    quote_ctx.get_global_state.return_value = (
+        0,
+        {"server_ver": "9.2", "qot_logined": "1"},
+    )
+
+    moomoo_service = MoomooService()
+    moomoo_service.quote_ctx = quote_ctx
+
+    trade_ctx = MagicMock()
+    trade_ctx.get_acc_list.return_value = (0, [{"acc_id": 1}])
+    trade_service = TradeService(policy=TradingPolicy(TradingMode.READ_ONLY))
+    trade_service.trade_ctx = trade_ctx
+
+    mcp_app_context.moomoo_service = moomoo_service
+    mcp_app_context.market_data_service = MarketDataService(quote_ctx=quote_ctx)
+    mcp_app_context.trade_service = trade_service
+
+    yield mcp_app_context, release
+
+    release.set()
+    moomoo_service.close()
+    trade_service.close()
+
+
 class TestConcurrentRequests:
     """A slow tool call must not delay a concurrent health check."""
-
-    @pytest.fixture
-    def slow_context(self, mcp_app_context):
-        release = threading.Event()
-
-        quote_ctx = MagicMock()
-
-        def slow_chain(**_):
-            release.wait(10)
-            return (0, pd.DataFrame([{"code": "US.XYZ260116C100000"}]))
-
-        quote_ctx.get_option_chain.side_effect = slow_chain
-        quote_ctx.get_global_state.return_value = (
-            0,
-            {"server_ver": "9.2", "qot_logined": "1"},
-        )
-
-        moomoo_service = MoomooService()
-        moomoo_service.quote_ctx = quote_ctx
-
-        trade_ctx = MagicMock()
-        trade_ctx.get_acc_list.return_value = (0, [{"acc_id": 1}])
-        trade_service = TradeService(policy=TradingPolicy(TradingMode.READ_ONLY))
-        trade_service.trade_ctx = trade_ctx
-
-        mcp_app_context.moomoo_service = moomoo_service
-        mcp_app_context.market_data_service = MarketDataService(quote_ctx=quote_ctx)
-        mcp_app_context.trade_service = trade_service
-
-        yield mcp_app_context, release
-
-        release.set()
-        moomoo_service.close()
-        trade_service.close()
 
     @pytest.mark.asyncio
     async def test_health_answers_while_an_option_chain_is_blocked(self, slow_context):
@@ -182,3 +198,89 @@ class TestConcurrentRequests:
         service.close()
 
         assert ticks > 5, f"event loop only advanced {ticks} times while blocked"
+
+
+class TestHealthUnderLoad:
+    """Health must answer within its deadline while every worker is busy."""
+
+    @pytest.fixture
+    def saturating(self):
+        """Occupy every slot in the shared thread limiter until released."""
+        release = threading.Event()
+
+        async def fill() -> list[asyncio.Task]:
+            limiter = anyio.to_thread.current_default_thread_limiter()
+            tasks = [
+                asyncio.create_task(run_blocking(release.wait, 30))
+                for _ in range(int(limiter.total_tokens))
+            ]
+            # Wait until the pool is genuinely full, not merely scheduled.
+            deadline = time.monotonic() + 10
+            while limiter.available_tokens > 0 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert limiter.available_tokens == 0, "the worker pool never filled"
+            return tasks
+
+        yield fill, release
+        release.set()
+
+    @pytest.mark.asyncio
+    async def test_health_answers_with_every_worker_occupied(
+        self, slow_context, saturating
+    ):
+        """Routing health through the shared limiter made it queue, not run.
+
+        The probes have had dedicated workers all along, but they are only
+        reached once the outer call gets a turn. With all 40 slots taken that
+        turn never came inside the deadline, so a saturated server reported
+        nothing about its own health.
+        """
+        context, chain_release = slow_context
+        fill, release = saturating
+        tasks = await fill()
+
+        started = time.monotonic()
+        health = await call_mcp_tool(context, "check_health")
+        elapsed = time.monotonic() - started
+
+        assert elapsed < HEALTH_DEADLINE_SECONDS, (
+            f"health took {elapsed:.2f}s queueing behind ordinary queries"
+        )
+        assert health.structured["status"] == "connected"
+
+        release.set()
+        chain_release.set()
+        await asyncio.gather(*tasks)
+
+    @pytest.mark.asyncio
+    async def test_the_deadline_covers_waiting_not_just_probing(
+        self, slow_context, saturating
+    ):
+        """A hung gateway plus a saturated pool must still answer on time.
+
+        The deadline is measured from when the request arrives, so whatever the
+        server spends getting to the probes comes out of the same budget.
+        """
+        context, chain_release = slow_context
+        stuck = threading.Event()
+        context.moomoo_service.quote_ctx.get_global_state.side_effect = (
+            lambda: stuck.wait(30) or (0, {"server_ver": "9.2"})
+        )
+        fill, release = saturating
+        tasks = await fill()
+
+        started = time.monotonic()
+        health = await call_mcp_tool(context, "check_health")
+        elapsed = time.monotonic() - started
+
+        assert elapsed < HEALTH_DEADLINE_SECONDS + 1.0, (
+            f"health overran its deadline by {elapsed - HEALTH_DEADLINE_SECONDS:.2f}s"
+        )
+        assert health.structured["quote"]["status"] == "timeout"
+        assert health.structured["trade"]["status"] == "ok"
+        assert health.structured["status"] == "degraded"
+
+        stuck.set()
+        release.set()
+        chain_release.set()
+        await asyncio.gather(*tasks)

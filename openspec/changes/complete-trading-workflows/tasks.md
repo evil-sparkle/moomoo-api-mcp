@@ -71,7 +71,7 @@ Recorded 2026-09-10, after implementing R1-R8.
 
 ### Automated
 
-- `pytest`: 444 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
+- `pytest`: 449 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
   development environment) and on Python 3.10.21 with `mcp` 1.10.0, the lowest
   supported combination.
 - `ruff check .`: 74 diagnostics, against a 110-diagnostic baseline at commit
@@ -123,6 +123,20 @@ Two structural guards were added so 1, 2 and 4 cannot silently return: a
 static check that no tool calls a service method directly on the event loop, a
 decoder-driven test for the missing-value sentinel, and assertions that tool
 descriptions do not mandate an unlock that policy denies.
+
+A second review found two defects in the concurrency fixes themselves. Both
+were reproduced before being fixed, and each fix was confirmed by restoring the
+old behaviour and watching the new test fail:
+
+| # | Defect | Fix | Reproduction |
+| --- | --- | --- | --- |
+| 6 | `close()` returned promptly but the process could not exit: `ThreadPoolExecutor.shutdown(wait=False)` bounds the caller, while `concurrent.futures`' atexit hook still joins its non-daemon workers — and the trade constructor never returns while OpenD is down | `run_detached` runs both the connect worker and the health probes on daemon threads, which the interpreter never joins | A subprocess that calls `close()` without releasing the blocked constructor had to be killed at 12s; it now exits 0 |
+| 7 | Health queued through the same 40-slot limiter as ordinary queries, so under load it blew its deadline before its dedicated probe workers were ever reached | `check_health` starts both probes immediately and awaits their futures on the event loop via `await_futures`; the deadline is measured from when the request arrives | With every slot occupied, health took 30.0s against a 5s deadline; it now answers immediately |
+
+Guarding these: `TestShutdownWithAStuckConnection` exercises shutdown *without*
+releasing the constructor — including a subprocess check that the interpreter
+exits, which an in-process test cannot observe — and `TestHealthUnderLoad`
+saturates the shared limiter before calling health.
 
 ### Not verified
 

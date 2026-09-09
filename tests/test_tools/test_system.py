@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from moomoo_mcp.services.base_service import MoomooService
+from moomoo_mcp.services.base_service import HealthCheck, MoomooService
 from moomoo_mcp.services.trade_service import TradeService
 
 HEALTHY = {
@@ -18,6 +18,16 @@ HEALTHY = {
 }
 
 
+def stub_health(mock_moomoo_service: MagicMock, payload: dict) -> MagicMock:
+    """Wire a mock service so the tool's start/await/collect run yields ``payload``."""
+    check = MagicMock(spec=HealthCheck)
+    check.futures = []
+    check.remaining.return_value = 5.0
+    check.result.return_value = payload
+    mock_moomoo_service.start_health_check.return_value = check
+    return check
+
+
 class TestCheckHealthTool:
     """The tool forwards both services and returns the observed status."""
 
@@ -25,14 +35,14 @@ class TestCheckHealthTool:
     async def test_returns_health_through_mcp(
         self, call_tool, mock_moomoo_service, mock_trade_service
     ):
-        mock_moomoo_service.check_health.return_value = HEALTHY
+        stub_health(mock_moomoo_service, HEALTHY)
 
         result = await call_tool("check_health")
 
         assert result.structured == HEALTHY
         assert result.json["status"] == "connected"
         assert result.json["gateway_version"] == "9.2.5208"
-        mock_moomoo_service.check_health.assert_called_once_with(
+        mock_moomoo_service.start_health_check.assert_called_once_with(
             trade_service=mock_trade_service
         )
 
@@ -40,7 +50,7 @@ class TestCheckHealthTool:
     async def test_degraded_status_identifies_failing_service(
         self, call_tool, mock_moomoo_service
     ):
-        mock_moomoo_service.check_health.return_value = {
+        stub_health(mock_moomoo_service, {
             **HEALTHY,
             "status": "degraded",
             "trade": {
@@ -48,7 +58,7 @@ class TestCheckHealthTool:
                 "reason": "gateway_error",
                 "error": "trade svr not ready",
             },
-        }
+        })
 
         result = await call_tool("check_health")
 
@@ -60,13 +70,13 @@ class TestCheckHealthTool:
     async def test_disconnected_status_is_reported(
         self, call_tool, mock_moomoo_service
     ):
-        mock_moomoo_service.check_health.return_value = {
+        stub_health(mock_moomoo_service, {
             **HEALTHY,
             "status": "disconnected",
             "quote": {"status": "error", "reason": "gateway_error", "error": "boom"},
             "trade": {"status": "error", "reason": "gateway_error", "error": "boom"},
             "gateway_version": None,
-        }
+        })
 
         result = await call_tool("check_health")
 
