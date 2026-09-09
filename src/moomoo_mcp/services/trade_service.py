@@ -3,7 +3,7 @@
 import logging
 import math
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any
 
@@ -21,6 +21,7 @@ from moomoo_mcp.services.health import (
     SYNC_CONNECT_TIMEOUT_SECONDS,
     BoundedProbe,
     failure,
+    run_detached,
 )
 from moomoo_mcp.services.trading_policy import TradingPolicy
 
@@ -84,7 +85,6 @@ class TradeService:
         self.trade_ctx: OpenSecTradeContext | None = None
         self._trade_probe = BoundedProbe("trade")
         self._connect_lock = threading.Lock()
-        self._connect_executor: ThreadPoolExecutor | None = None
         self._connect_future: Future | None = None
         self._closed = False
 
@@ -228,13 +228,9 @@ class TradeService:
 
         with self._connect_lock:
             self._closed = False
-            if self._connect_executor is None:
-                self._connect_executor = ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix="trade-connect"
-                )
             future = self._connect_future
             if future is None or future.done():
-                future = self._connect_executor.submit(self._open_trade_context)
+                future = run_detached(self._open_trade_context, "trade-connect")
                 self._connect_future = future
 
         try:
@@ -249,19 +245,23 @@ class TradeService:
             logger.error(f"Trade connection failed: {exc}")
 
     def close(self) -> None:
-        """Close trade context connection and release background workers."""
+        """Close the trade context and abandon any connection still in flight.
+
+        A connection attempt cannot be interrupted: the SDK constructor owns its
+        thread until OpenD answers. Shutdown therefore does not wait for it. It
+        marks the service closed — so a worker that eventually succeeds closes
+        the context it built instead of publishing it — and drops the future.
+        The worker is a daemon thread, so the interpreter can exit while the
+        constructor is still retrying.
+        """
         self._trade_probe.close()
         with self._connect_lock:
             # Set before releasing the lock so a worker that is still retrying
             # closes whatever it eventually builds instead of publishing it.
             self._closed = True
-            executor = self._connect_executor
-            self._connect_executor = None
             self._connect_future = None
             trade_ctx = self.trade_ctx
             self.trade_ctx = None
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
         if trade_ctx:
             trade_ctx.close()
 

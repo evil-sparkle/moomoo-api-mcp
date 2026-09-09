@@ -1,5 +1,8 @@
 """Tests for active gateway health probes (R1)."""
 
+import pathlib
+import subprocess
+import sys
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -461,3 +464,116 @@ class TestConnectDoesNotBlockStartup:
 
             assert service.trade_ctx is built
             service.close()
+
+
+# Run in a subprocess: the defect this guards is at interpreter *exit*, which an
+# in-process test cannot observe. The constructor is deliberately never
+# released, so a regression shows up as a process that will not terminate.
+_STUCK_SHUTDOWN_SCRIPT = """
+import sys
+import threading
+from unittest.mock import patch
+
+sys.path.insert(0, sys.argv[1])
+
+from moomoo_mcp.services.trade_service import TradeService
+
+blocked = threading.Event()
+
+
+def never_returns(**_):
+    # Models OpenContextBase.__init__, which retries every six seconds for as
+    # long as OpenD is down and cannot be interrupted from outside.
+    blocked.wait()
+
+
+with patch(
+    "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+    side_effect=never_returns,
+):
+    service = TradeService()
+    service.connect(timeout=0.2)
+    service.close()
+
+print("closed", flush=True)
+# `blocked` is never set. Falling off the end here must be enough to exit.
+"""
+
+
+class TestShutdownWithAStuckConnection:
+    """Shutdown must not depend on a connection attempt ever finishing."""
+
+    def test_the_process_exits_without_releasing_the_constructor(self):
+        """A ThreadPoolExecutor worker would hold the interpreter open here.
+
+        ``shutdown(wait=False)`` bounds only the caller: concurrent.futures
+        registers an atexit hook that joins its non-daemon workers, so the
+        process stays alive until the SDK constructor returns — which, against a
+        down gateway, is never.
+        """
+        src = str(pathlib.Path(__file__).resolve().parents[2] / "src")
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", _STUCK_SHUTDOWN_SCRIPT, src],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail(
+                "the interpreter could not exit while a connection attempt was "
+                "still running; shutdown waits on a worker it cannot stop"
+            )
+
+        assert "closed" in proc.stdout, proc.stderr
+        assert proc.returncode == 0, proc.stderr
+
+    def test_close_returns_while_the_constructor_is_still_running(self):
+        started = threading.Event()
+
+        def never_returns(**_):
+            started.set()
+            # Never released: the point is that close() does not need it to be.
+            threading.Event().wait()
+
+        service = TradeService()
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            side_effect=never_returns,
+        ):
+            service.connect(timeout=0.2)
+            assert started.wait(5), "the connection attempt never started"
+
+            begin = time.monotonic()
+            service.close()
+            elapsed = time.monotonic() - begin
+
+        assert elapsed < 1.0, f"close() waited {elapsed:.2f}s on a stuck worker"
+        assert service.trade_ctx is None
+
+    def test_workers_are_daemon_threads(self):
+        """Nothing this package starts may be joined at interpreter exit."""
+        service = TradeService()
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            side_effect=lambda **_: threading.Event().wait(),
+        ):
+            service.connect(timeout=0.2)
+
+        probe = BoundedProbe("stuck")
+        probe.submit(lambda: threading.Event().wait())
+
+        alive = threading.enumerate()
+        # Other tests in this module also leave stuck workers behind, so this
+        # asserts on what every one of them must be, not on how many there are.
+        connect = [t for t in alive if t.name == "trade-connect"]
+        probes = [t for t in alive if t.name == "health-stuck"]
+        assert connect and probes, f"workers did not start: {alive}"
+        non_daemon = [t for t in connect + probes if not t.daemon]
+        assert not non_daemon, (
+            f"these are joined at interpreter exit, so a stuck SDK call would "
+            f"hang the process: {non_daemon}"
+        )
+
+        probe.close()
+        service.close()

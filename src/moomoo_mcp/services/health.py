@@ -12,9 +12,11 @@ deadline instead of starting more work.
 
 import threading
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from typing import Any
+from typing import Any, TypeVar
+
+T = TypeVar("T")
 
 # Total wall-clock budget for a full health check, per the system-health spec.
 HEALTH_DEADLINE_SECONDS = 5.0
@@ -46,6 +48,40 @@ _PERMISSION_MARKERS = (
     "no right",
     "权限",
 )
+
+
+def run_detached(func: Callable[[], T], name: str) -> Future[T]:
+    """Run ``func`` on a daemon thread, reporting the outcome through a Future.
+
+    ``ThreadPoolExecutor`` is the obvious tool here and the wrong one. Its
+    workers are non-daemon threads that ``concurrent.futures``' own atexit hook
+    joins at interpreter shutdown, so ``shutdown(wait=False)`` bounds only the
+    caller: the process still cannot exit until the worker returns. None of the
+    SDK calls we run this way are cancellable, and the trade constructor is not
+    even bounded — it retries every six seconds for as long as OpenD is down —
+    so a single stuck call would hold the process open forever.
+
+    A daemon thread is abandonable. Shutdown drops the reference and the
+    interpreter exits regardless of what the SDK is still doing.
+
+    Args:
+        func: Blocking, non-cancellable callable to run.
+        name: Thread name, used in diagnostics and stack dumps.
+
+    Returns:
+        A future carrying ``func``'s result or the exception it raised.
+    """
+    future: Future[T] = Future()
+    future.set_running_or_notify_cancel()
+
+    def run() -> None:
+        try:
+            future.set_result(func())
+        except BaseException as exc:  # noqa: BLE001 - relayed through the future
+            future.set_exception(exc)
+
+    threading.Thread(target=run, name=name, daemon=True).start()
+    return future
 
 
 def sanitize_error(value: object) -> str:
@@ -85,20 +121,15 @@ class BoundedProbe:
         """
         self.name = name
         self._lock = threading.Lock()
-        self._executor: ThreadPoolExecutor | None = None
         self._inflight: Future | None = None
 
     def submit(self, probe: Callable[[], dict[str, Any]]) -> Future:
         """Start ``probe``, or return the future of one already in flight."""
         with self._lock:
-            if self._executor is None:
-                self._executor = ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix=f"health-{self.name}"
-                )
             inflight = self._inflight
             if inflight is not None and not inflight.done():
                 return inflight
-            future = self._executor.submit(probe)
+            future = run_detached(probe, f"health-{self.name}")
             self._inflight = future
             return future
 
@@ -133,13 +164,14 @@ class BoundedProbe:
             return self._inflight is not None and not self._inflight.done()
 
     def close(self) -> None:
-        """Release the worker thread pool, abandoning any stuck probe."""
+        """Stop tracking any probe in flight.
+
+        A stuck probe cannot be cancelled — the SDK call owns its thread until
+        it returns. Dropping the reference is therefore the whole of shutdown:
+        the worker is a daemon thread, so it never delays interpreter exit.
+        """
         with self._lock:
-            executor = self._executor
-            self._executor = None
             self._inflight = None
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
 
 
 def aggregate_status(*service_results: dict[str, Any]) -> str:
