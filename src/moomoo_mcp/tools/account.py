@@ -1,44 +1,12 @@
 """Account tools for trading account information retrieval."""
 
-import numbers
+from typing import Any
 
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
-
-# 64-bit identifiers that must not cross the JSON boundary as numbers.
-_LARGE_ID_FIELDS = ("position_id", "combo_id")
-
-
-def _stringify_large_ids(rows: list[dict]) -> list[dict]:
-    """Render 64-bit position identifiers as decimal strings.
-
-    Clients that parse JSON numbers as IEEE-754 doubles silently corrupt integers
-    above 2**53, and these identifiers are around 3e18. The corruption is
-    undetectable downstream because the result is still a valid integer, so a
-    closing order would be submitted against a position that does not exist —
-    validating the input cannot recover precision already lost in transit.
-
-    Strings survive the roundtrip intact, and place_combo_order accepts them.
-    Conversion happens here, at the serialization boundary, so that in-process
-    Python callers of TradeService keep exact ints.
-
-    Anything that is not an exact integer is passed through untouched: a float here
-    has already lost precision upstream, and letting it reach place_combo_order's
-    validator surfaces that loudly rather than dressing it up as a valid id.
-    """
-    converted = []
-    for row in rows:
-        row = dict(row)
-        for field in _LARGE_ID_FIELDS:
-            value = row.get(field)
-            # numbers.Integral covers both Python ints and numpy integers from
-            # pandas. bool is Integral too, hence the explicit exclusion.
-            if isinstance(value, numbers.Integral) and not isinstance(value, bool):
-                row[field] = str(int(value))
-        converted.append(row)
-    return converted
+from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
 @mcp.tool()
@@ -55,11 +23,17 @@ async def get_accounts(
 
     Returns:
         List of account dictionaries containing acc_id, trd_env, and other metadata.
+
+        NOTE: acc_id is returned as a decimal STRING, not a number. It is a
+        64-bit value that a JSON client parsing numbers as doubles would
+        silently round, and a rounded id addresses a different account. Pass it
+        to other tools exactly as received, as a string, without converting it
+        to a number at any point.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
     accounts = trade_service.get_accounts()
     await ctx.info(f"Retrieved {len(accounts)} accounts")
-    return accounts
+    return serialize_identifiers(accounts)
 
 
 @mcp.tool()
@@ -67,7 +41,7 @@ async def get_account_summary(
     ctx: Context[ServerSession, AppContext],
     trd_env: str = "REAL",
     acc_id: str = "0",
-) -> dict:
+) -> dict[str, Any]:
     """Get complete account summary including assets and positions in one call.
 
     This is the recommended tool for getting a full view of an account's status.
@@ -86,6 +60,10 @@ async def get_account_summary(
 
     Returns:
         Dictionary with 'assets' (cash, market_val, etc.) and 'positions' (list of holdings).
+
+        NOTE: acc_id, position_id, and combo_id are returned as decimal STRINGS
+        throughout, including inside the nested positions. Balances and
+        quantities remain numbers. Pass identifiers on unchanged, as strings.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
 
@@ -94,10 +72,12 @@ async def get_account_summary(
 
     await ctx.info(f"Retrieved summary for {trd_env} account: {len(positions)} positions")
 
-    return {
-        "assets": assets,
-        "positions": positions,
-    }
+    return serialize_identifiers(
+        {
+            "assets": assets,
+            "positions": positions,
+        }
+    )
 
 
 @mcp.tool()
@@ -107,7 +87,7 @@ async def get_assets(
     acc_id: str = "0",
     refresh_cache: bool = False,
     currency: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Get account assets including cash, market value, buying power.
 
     IMPORTANT FOR AI AGENTS:
@@ -125,6 +105,8 @@ async def get_assets(
 
     Returns:
         Dictionary with asset information including cash, market_val, total_assets, etc.
+        Any acc_id in the response is a decimal STRING; monetary values remain
+        numbers.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
     assets = trade_service.get_assets(
@@ -134,7 +116,7 @@ async def get_assets(
         currency=currency,
     )
     await ctx.info(f"Retrieved assets for {trd_env} account")
-    return assets
+    return serialize_identifiers(assets)
 
 
 @mcp.tool()
@@ -178,11 +160,12 @@ async def get_positions(
         With show_option_strategy_view=True, also position_id, combo_id,
         strategy_type, and position_type ('COMBINED' or 'LEG').
 
-        NOTE: position_id and combo_id are returned as decimal STRINGS, not numbers.
-        They are 64-bit values that a JSON client parsing numbers as doubles would
-        silently round, and a rounded id would be submitted against the wrong
-        position. Pass them to place_combo_order exactly as received, as strings,
-        without converting them to numbers at any point.
+        NOTE: acc_id, position_id, and combo_id are returned as decimal
+        STRINGS, not numbers. They are 64-bit values that a JSON client parsing
+        numbers as doubles would silently round, and a rounded id would be
+        submitted against the wrong position. Pass them to place_combo_order
+        exactly as received, as strings, without converting them to numbers at
+        any point.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
     positions = trade_service.get_positions(
@@ -196,7 +179,7 @@ async def get_positions(
         show_option_strategy_view=show_option_strategy_view,
     )
     await ctx.info(f"Retrieved {len(positions)} positions from {trd_env} account")
-    return _stringify_large_ids(positions)
+    return serialize_identifiers(positions)
 
 
 @mcp.tool()
@@ -209,7 +192,7 @@ async def get_max_tradable(
     adjust_limit: float = 0,
     trd_env: str = "REAL",
     acc_id: str = "0",
-) -> dict:
+) -> dict[str, Any]:
     """Get maximum tradable quantity for a stock.
 
     IMPORTANT FOR AI AGENTS:
@@ -304,7 +287,7 @@ async def unlock_trade(
     ctx: Context[ServerSession, AppContext],
     password: str | None = None,
     password_md5: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Unlock trade to access REAL account data.
 
     IMPORTANT: You MUST call this tool before accessing REAL account data via other

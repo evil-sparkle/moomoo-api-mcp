@@ -76,8 +76,21 @@ class McpToolResult:
 
     @property
     def json(self) -> Any:
-        """The text content parsed back as JSON."""
+        """The single text block parsed back as JSON."""
         return json.loads(self.text)
+
+    @property
+    def json_blocks(self) -> list[Any]:
+        """Each text block parsed separately.
+
+        FastMCP emits one text block per element for a list-returning tool, so a
+        list result is only valid JSON block by block.
+        """
+        return [
+            json.loads(block.text)
+            for block in self.content
+            if getattr(block, "type", None) == "text"
+        ]
 
 
 async def call_mcp_tool(

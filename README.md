@@ -251,6 +251,36 @@ When using `get_orders` or `get_history_orders`, the `status_filter_list` parame
 
 > **Note**: The server automatically converts these strings to the required SDK enum format. If no orders match the filter, an empty list is returned.
 
+## Migration Notes
+
+### Account, position, and combo identifiers are strings
+
+Account tools return `acc_id`, `position_id`, and `combo_id` as decimal
+**strings** in both the text and structured content of a response. This covers
+`get_accounts`, `get_assets`, `get_positions`, and `get_account_summary`,
+including the positions nested inside a summary.
+
+These are 64-bit values around 3e18. A client that parses JSON numbers as
+IEEE-754 doubles — which a JavaScript-based MCP client does — rounds anything
+above 2^53 into a different, still valid-looking integer. That corruption cannot
+be detected or repaired on the way back, which is why the value has to leave as
+a string.
+
+What to change in a client:
+
+- Pass identifiers back exactly as received. Do not call `Number()`, `parseInt`,
+  or `int()` on them.
+- Replace any numeric comparison or arithmetic on an id with a string
+  comparison.
+- Balances, quantities, prices, and every other field are unchanged and remain
+  numbers.
+
+Tool *inputs* already accepted string identifiers, so no call site needs a new
+argument type. An identifier that reaches the boundary as a float or a boolean
+is rejected with an explicit error rather than emitted as a plausible id: the
+precision was already lost upstream, and a silent replacement would send a
+request against the wrong account or position.
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.

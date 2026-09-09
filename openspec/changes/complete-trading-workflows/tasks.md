@@ -2,7 +2,7 @@
 
 - [ ] 0.1 Review requirements R1-R8 and approve scope, especially the default
   READ_ONLY policy and response-type migration.
-- [ ] 0.2 Reconcile the account-ID proposal with implemented string inputs and
+- [x] 0.2 Reconcile the account-ID proposal with implemented string inputs and
   plan archival order with the completed combo and market-data changes.
 - [ ] 0.3 Verify SDK timeout, cursor, permission, and quota contracts against the
   installed minimum-supported SDK; record any resulting interface adjustments.
@@ -13,9 +13,9 @@
   partial-startup cleanup, and availability of health during downstream failure.
 - [x] 1.2 R1: Test healthy, quote-only failure, trade-only failure, total failure,
   timeout, repeated timeout, and gateway failure after successful initialization.
-- [ ] 1.3 R2: Apply shared field-aware ID serialization to every covered account
+- [x] 1.3 R2: Apply shared field-aware ID serialization to every covered account
   tool, including nested summaries; preserve exact service values.
-- [ ] 1.4 R2: Test actual MCP text and structured responses through an IEEE-754
+- [x] 1.4 R2: Test actual MCP text and structured responses through an IEEE-754
   roundtrip, using synthetic large IDs, nulls, strings, invalid IDs, and nested rows.
 - [ ] 1.5 R3: Add policy configuration and service guards for every order mutation
   and unlock path; align startup, health reporting, and agent guidance.

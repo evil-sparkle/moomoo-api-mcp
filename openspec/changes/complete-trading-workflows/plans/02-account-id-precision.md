@@ -39,11 +39,11 @@ Document passing IDs unchanged and use string IDs in public examples.
 
 ## Implementation Checklist
 
-- [ ] Inventory the four tools' actual response paths and nullable SDK fields.
-- [ ] Extract field-aware serialization and explicitly reject lossy values.
-- [ ] Wire all covered tools to the shared serializer.
-- [ ] Add actual tool/MCP serialization tests, including nested summaries.
-- [ ] Reconcile existing account-ID tasks and add migration notes.
+- [x] Inventory the four tools' actual response paths and nullable SDK fields.
+- [x] Extract field-aware serialization and explicitly reject lossy values.
+- [x] Wire all covered tools to the shared serializer.
+- [x] Add actual tool/MCP serialization tests, including nested summaries.
+- [x] Reconcile existing account-ID tasks and add migration notes.
 
 ## Acceptance Tests
 

@@ -75,7 +75,9 @@ async def test_get_accounts(mcp_context, mock_trade_service):
     result = await get_accounts(mcp_context)
 
     assert len(result) == 1
-    assert result[0]["acc_id"] == 123
+    # Identifiers cross the MCP boundary as decimal strings (R2).
+    assert result[0]["acc_id"] == "123"
+    assert result[0]["trd_env"] == "REAL"
     mock_trade_service.get_accounts.assert_called_once()
 
 
