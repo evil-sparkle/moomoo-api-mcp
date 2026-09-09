@@ -1,5 +1,8 @@
 """Trade service for managing Moomoo trading context and account operations."""
 
+from concurrent.futures import Future
+from typing import Any
+
 from moomoo import (
     ComboLeg,
     OpenSecTradeContext,
@@ -8,6 +11,8 @@ from moomoo import (
     SecurityFirm,
     TrdMarket,
 )
+
+from moomoo_mcp.services.health import BoundedProbe, failure
 
 
 class TradeService:
@@ -31,6 +36,7 @@ class TradeService:
         self.port = port
         self.security_firm = security_firm
         self.trade_ctx: OpenSecTradeContext | None = None
+        self._trade_probe = BoundedProbe("trade")
 
     def _convert_status_filter(
         self, status_filter_list: list[str] | None
@@ -139,10 +145,43 @@ class TradeService:
         self.trade_ctx = OpenSecTradeContext(**kwargs)
 
     def close(self) -> None:
-        """Close trade context connection."""
+        """Close trade context connection and release the health probe worker."""
+        self._trade_probe.close()
         if self.trade_ctx:
             self.trade_ctx.close()
             self.trade_ctx = None
+
+    def probe_trade(self) -> dict[str, Any]:
+        """Actively check trade connectivity with a read-only account listing.
+
+        ``get_acc_list`` is the lightest trade read that proves the trade socket
+        is answering; it neither unlocks trading nor mutates anything. Only the
+        return code and the number of visible accounts are reported — never
+        account identifiers, balances, or positions.
+        """
+        trade_ctx = self.trade_ctx
+        if trade_ctx is None:
+            return failure(
+                "unavailable", "Trade context not initialized", reason="not_initialized"
+            )
+
+        ret, data = trade_ctx.get_acc_list()
+        if ret != RET_OK:
+            return failure("error", data)
+
+        try:
+            account_count = len(data)
+        except TypeError:
+            account_count = 0
+        return {"status": "ok", "account_count": account_count}
+
+    def submit_probe(self) -> Future:
+        """Start (or join) the bounded trade connectivity probe."""
+        return self._trade_probe.submit(self.probe_trade)
+
+    def collect_probe(self, future: Future, timeout: float) -> dict[str, Any]:
+        """Collect a trade probe result within the remaining health deadline."""
+        return self._trade_probe.collect(future, timeout)
 
     def get_accounts(self) -> list[dict]:
         """Get list of trading accounts.

@@ -1,20 +1,49 @@
+"""System tools for server and gateway health."""
+
+from typing import Any
+
+import anyio.to_thread
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
 
+
 @mcp.tool()
 async def check_health(
     ctx: Context[ServerSession, AppContext]
-) -> dict[str, str]:
-    """Check connectivity to Moomoo and MCP server health.
+) -> dict[str, Any]:
+    """Check connectivity to the Moomoo OpenD gateway and MCP server health.
+
+    Actively probes the quote and trade connections with read-only calls rather
+    than reporting on the existence of a connection object, and completes within
+    a five-second deadline.
+
+    A `connected` result means the gateway answered both probes. It does NOT
+    mean trading is unlocked, that an order would be accepted, or that any
+    particular market is authorized for the account.
 
     Returns:
-        Dictionary containing status and connection info.
+        Dictionary containing:
+        - status: 'connected' (both probes succeeded), 'degraded' (exactly one
+          succeeded), or 'disconnected' (neither succeeded).
+        - host: Configured OpenD endpoint as 'host:port'.
+        - checked_at: UTC observation time (ISO-8601, 'Z' suffix).
+        - quote / trade: Per-service results, each with a status of 'ok',
+          'error', 'timeout', or 'unavailable', plus a 'reason' and a sanitized
+          'error' when the probe failed.
+        - gateway_version: OpenD version when the gateway reports one, else null.
     """
-    moomoo_service = ctx.request_context.lifespan_context.moomoo_service
-    status = moomoo_service.check_health()
-    
+    lifespan_context = ctx.request_context.lifespan_context
+    moomoo_service = lifespan_context.moomoo_service
+    trade_service = lifespan_context.trade_service
+
+    # The SDK probes are blocking, so they run off the event loop: a stuck
+    # gateway must not stall the MCP session that is asking about it.
+    status = await anyio.to_thread.run_sync(
+        lambda: moomoo_service.check_health(trade_service=trade_service)
+    )
+
     await ctx.info(f"Health check status: {status.get('status')}")
-    
+
     return status

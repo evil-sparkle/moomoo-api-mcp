@@ -32,6 +32,7 @@ classifiers = [
 urls.Repository = "https://github.com/Litash/moomoo-api-mcp"
 urls.Issues = "https://github.com/Litash/moomoo-api-mcp/issues"
 dependencies = [
+    "anyio>=4.0.0",
     "mcp>=1.0.0",
     "moomoo-api>=10.10.7008",  # place_combo_order / ComboLeg
     "pandas>=2.0.0",

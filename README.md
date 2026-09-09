@@ -13,14 +13,29 @@ This MCP server empowers developers to build custom trading skills and strategie
 - **Market Data**: Real-time quotes, historical K-lines, market snapshots, and order books.
 - **Account Management**: Comprehensive account summaries, assets, positions, and cash flow analysis.
 - **Trading**: Full order management including placing, modifying, and canceling orders.
-- **System Health**: Built-in health checks and connectivity verification.
+- **System Health**: Active, bounded health probes of the quote and trade connections to OpenD.
 - **Extensible Architecture**: Built on FastMCP for easy extension of trading capabilities.
 
 ## Tools
 
 ### System
 
-- `check_health`: Check connectivity to Moomoo OpenD gateway and server health.
+- `check_health`: Actively probe the Moomoo OpenD gateway with read-only quote and trade calls.
+
+  Returns `status` (`connected` when both probes succeed, `degraded` when exactly one does, `disconnected` when neither does), `host`, a UTC `checked_at` observation time, per-service `quote` and `trade` results, and `gateway_version` when OpenD reports one. The whole check is bounded to five seconds, and repeated calls during a stuck probe reuse the in-flight worker rather than starting another.
+
+  ```json
+  {
+    "status": "degraded",
+    "host": "127.0.0.1:11111",
+    "checked_at": "2026-09-10T12:00:00Z",
+    "quote": { "status": "ok", "logged_in": true },
+    "trade": { "status": "error", "reason": "gateway_error", "error": "trade svr not ready" },
+    "gateway_version": "9.2.5208"
+  }
+  ```
+
+  A `connected` result means OpenD answered. It does **not** mean trading is unlocked, that an order would be accepted, or that a given market is authorized for the account. The server also starts even when OpenD is unreachable, so `check_health` stays callable while you diagnose the gateway.
 
 ### Account
 

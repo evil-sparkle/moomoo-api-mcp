@@ -76,24 +76,38 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     opend_port = int(opend_port_raw) if opend_port_raw.isdigit() else 11111
     logger.info(f"Connecting to OpenD at {opend_host}:{opend_port}")
 
-    moomoo_service = MoomooService(host=opend_host, port=opend_port)
-    moomoo_service.connect()
-
     # Read security firm from environment (e.g., FUTUSG for Singapore, FUTUSECURITIES for HK)
     security_firm = os.environ.get("MOOMOO_SECURITY_FIRM")
     if security_firm:
         logger.info(f"Using security firm: {security_firm}")
 
-    trade_service = TradeService(host=opend_host, port=opend_port, security_firm=security_firm)
-    trade_service.connect()
-
-    # Auto-unlock trade if password is configured in environment
-    _auto_unlock_trade(trade_service)
-
-    # Create market data service using the shared quote context
-    market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
+    moomoo_service = MoomooService(host=opend_host, port=opend_port)
+    trade_service = TradeService(
+        host=opend_host, port=opend_port, security_firm=security_firm
+    )
 
     try:
+        # A downstream connection failure must not take the MCP server down with
+        # it: check_health is the tool an operator reaches for precisely when
+        # OpenD is unreachable, so it has to stay callable. Whatever did connect
+        # is still released by the finally block below.
+        for name, service in (("quote", moomoo_service), ("trade", trade_service)):
+            try:
+                service.connect()
+            except Exception as exc:  # noqa: BLE001 - startup must stay available
+                logger.error(
+                    f"Failed to initialize the {name} connection to OpenD at "
+                    f"{opend_host}:{opend_port}: {exc}. "
+                    "The server will start; use check_health to diagnose."
+                )
+
+        if trade_service.trade_ctx is not None:
+            # Auto-unlock trade if password is configured in environment
+            _auto_unlock_trade(trade_service)
+
+        # Create market data service using the shared quote context
+        market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
+
         yield AppContext(
             moomoo_service=moomoo_service,
             trade_service=trade_service,
