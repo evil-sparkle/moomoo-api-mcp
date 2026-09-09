@@ -1,6 +1,6 @@
 # R5: Discover Option Expirations and Contracts
 
-Status: Draft. Priority: High. Dependency: Existing market-data service.
+Status: Implemented. Priority: High. Dependency: Existing market-data service.
 Requirement: [Option discovery](../specs/option-discovery/spec.md).
 
 ## Problem and Outcome

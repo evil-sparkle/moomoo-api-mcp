@@ -1,6 +1,6 @@
 # R6: Expose Market State and Trading Calendars
 
-Status: Draft. Priority: Medium. Dependency: Existing market-data service.
+Status: Implemented. Priority: Medium. Dependency: Existing market-data service.
 Requirement: [Market sessions](../specs/market-sessions/spec.md).
 
 ## Problem and Outcome

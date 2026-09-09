@@ -1,6 +1,6 @@
 # R3: Enforce Trading Mode in the Service Layer
 
-Status: Draft. Priority: High. Dependencies: None; health integration uses R1.
+Status: Implemented. Priority: High. Dependencies: None; health integration uses R1.
 Requirement: [Configured trading mode](../specs/trading-policy/spec.md).
 
 ## Problem and Outcome

@@ -1,6 +1,6 @@
 # R1: Active Gateway Health Checks
 
-Status: Draft. Priority: High. Dependencies: None.
+Status: Implemented. Priority: High. Dependencies: None.
 Requirement: [Check Server Health](../specs/system-health/spec.md).
 
 ## Problem and Outcome

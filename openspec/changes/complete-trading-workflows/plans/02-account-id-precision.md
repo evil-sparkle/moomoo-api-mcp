@@ -1,6 +1,6 @@
 # R2: Preserve Account Identifiers Across MCP
 
-Status: Draft. Priority: High. Dependency: Existing combo position-ID support.
+Status: Implemented. Priority: High. Dependency: Existing combo position-ID support.
 Requirement: [Account response identifiers](../specs/account-info/spec.md).
 
 ## Problem and Outcome

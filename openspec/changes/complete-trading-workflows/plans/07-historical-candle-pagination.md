@@ -1,6 +1,6 @@
 # R7: Explicit Historical-Candle Pagination
 
-Status: Draft. Priority: Medium. Dependency: Existing K-line implementation.
+Status: Implemented. Priority: Medium. Dependency: Existing K-line implementation.
 Requirement: [Historical continuation](../specs/market-kline/spec.md).
 
 ## Problem and Outcome

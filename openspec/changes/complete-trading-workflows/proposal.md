@@ -8,7 +8,8 @@ health reporting, identifier serialization, pagination, and subscription handlin
 also leave gaps in workflows built on those tools.
 
 This proposal converts the repository audit of 2026-09-10 into requirements and a
-phased development plan. It is a draft for review; implementation has not started.
+phased development plan. R1-R8 are implemented; see
+[tasks.md](tasks.md#5-verification-record) for the verification record.
 
 ## What Changes
 

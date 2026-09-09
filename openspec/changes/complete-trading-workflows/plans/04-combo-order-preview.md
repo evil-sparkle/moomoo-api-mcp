@@ -1,6 +1,6 @@
 # R4: Preview Combo Order Account Impact
 
-Status: Draft. Priority: High. Dependencies: R2, R3, existing combo-order support.
+Status: Implemented. Priority: High. Dependencies: R2, R3, existing combo-order support.
 Requirement: [Combo preview](../specs/combo-order-preview/spec.md).
 
 ## Problem and Outcome

@@ -1,7 +1,9 @@
 # Feature Development Plans
 
-Status: Draft for review. These plans describe future work; none of their
-implementation checkboxes indicate completed code.
+Status: Implemented, pending deployment. Every plan's implementation
+checklist is complete and verified by tests; see the
+[verification record](../tasks.md#5-verification-record) for what was and was
+not checked. Deployment and archival have not happened.
 
 Each plan is a separately reviewable delivery slice with requirements, interface
 decisions, implementation tasks, acceptance tests, and rollout considerations.

@@ -51,16 +51,70 @@
 
 ## 4. Release Gates
 
-- [ ] 4.1 Run the complete pytest suite and the new MCP workflow tests. Confirm
+- [x] 4.1 Run the complete pytest suite and the new MCP workflow tests. Confirm
   compatibility with Python >=3.10 and the minimum-supported SDK.
-- [ ] 4.2 Check changed files with ruff and compare existing-file diagnostics with
+- [x] 4.2 Check changed files with ruff and compare existing-file diagnostics with
   the baseline; do not hide new errors behind the repository's existing lint debt.
-- [ ] 4.3 Validate this proposal strictly and verify each requirement scenario has
+- [x] 4.3 Validate this proposal strictly and verify each requirement scenario has
   a test or a documented read-only smoke-test procedure.
-- [ ] 4.4 Update README, generated/runtime tool schemas, migration instructions,
+- [x] 4.4 Update README, generated/runtime tool schemas, migration instructions,
   and examples. Ensure health and preview never claim trading authorization.
 - [ ] 4.5 If an authorized gateway is available, run read-only health, discovery,
   calendar, and preview smoke checks. Record unavailable broker features as limits.
   These checks must not submit a live order.
 - [ ] 4.6 Review each slice, select the release version, and archive approved
   changes only after deployment in the dependency order described in the proposal.
+
+## 5. Verification Record
+
+Recorded 2026-09-10, after implementing R1-R8.
+
+### Automated
+
+- `pytest`: 403 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
+  development environment) and on Python 3.10.21 with `mcp` 1.10.0, the lowest
+  supported combination.
+- `ruff check .`: 76 diagnostics, against a 110-diagnostic baseline at commit
+  `90c5045`. No new diagnostic in any file; the reduction is incidental to
+  rewriting files that already carried lint debt.
+- `openspec validate complete-trading-workflows --strict --no-interactive`:
+  passes. The failures in `add-watchlist-access` and `implement-order-management`
+  predate this change and are out of scope, per the proposal's decision to keep
+  nonconforming deltas separate.
+
+### Requirement scenario coverage
+
+Every scenario in the eight delta specs has at least one automated test:
+
+| Capability | Tests |
+| --- | --- |
+| system-health | `tests/test_services/test_health.py`, `tests/test_tools/test_system.py`, `tests/test_server.py::TestLifespanResilience` |
+| account-info | `tests/test_tools/test_large_id_precision.py` |
+| trading-policy | `tests/test_services/test_trading_policy.py`, `tests/test_tools/test_trading.py::TestPolicyThroughMcpDispatch`, `tests/test_server.py::TestStartupTradingMode` |
+| combo-order-preview | `tests/test_services/test_combo_preview.py`, `tests/test_tools/test_trading.py::TestComboPreviewThroughMcp` |
+| option-discovery | `tests/test_services/test_option_discovery.py`, `tests/test_tools/test_option_workflow.py` |
+| market-sessions | `tests/test_services/test_market_sessions.py`, `tests/test_tools/test_market_sessions.py` |
+| market-kline | `tests/test_tools/test_kline_pagination.py` |
+| market-subscriptions | `tests/test_services/test_subscriptions.py`, `tests/test_tools/test_subscriptions.py` |
+
+### Dependency correction found during verification
+
+`mcp>=1.0.0` was unsatisfiable in practice: a clean Python 3.10 install resolved
+`mcp` 2.2.0, where FastMCP was renamed and `from mcp.server.fastmcp import
+FastMCP` raises at import. The lower bound was also understated, since the typed
+tool results depend on structured output, added in `mcp` 1.10.0. The range is
+now `>=1.10.0,<2`. This was a pre-existing defect, not a regression from R1-R8.
+
+### Not verified
+
+- 4.5 read-only gateway smoke checks were **not** run: no authorized OpenD
+  instance is available in this environment. Every requirement above is covered
+  by mocked SDK responses; no live order, unlock, or subscription release was
+  issued. The smoke checks remain outstanding for whoever has gateway access,
+  and the following are the values to confirm against a real gateway: the
+  `option_bp` and margin-change units in the combo preview, the provider's
+  actual option-chain date-span limit, and which subscription quota fields a
+  given broker reports.
+- 4.6 release-version selection and archival are deployment steps and are
+  deliberately not performed here. Nothing has been pushed, published, or
+  archived.

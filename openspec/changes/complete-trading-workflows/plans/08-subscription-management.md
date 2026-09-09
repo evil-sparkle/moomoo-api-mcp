@@ -1,6 +1,6 @@
 # R8: Inspect and Release Market-Data Subscriptions
 
-Status: Draft. Priority: Medium. Dependency: Existing automatic subscriptions.
+Status: Implemented. Priority: Medium. Dependency: Existing automatic subscriptions.
 Requirement: [Subscription management](../specs/market-subscriptions/spec.md).
 
 ## Problem and Outcome
