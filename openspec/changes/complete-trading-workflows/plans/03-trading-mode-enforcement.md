@@ -44,12 +44,12 @@ available in every mode because they do not mutate trading orders or positions.
 
 ## Implementation Checklist
 
-- [ ] Approve the default and migration behavior before implementation.
-- [ ] Add configuration parsing and policy injection with a read-only default.
-- [ ] Guard every write/unlock service entry point before gateway calls.
-- [ ] Restrict auto-unlock and expose mode in health/configuration output.
-- [ ] Update fixtures to state their intended mode explicitly.
-- [ ] Update README and tool guidance, including cancellation behavior.
+- [x] Approve the default and migration behavior before implementation.
+- [x] Add configuration parsing and policy injection with a read-only default.
+- [x] Guard every write/unlock service entry point before gateway calls.
+- [x] Restrict auto-unlock and expose mode in health/configuration output.
+- [x] Update fixtures to state their intended mode explicitly.
+- [x] Update README and tool guidance, including cancellation behavior.
 
 ## Acceptance Tests
 

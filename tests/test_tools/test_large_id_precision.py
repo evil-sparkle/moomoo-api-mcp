@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.serialization import (
     IdentifierSerializationError,
     serialize_identifiers,
@@ -278,7 +279,7 @@ class TestRetrievalToRequestRoundtrip:
 
     def test_retrieved_ids_submit_without_precision_loss(self):
         ctx = MagicMock()
-        service = TradeService()
+        service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
         service.trade_ctx = ctx
 
         # 1. Retrieval, as the strategy view returns it.
@@ -342,7 +343,7 @@ class TestRetrievalToRequestRoundtrip:
         wire = _roundtrip_through_ieee754_client([{"position_id": UNSAFE_ID}])
 
         ctx = MagicMock()
-        service = TradeService()
+        service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
         service.trade_ctx = ctx
 
         # A double-parsed id arrives as a float, which is now refused outright

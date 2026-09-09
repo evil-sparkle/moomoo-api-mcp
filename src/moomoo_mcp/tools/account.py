@@ -316,6 +316,11 @@ async def unlock_trade(
     Note:
         The unlock state is maintained for the session. You only need to call this
         once per session to access REAL account data.
+
+        Unlocking requires MOOMOO_TRADING_MODE=REAL. In READ_ONLY or SIMULATE
+        mode this tool returns an explicit policy error, and a configured trade
+        password does not change that. Call check_health to see the configured
+        mode.
     """
     import os
 

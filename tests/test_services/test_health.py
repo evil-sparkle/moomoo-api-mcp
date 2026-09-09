@@ -9,6 +9,7 @@ import pytest
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.health import BoundedProbe, aggregate_status, sanitize_error
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 
 GLOBAL_STATE = {
     "server_ver": "9.2.5208",
@@ -302,3 +303,23 @@ class TestHealthHelpers:
 
         assert result["status"] == "error"
         assert "probe blew up" in result["error"]
+
+
+class TestHealthReportsTradingMode:
+    """Health exposes the configured policy (R3)."""
+
+    @pytest.mark.parametrize("mode", list(TradingMode))
+    def test_configured_mode_is_reported(self, services, mode):
+        moomoo_service, trade_service = services
+        trade_service.policy = TradingPolicy(mode)
+
+        health = moomoo_service.check_health(trade_service=trade_service)
+
+        assert health["trading_mode"] == mode.value
+
+    def test_default_service_reports_read_only(self, services):
+        moomoo_service, trade_service = services
+
+        health = moomoo_service.check_health(trade_service=trade_service)
+
+        assert health["trading_mode"] == "READ_ONLY"

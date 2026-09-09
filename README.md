@@ -12,7 +12,8 @@ This MCP server empowers developers to build custom trading skills and strategie
 
 - **Market Data**: Real-time quotes, historical K-lines, market snapshots, and order books.
 - **Account Management**: Comprehensive account summaries, assets, positions, and cash flow analysis.
-- **Trading**: Full order management including placing, modifying, and canceling orders.
+- **Trading**: Full order management including placing, modifying, and canceling
+  orders, gated by an explicitly configured trading mode.
 - **System Health**: Active, bounded health probes of the quote and trade connections to OpenD.
 - **Extensible Architecture**: Built on FastMCP for easy extension of trading capabilities.
 
@@ -150,12 +151,39 @@ The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local ga
 
 To enable **REAL account** access, you must securely provide your credentials.
 
-| Variable                | Description                                | Example  |
-| ----------------------- | ------------------------------------------ | -------- |
-| `MOOMOO_TRADE_PASSWORD` | Your trading password (plain text)         | `123456` |
-| `MOOMOO_SECURITY_FIRM`  | Your broker region (e.g., FUTUSG, FUTUINC) | `FUTUSG` |
+| Variable                | Description                                                | Example     |
+| ----------------------- | ---------------------------------------------------------- | ----------- |
+| `MOOMOO_TRADING_MODE`   | Which writes this server may issue. Default `READ_ONLY`.     | `SIMULATE`  |
+| `MOOMOO_TRADE_PASSWORD` | Your trading password (plain text)                           | `123456`    |
+| `MOOMOO_SECURITY_FIRM`  | Your broker region (e.g., FUTUSG, FUTUINC)                   | `FUTUSG`    |
 
-> **Note**: Without these, the server runs in **SIMULATE-only mode** (paper trading).
+#### Trading mode
+
+`MOOMOO_TRADING_MODE` decides what this deployment is allowed to do, which is a
+separate question from what your broker permits. It is enforced in the service
+layer, before any request reaches OpenD.
+
+| Mode                  | Account reads and previews | `trd_env='SIMULATE'` writes | `trd_env='REAL'` writes | `unlock_trade` |
+| --------------------- | -------------------------- | --------------------------- | ----------------------- | -------------- |
+| `READ_ONLY` (default) | Allowed                    | Denied                      | Denied                  | Denied         |
+| `SIMULATE`            | Allowed                    | Allowed                     | Denied                  | Denied         |
+| `REAL`                | Allowed                    | Allowed                     | Allowed                 | Allowed        |
+
+- "Writes" means placing an order, placing a combo order, modifying an order,
+  and cancelling an order. `READ_ONLY` blocks all four — including cancelling an
+  order placed elsewhere.
+- A denied request returns an explicit policy error. It is never rerouted into a
+  different account environment.
+- Configuring `MOOMOO_TRADE_PASSWORD` does **not** change the mode. Only `REAL`
+  mode unlocks trading at startup, and a failed unlock leaves the mode as it was
+  without retrying or placing anything.
+- An unrecognized value fails startup rather than falling back to a permissive
+  mode.
+- Reads are still subject to your broker's own permissions and to `unlock_trade`
+  for REAL account data. The mode caps what the server will attempt; it does not
+  grant anything.
+
+`check_health` reports the configured mode as `trading_mode`.
 
 ### 3. Configure Claude Desktop
 
@@ -170,6 +198,7 @@ Add the server to your `claude_desktop_config.json`:
       "command": "uvx",
       "args": ["--refresh", "moomoo-api-mcp"],
       "env": {
+        "MOOMOO_TRADING_MODE": "REAL",
         "MOOMOO_TRADE_PASSWORD": "your_trading_password",
         "MOOMOO_SECURITY_FIRM": "FUTUSG"
       }
@@ -194,6 +223,7 @@ Add the server to your `claude_desktop_config.json`:
         "moomoo-api-mcp"
       ],
       "env": {
+        "MOOMOO_TRADING_MODE": "REAL",
         "MOOMOO_TRADE_PASSWORD": "your_trading_password",
         "MOOMOO_SECURITY_FIRM": "FUTUSG"
       }
@@ -206,9 +236,14 @@ Add the server to your `claude_desktop_config.json`:
 
 ## AI Agent Guidance
 
-> **IMPORTANT**: All account tools default to **REAL** trading accounts.
+> **IMPORTANT**: All account tools default to **REAL** trading accounts, and the
+> server refuses order writes unless `MOOMOO_TRADING_MODE` permits them.
 
 When using this MCP server, AI agents **MUST**:
+
+0. **Check the configured trading mode** with `check_health` before proposing an
+   order. In `READ_ONLY` — the default — placing, modifying, and cancelling
+   orders all fail with a policy error, so offer analysis rather than a trade.
 
 1. **Notify the user clearly** before accessing REAL account data. Example:
 
@@ -252,6 +287,20 @@ When using `get_orders` or `get_history_orders`, the `status_filter_list` parame
 > **Note**: The server automatically converts these strings to the required SDK enum format. If no orders match the filter, an empty list is returned.
 
 ## Migration Notes
+
+### Trading mode must be configured before writing
+
+`MOOMOO_TRADING_MODE` defaults to `READ_ONLY`, which refuses every order write
+and every unlock. A deployment that submits orders must now set it explicitly:
+
+- paper trading → `MOOMOO_TRADING_MODE=SIMULATE`, and keep passing
+  `trd_env='SIMULATE'` on each call;
+- live trading → `MOOMOO_TRADING_MODE=REAL`.
+
+Previously the server relied on the presence of a trade password to imply
+simulation-only operation, but nothing enforced that: tool defaults were `REAL`
+and any caller could submit a live order. The mode now decides, and the password
+no longer implies anything about it.
 
 ### Account, position, and combo identifiers are strings
 

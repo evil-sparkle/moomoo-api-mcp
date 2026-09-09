@@ -32,6 +32,10 @@ async def check_health(
         - quote / trade: Per-service results, each with a status of 'ok',
           'error', 'timeout', or 'unavailable', plus a 'reason' and a sanitized
           'error' when the probe failed.
+        - trading_mode: This server's configured MOOMOO_TRADING_MODE
+          ('READ_ONLY', 'SIMULATE', or 'REAL'). It says which writes the server
+          will issue at all, which is separate from whether the gateway would
+          accept one.
         - gateway_version: OpenD version when the gateway reports one, else null.
     """
     lifespan_context = ctx.request_context.lifespan_context

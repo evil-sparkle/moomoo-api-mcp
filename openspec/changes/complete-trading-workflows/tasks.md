@@ -1,6 +1,6 @@
 ## 0. Proposal and Contract Review
 
-- [ ] 0.1 Review requirements R1-R8 and approve scope, especially the default
+- [x] 0.1 Review requirements R1-R8 and approve scope, especially the default
   READ_ONLY policy and response-type migration.
 - [x] 0.2 Reconcile the account-ID proposal with implemented string inputs and
   plan archival order with the completed combo and market-data changes.
@@ -17,11 +17,11 @@
   tool, including nested summaries; preserve exact service values.
 - [x] 1.4 R2: Test actual MCP text and structured responses through an IEEE-754
   roundtrip, using synthetic large IDs, nulls, strings, invalid IDs, and nested rows.
-- [ ] 1.5 R3: Add policy configuration and service guards for every order mutation
+- [x] 1.5 R3: Add policy configuration and service guards for every order mutation
   and unlock path; align startup, health reporting, and agent guidance.
-- [ ] 1.6 R3: Test the full mode/environment matrix through tools and direct service
+- [x] 1.6 R3: Test the full mode/environment matrix through tools and direct service
   calls; assert denied operations make zero gateway calls and never change mode.
-- [ ] 1.7 Publish migration documentation for string IDs and explicit trading mode.
+- [x] 1.7 Publish migration documentation for string IDs and explicit trading mode.
 
 ## 2. Options Workflow — R4, R5
 

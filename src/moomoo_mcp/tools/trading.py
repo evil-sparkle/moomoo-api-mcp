@@ -34,6 +34,12 @@ def place_order(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account as per user preference.
     - ALWAYS confirm with user before placing orders.
+
+    TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
+    permits them — READ_ONLY blocks every write, SIMULATE allows only
+    trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
+    error; the request is never rerouted to a different environment. Call
+    check_health to see the configured mode.
     - For SIMULATE environment, explicitly set trd_env='SIMULATE'.
 
     Args:
@@ -121,6 +127,12 @@ def place_combo_order(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account as per user preference.
     - ALWAYS confirm with user before placing orders.
+
+    TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
+    permits them — READ_ONLY blocks every write, SIMULATE allows only
+    trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
+    error; the request is never rerouted to a different environment. Call
+    check_health to see the configured mode.
     - For SIMULATE environment, explicitly set trd_env='SIMULATE'.
 
     Args:
@@ -187,6 +199,12 @@ def modify_order(
     - Default is REAL account as per user preference.
     - ALWAYS confirm with user before modifying orders.
 
+    TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
+    permits them — READ_ONLY blocks every write, SIMULATE allows only
+    trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
+    error; the request is never rerouted to a different environment. Call
+    check_health to see the configured mode.
+
     Args:
         order_id: Order ID to modify. Get from get_orders().
         modify_order_op: Modification operation:
@@ -232,6 +250,12 @@ def cancel_order(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account as per user preference.
     - ALWAYS confirm with user before cancelling orders.
+
+    TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
+    permits them — READ_ONLY blocks every write, SIMULATE allows only
+    trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
+    error; the request is never rerouted to a different environment. Call
+    check_health to see the configured mode.
 
     Args:
         order_id: Order ID to cancel. Get from get_orders().

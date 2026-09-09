@@ -13,6 +13,7 @@ from moomoo import (
 )
 
 from moomoo_mcp.services.health import BoundedProbe, failure
+from moomoo_mcp.services.trading_policy import TradingPolicy
 
 
 class TradeService:
@@ -23,6 +24,7 @@ class TradeService:
         host: str = "127.0.0.1",
         port: int = 11111,
         security_firm: str | None = None,
+        policy: TradingPolicy | None = None,
     ):
         """Initialize TradeService.
 
@@ -31,10 +33,14 @@ class TradeService:
             port: Port number of OpenD gateway.
             security_firm: Securities firm identifier (e.g., 'FUTUSG' for Singapore,
                 'FUTUSECURITIES' for HK). If None, no filter is applied.
+            policy: Trading policy governing which order environments this
+                service may write to. Defaults to read-only, so a service
+                constructed without an explicit intent cannot send an order.
         """
         self.host = host
         self.port = port
         self.security_firm = security_firm
+        self.policy = policy or TradingPolicy()
         self.trade_ctx: OpenSecTradeContext | None = None
         self._trade_probe = BoundedProbe("trade")
 
@@ -415,8 +421,13 @@ class TradeService:
             password_md5: MD5 hash of trade password (alternative to password).
 
         Raises:
+            TradingPolicyError: If the configured mode does not permit unlocking.
             RuntimeError: If unlock fails.
         """
+        # Checked before the connection check so a denied unlock never reaches
+        # the gateway, whatever the connection state.
+        self.policy.check_unlock()
+
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
@@ -465,7 +476,15 @@ class TradeService:
 
         Returns:
             Dictionary with order details including order_id.
+
+        Raises:
+            TradingPolicyError: If the configured mode does not permit a write
+                to trd_env.
         """
+        # Checked first, before the account lookup below: a denied order must
+        # make no gateway request at all, not even to resolve an account.
+        self.policy.check_write("place_order", trd_env)
+
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
 
@@ -653,9 +672,13 @@ class TradeService:
             Dictionary with order details including order_id.
 
         Raises:
+            TradingPolicyError: If the configured mode does not permit a write
+                to trd_env.
             ValueError: If the leg list is malformed.
             RuntimeError: If not connected, or the gateway rejects the order.
         """
+        self.policy.check_write("place_combo_order", trd_env)
+
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
 
@@ -709,7 +732,13 @@ class TradeService:
 
         Returns:
             Dictionary with modified order details.
+
+        Raises:
+            TradingPolicyError: If the configured mode does not permit a write
+                to trd_env.
         """
+        self.policy.check_write(f"modify_order ({modify_order_op})", trd_env)
+
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
 
@@ -748,7 +777,14 @@ class TradeService:
 
         Returns:
             Dictionary with cancelled order details.
+
+        Raises:
+            TradingPolicyError: If the configured mode does not permit a write
+                to trd_env. Cancellation is a write like any other: a read-only
+                deployment cannot cancel an order it was never able to place.
         """
+        self.policy.check_write("cancel_order", trd_env)
+
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
 

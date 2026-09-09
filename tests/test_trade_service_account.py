@@ -1,10 +1,13 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 
 @pytest.fixture
 def trade_service():
-    service = TradeService()
+    # Account resolution here happens on the way to placing an order, so the
+    # fixture states a write-enabled mode explicitly.
+    service = TradeService(policy=TradingPolicy(TradingMode.REAL))
     service.trade_ctx = MagicMock()
     return service
 

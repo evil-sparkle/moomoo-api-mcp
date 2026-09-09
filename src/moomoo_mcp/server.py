@@ -10,6 +10,7 @@ from moomoo.common import ft_logger
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import TradingPolicy, TradingPolicyError
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +38,28 @@ def _auto_unlock_trade(trade_service: TradeService) -> None:
 
     Reads MOOMOO_TRADE_PASSWORD (plain text, preferred) or MOOMOO_TRADE_PASSWORD_MD5.
     Logs status and handles failures gracefully without crashing.
+
+    Only a REAL-mode deployment unlocks. A configured password does not promote
+    the mode, and a failed unlock leaves the policy untouched — it never
+    triggers a retry or an order.
     """
     password = os.environ.get("MOOMOO_TRADE_PASSWORD")
     password_md5 = os.environ.get("MOOMOO_TRADE_PASSWORD_MD5")
 
+    mode = trade_service.policy.mode.value
     if not password and not password_md5:
         logger.info(
             "No trade password configured (MOOMOO_TRADE_PASSWORD or "
-            "MOOMOO_TRADE_PASSWORD_MD5 not set). Running in SIMULATE-only mode."
+            f"MOOMOO_TRADE_PASSWORD_MD5 not set). Trading mode: {mode}."
+        )
+        return
+
+    try:
+        trade_service.policy.check_unlock()
+    except TradingPolicyError as e:
+        logger.info(
+            f"A trade password is configured, but not unlocking: {e} "
+            "Trading mode is unchanged."
         )
         return
 
@@ -76,6 +91,11 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     opend_port = int(opend_port_raw) if opend_port_raw.isdigit() else 11111
     logger.info(f"Connecting to OpenD at {opend_host}:{opend_port}")
 
+    # Parsed before anything connects: an unknown mode is a configuration error,
+    # not something to recover from by picking a permissive default.
+    policy = TradingPolicy.from_env()
+    logger.info(f"Trading mode: {policy.mode.value}")
+
     # Read security firm from environment (e.g., FUTUSG for Singapore, FUTUSECURITIES for HK)
     security_firm = os.environ.get("MOOMOO_SECURITY_FIRM")
     if security_firm:
@@ -83,7 +103,10 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 
     moomoo_service = MoomooService(host=opend_host, port=opend_port)
     trade_service = TradeService(
-        host=opend_host, port=opend_port, security_firm=security_firm
+        host=opend_host,
+        port=opend_port,
+        security_firm=security_firm,
+        policy=policy,
     )
 
     try:

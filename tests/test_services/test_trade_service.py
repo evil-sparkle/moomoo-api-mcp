@@ -5,6 +5,11 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
+
+# These tests exercise order writes, so they state that intent explicitly:
+# a service constructed without a policy is read-only and refuses them.
+REAL_POLICY = TradingPolicy(TradingMode.REAL)
 
 
 @pytest.fixture
@@ -15,8 +20,8 @@ def mock_trade_ctx():
 
 @pytest.fixture
 def trade_service_with_mock(mock_trade_ctx):
-    """Create TradeService with mocked context."""
-    service = TradeService()
+    """Create a write-enabled TradeService with a mocked context."""
+    service = TradeService(policy=REAL_POLICY)
     service.trade_ctx = mock_trade_ctx
     return service
 
@@ -64,7 +69,7 @@ class TestGetAccounts:
 
     def test_get_accounts_no_context(self):
         """Test error when context not connected."""
-        service = TradeService()
+        service = TradeService()  # reads need no write policy
 
         with pytest.raises(RuntimeError, match="Trade context not connected"):
             service.get_accounts()
@@ -248,7 +253,7 @@ class TestPlaceOrder:
 
     def test_place_order_no_context(self):
         """Test error when context not connected."""
-        service = TradeService()
+        service = TradeService(policy=REAL_POLICY)
 
         with pytest.raises(RuntimeError, match="Trade context not connected"):
             service.place_order(
@@ -963,7 +968,7 @@ class TestPlaceComboOrder:
 
     def test_place_combo_order_no_context(self):
         """Test error when context not connected."""
-        service = TradeService()
+        service = TradeService(policy=REAL_POLICY)
 
         with pytest.raises(RuntimeError, match="Trade context not connected"):
             service.place_combo_order(
