@@ -1,6 +1,14 @@
 """Market data service for accessing quote data via Moomoo API."""
 
-from moomoo import OpenQuoteContext, RET_OK, SubType, KLType, AuType
+from moomoo import OpenQuoteContext, RET_OK, SubType, KLType, AuType, OptionType
+
+from moomoo_mcp.services.validation import validate_choice, validate_date_range
+
+# get_option_chain accepts at most a 30-day expiry window (the SDK's own default
+# expansion uses 29 days from one supplied bound).
+OPTION_CHAIN_MAX_SPAN_DAYS = 29
+
+OPTION_TYPES = ("ALL", "CALL", "PUT")
 
 
 class MarketDataService:
@@ -105,6 +113,92 @@ class MarketDataService:
         )
         if ret != RET_OK:
             raise RuntimeError(f"request_history_kline failed: {data}")
+
+        return data.to_dict("records")
+
+    def get_option_expiration_date(self, code: str) -> list[dict]:
+        """Get the option expiration dates available for an underlying.
+
+        Args:
+            code: Underlying security code (e.g., 'US.AAPL', 'HK.00700').
+
+        Returns:
+            List of provider expiration records with 'strike_time' (the
+            expiration date, in the market's own timezone),
+            'option_expiry_date_distance' (days until expiry; negative when
+            already expired), and 'expiration_cycle'. An empty list means the
+            provider reported no expirations, which is not the same as an error.
+
+        Raises:
+            ValueError: If the code is empty.
+            RuntimeError: If not connected, or the provider rejects the query.
+        """
+        if not self.quote_ctx:
+            raise RuntimeError("Quote context not connected")
+
+        underlying = str(code or "").strip()
+        if not underlying:
+            raise ValueError("code must be a non-empty security code, e.g. 'US.AAPL'.")
+
+        ret, data = self.quote_ctx.get_option_expiration_date(code=underlying)
+        if ret != RET_OK:
+            raise RuntimeError(f"get_option_expiration_date failed: {data}")
+
+        return data.to_dict("records")
+
+    def get_option_chain(
+        self,
+        code: str,
+        start: str | None = None,
+        end: str | None = None,
+        option_type: str = "ALL",
+    ) -> list[dict]:
+        """Get option contracts for an underlying within an expiry date range.
+
+        Args:
+            code: Underlying security code (e.g., 'US.AAPL').
+            start: First expiration date to include (YYYY-MM-DD). When omitted,
+                the provider derives it from ``end``; when both are omitted it
+                uses today and the following 30 days.
+            end: Last expiration date to include (YYYY-MM-DD), inclusive.
+            option_type: 'ALL' (default), 'CALL', or 'PUT'.
+
+        Returns:
+            List of contract records with the exact provider 'code' — the symbol
+            to pass to quote, preview, and order tools — plus 'name',
+            'stock_owner', 'option_type', 'strike_time', 'strike_price',
+            'lot_size', and related metadata. An empty list means no contracts
+            matched, which is a successful result.
+
+        Raises:
+            ValueError: If the code is empty, a date is malformed, start follows
+                end, the range exceeds the provider's 30-day limit, or
+                option_type is unsupported.
+            RuntimeError: If not connected, or the provider rejects the query.
+        """
+        if not self.quote_ctx:
+            raise RuntimeError("Quote context not connected")
+
+        underlying = str(code or "").strip()
+        if not underlying:
+            raise ValueError("code must be a non-empty security code, e.g. 'US.AAPL'.")
+
+        validate_date_range(
+            start,
+            end,
+            max_span_days=OPTION_CHAIN_MAX_SPAN_DAYS,
+            span_label="30 days",
+        )
+        normalized_type = validate_choice("option_type", option_type, OPTION_TYPES)
+
+        ret, data = self.quote_ctx.get_option_chain(
+            code=underlying,
+            start=start,
+            end=end,
+            option_type=getattr(OptionType, normalized_type),
+        )
+        if ret != RET_OK:
+            raise RuntimeError(f"get_option_chain failed: {data}")
 
         return data.to_dict("records")
 

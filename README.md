@@ -55,6 +55,8 @@ This MCP server empowers developers to build custom trading skills and strategie
 - `get_historical_klines`: Retrieve historical candlestick data (Day, Week, Min, etc.).
 - `get_market_snapshot`: Get efficient market snapshots for multiple stocks.
 - `get_order_book`: View real-time bid/ask order book depth.
+- `get_option_expiration_date`: List an underlying's available option expiry dates.
+- `get_option_chain`: Get option contracts for an underlying within a range of expiry dates, filtered to calls, puts, or all. Returns the exact provider contract symbols to use in quotes, previews, and orders — never build an option symbol by hand. The provider accepts a range of at most 30 days; a wider range is rejected rather than truncated.
 
 ### Trading
 
@@ -269,6 +271,24 @@ If you prefer to use a simulation account instead, please let me know."
 
 [Proceeds to unlock_trade → get_account_summary]
 ```
+
+### Option Strategy Workflow
+
+Discovery comes before pricing, and pricing before submission:
+
+```text
+1. get_option_expiration_date("US.AAPL")   → pick an expiry
+2. get_option_chain("US.AAPL", start=expiry, end=expiry, option_type="CALL")
+                                           → exact contract symbols
+3. preview_combo_order(legs, price, qty)   → margin and buying-power impact
+4. [confirm with the user]
+5. place_combo_order(...)                  → requires MOOMOO_TRADING_MODE
+```
+
+Pass contract symbols through from step 2 to steps 3 and 5 exactly as
+received. To **close** an existing strategy, get each leg's `position_id` from
+`get_positions(show_option_strategy_view=True)` first and include it in the
+legs, again unchanged.
 
 ### Order Status Filter Usage
 

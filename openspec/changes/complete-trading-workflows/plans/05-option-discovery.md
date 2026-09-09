@@ -41,11 +41,11 @@ exceeds them, return an actionable error rather than silently truncating contrac
 
 ## Implementation Checklist
 
-- [ ] Verify SDK signatures, enums, date semantics, and response limits.
-- [ ] Add service lookup methods and pre-query validation.
-- [ ] Register both MCP tools with clear empty/error behavior.
-- [ ] Add mapping and validation tests plus a contract-selection workflow test.
-- [ ] Document expiration selection before chain queries.
+- [x] Verify SDK signatures, enums, date semantics, and response limits.
+- [x] Add service lookup methods and pre-query validation.
+- [x] Register both MCP tools with clear empty/error behavior.
+- [x] Add mapping and validation tests plus a contract-selection workflow test.
+- [x] Document expiration selection before chain queries.
 
 ## Acceptance Tests
 

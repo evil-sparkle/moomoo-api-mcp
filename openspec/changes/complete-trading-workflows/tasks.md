@@ -30,11 +30,11 @@
 - [x] 2.2 R4: Test valid opening/closing legs, exact IDs, validation failures,
   account selection, unavailable values, and SDK rejection. Assert no placement,
   modification, cancellation, or unlock call occurs during preview.
-- [ ] 2.3 R5: Add option expiration and chain services/tools with date and enum
+- [x] 2.3 R5: Add option expiration and chain services/tools with date and enum
   validation and documented empty-result behavior.
-- [ ] 2.4 R5: Test exact symbol preservation, call/put filtering, date boundaries,
+- [x] 2.4 R5: Test exact symbol preservation, call/put filtering, date boundaries,
   empty chains, and unsupported instruments or permission errors.
-- [ ] 2.5 Exercise discovery -> selected contracts -> preview using actual MCP
+- [x] 2.5 Exercise discovery -> selected contracts -> preview using actual MCP
   tool calls and mocked SDK responses. Add examples without live identifiers.
 
 ## 3. Market Data Completion — R6, R7, R8

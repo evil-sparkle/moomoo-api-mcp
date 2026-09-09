@@ -99,6 +99,92 @@ async def get_historical_klines(
 
 
 @mcp.tool()
+async def get_option_expiration_date(
+    ctx: Context[ServerSession, AppContext],
+    code: str,
+) -> list[dict]:
+    """List the option expiration dates available for an underlying.
+
+    Start here when building an option strategy: pick an expiry from this list,
+    then call get_option_chain for that single date to get the exact contract
+    symbols. Querying a chain without narrowing the expiry returns a much larger
+    response.
+
+    Args:
+        code: Underlying security code (e.g., 'US.AAPL', 'HK.00700').
+
+    Returns:
+        List of expiration dictionaries containing:
+        - strike_time: The expiration date, in the market's own timezone
+          (US market dates are US Eastern; HK and A-share dates are Beijing).
+        - option_expiry_date_distance: Days until expiry; negative if expired.
+        - expiration_cycle: Settlement cycle (HK index options only).
+
+        An empty list means the provider reported no expirations for this
+        underlying. That is a successful result, not an error — a provider
+        failure or a missing permission raises instead.
+    """
+    market_data_service = ctx.request_context.lifespan_context.market_data_service
+    expirations = market_data_service.get_option_expiration_date(code)
+    await ctx.info(f"Retrieved {len(expirations)} option expirations for {code}")
+    return expirations
+
+
+@mcp.tool()
+async def get_option_chain(
+    ctx: Context[ServerSession, AppContext],
+    code: str,
+    start: str | None = None,
+    end: str | None = None,
+    option_type: str = "ALL",
+) -> list[dict]:
+    """Get option contracts for an underlying within a range of expiry dates.
+
+    Use the returned `code` values verbatim as leg symbols for
+    preview_combo_order and place_combo_order, and as codes for get_stock_quote.
+    Do not construct an option symbol by hand.
+
+    Args:
+        code: Underlying security code (e.g., 'US.AAPL').
+        start: First expiration date to include, 'YYYY-MM-DD'. Set start and end
+            to the same date to fetch one expiry, which is usually what you
+            want. Omit both and the provider uses today plus 30 days.
+        end: Last expiration date to include, 'YYYY-MM-DD' (inclusive).
+        option_type: 'ALL' (default), 'CALL', or 'PUT'.
+
+    Returns:
+        List of contract dictionaries containing:
+        - code: The exact contract symbol to use in other tools.
+        - name: Contract name.
+        - stock_owner: The underlying's code.
+        - option_type: 'CALL' or 'PUT'.
+        - strike_time: Expiration date, in the market's own timezone.
+        - strike_price: Strike price.
+        - lot_size: Contract multiplier / lot size.
+        - suspension, stock_id, index_option_type, expiration_cycle,
+          option_standard_type, option_settlement_mode.
+
+        An empty list means no contracts matched — a successful result. A
+        provider rejection (unsupported underlying, missing options permission,
+        gateway failure) raises an error instead, so the two are never confused.
+
+    Note:
+        The provider accepts a range of at most 30 days. A wider range is
+        rejected with an error rather than being silently truncated, so you are
+        never handed a partial chain believing it is complete.
+    """
+    market_data_service = ctx.request_context.lifespan_context.market_data_service
+    contracts = market_data_service.get_option_chain(
+        code=code,
+        start=start,
+        end=end,
+        option_type=option_type,
+    )
+    await ctx.info(f"Retrieved {len(contracts)} option contracts for {code}")
+    return contracts
+
+
+@mcp.tool()
 async def get_market_snapshot(
     ctx: Context[ServerSession, AppContext],
     codes: list[str],
