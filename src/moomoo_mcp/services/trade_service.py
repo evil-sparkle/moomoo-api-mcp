@@ -32,6 +32,42 @@ logger = logging.getLogger(__name__)
 CONNECT_TIMEOUT_SECONDS = 5.0
 
 
+# Every attribute ComboLeg defines. Listed here rather than read off the
+# instance so a future SDK field cannot silently widen the response, and so a
+# leg the gateway sent without one still has the key.
+COMBO_LEG_FIELDS = ("code", "trd_side", "qty_ratio", "position_id", "pred_side")
+
+
+def _plain_combo_legs(records: list[dict]) -> list[dict]:
+    """Convert the SDK's ComboLeg objects in ``records`` into plain dicts.
+
+    order_list_query, history_order_list_query and place_combo_order all return
+    a ``combo_legs`` column holding ComboLeg instances. They are ordinary Python
+    objects with no JSON representation, so a single spread order made the whole
+    MCP response unserializable: the tool failed outright instead of degrading
+    one row, hiding every other order in the list.
+
+    Converting here also exposes each leg's position_id to the identifier
+    serialization the tool layer applies. That walk traverses dicts and lists
+    and could not see inside an opaque object, so a 64-bit leg identifier was
+    reaching double-parsing clients as a number.
+
+    The records come straight from ``DataFrame.to_dict``, so they are already
+    the caller's own copies and are updated in place.
+    """
+    for record in records:
+        legs = record.get("combo_legs")
+        if not isinstance(legs, (list, tuple)):
+            continue
+        record["combo_legs"] = [
+            {field: getattr(leg, field, None) for field in COMBO_LEG_FIELDS}
+            if isinstance(leg, ComboLeg)
+            else leg
+            for leg in legs
+        ]
+    return records
+
+
 # What the SDK's decoders substitute for a field the gateway did not send.
 # Confirmed against ComboOrderTradingInfoQuery.unpack_rsp, which writes this
 # string — not a number and not NaN — for every absent impact field.
@@ -814,7 +850,7 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"place_combo_order failed: {data}")
 
-        records = data.to_dict("records")
+        records = _plain_combo_legs(data.to_dict("records"))
         return records[0] if records else {}
 
     # The account-impact fields comboorder_tradinginfo_query returns. Listed
@@ -1053,7 +1089,7 @@ class TradeService:
         if data is None or data.empty:
             return []
 
-        return data.to_dict("records")
+        return _plain_combo_legs(data.to_dict("records"))
 
     def get_deals(
         self,
@@ -1139,7 +1175,7 @@ class TradeService:
         if data is None or data.empty:
             return []
 
-        return data.to_dict("records")
+        return _plain_combo_legs(data.to_dict("records"))
 
     def get_history_deals(
         self,

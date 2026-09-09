@@ -71,7 +71,7 @@ Recorded 2026-09-10, after implementing R1-R8.
 
 ### Automated
 
-- `pytest`: 457 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
+- `pytest`: 464 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
   development environment) and on Python 3.10.21 with `mcp` 1.10.0, the lowest
   supported combination.
 - `ruff check .`: 74 diagnostics, against a 110-diagnostic baseline at commit
@@ -183,6 +183,23 @@ flag is diagnostic only, so overall status was unaffected. `_is_logged_in` now
 accepts both shapes, and the regression test uses the payload the live gateway
 actually returned. This is the third defect traceable to a fixture that encoded
 an assumption rather than an observation.
+
+### Second defect found by the smoke test
+
+`get_orders` failed outright against the live account with `Unable to serialize
+unknown type: <class 'moomoo.common.constant.ComboLeg'>`. `order_list_query`,
+`history_order_list_query` and `place_combo_order` all return a `combo_legs`
+column holding SDK `ComboLeg` objects, which have no JSON representation, so a
+single spread order made the whole response unserializable — every ordinary
+order in the list was hidden by it, not just the combo row. `_plain_combo_legs`
+now converts the legs at the three service call sites.
+
+The same opacity hid a second problem: each leg carries a 64-bit `position_id`,
+and R2's `serialize_identifiers` walks dicts and lists, so it could not see
+inside a `ComboLeg`. Those three tools now serialize identifiers as well, and
+`tests/test_tools/test_combo_leg_serialization.py` covers both halves — each was
+confirmed load-bearing by restoring the old behavior and watching the matching
+test fail.
 
 ### Not verified
 

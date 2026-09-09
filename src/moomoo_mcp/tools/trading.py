@@ -175,16 +175,19 @@ async def place_combo_order(
         Dictionary with order details including order_id and order_status.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return await run_blocking(
-        trade_service.place_combo_order,
-        combo_legs=combo_legs,
-        price=price,
-        qty=qty,
-        order_type=order_type,
-        time_in_force=time_in_force,
-        trd_env=trd_env,
-        acc_id=acc_id,
-        remark=remark,
+    # A combo order's legs each carry a 64-bit position_id.
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.place_combo_order,
+            combo_legs=combo_legs,
+            price=price,
+            qty=qty,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            trd_env=trd_env,
+            acc_id=acc_id,
+            remark=remark,
+        )
     )
 
 
@@ -389,13 +392,16 @@ async def get_orders(
         order_type, order_status, created_time, updated_time, etc.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return await run_blocking(
-        trade_service.get_orders,
-        code=code,
-        status_filter_list=status_filter_list,
-        trd_env=trd_env,
-        acc_id=acc_id,
-        refresh_cache=refresh_cache,
+    # A combo order's legs each carry a 64-bit position_id.
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.get_orders,
+            code=code,
+            status_filter_list=status_filter_list,
+            trd_env=trd_env,
+            acc_id=acc_id,
+            refresh_cache=refresh_cache,
+        )
     )
 
 
@@ -466,14 +472,17 @@ async def get_history_orders(
         List of historical order dictionaries.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return await run_blocking(
-        trade_service.get_history_orders,
-        code=code,
-        status_filter_list=status_filter_list,
-        start=start,
-        end=end,
-        trd_env=trd_env,
-        acc_id=acc_id,
+    # A combo order's legs each carry a 64-bit position_id.
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.get_history_orders,
+            code=code,
+            status_filter_list=status_filter_list,
+            start=start,
+            end=end,
+            trd_env=trd_env,
+            acc_id=acc_id,
+        )
     )
 
 
