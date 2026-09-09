@@ -42,11 +42,11 @@ step. Calls may re-subscribe a released symbol through the existing read tools.
 
 ## Implementation Checklist
 
-- [ ] Verify current-connection query scope, acknowledgement format, and quota fields.
-- [ ] Add service inspection/release wrappers and input validation.
-- [ ] Register MCP tools with explicit scope and minimum-duration error guidance.
-- [ ] Test interaction with automatic subscribe and isolation from other clients.
-- [ ] Document inspect -> select -> release -> inspect workflow.
+- [x] Verify current-connection query scope, acknowledgement format, and quota fields.
+- [x] Add service inspection/release wrappers and input validation.
+- [x] Register MCP tools with explicit scope and minimum-duration error guidance.
+- [x] Test interaction with automatic subscribe and isolation from other clients.
+- [x] Document inspect -> select -> release -> inspect workflow.
 
 ## Acceptance Tests
 

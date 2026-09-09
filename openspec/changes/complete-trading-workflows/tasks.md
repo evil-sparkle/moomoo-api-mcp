@@ -4,7 +4,7 @@
   READ_ONLY policy and response-type migration.
 - [x] 0.2 Reconcile the account-ID proposal with implemented string inputs and
   plan archival order with the completed combo and market-data changes.
-- [ ] 0.3 Verify SDK timeout, cursor, permission, and quota contracts against the
+- [x] 0.3 Verify SDK timeout, cursor, permission, and quota contracts against the
   installed minimum-supported SDK; record any resulting interface adjustments.
 
 ## 1. Foundation — R1, R2, R3
@@ -45,8 +45,8 @@
   retain the existing list-returning tool and document its one-page behavior.
 - [x] 3.3 R7: Test multiple pages, terminal and empty intermediate pages, corrupt
   cursors, filter mismatch, later-page errors, and exact candle ordering.
-- [ ] 3.4 R8: Expose current-connection subscription inspection and explicit release.
-- [ ] 3.5 R8: Test subscription reuse, quota reporting, explicit release, failed
+- [x] 3.4 R8: Expose current-connection subscription inspection and explicit release.
+- [x] 3.5 R8: Test subscription reuse, quota reporting, explicit release, failed
   early release, and isolation from other connections.
 
 ## 4. Release Gates

@@ -18,6 +18,12 @@ OPTION_CHAIN_MAX_SPAN_DAYS = 29
 
 OPTION_TYPES = ("ALL", "CALL", "PUT")
 
+# Subscription data types a caller may name. NONE is the SDK's placeholder
+# and is not a subscription anyone can hold.
+SUBSCRIPTION_TYPES = tuple(
+    value for value in SubType.get_all_key_list() if value != "N/A"
+)
+
 # Markets the provider will return a trading calendar for. NONE is excluded:
 # it is the SDK's 'unspecified' placeholder, not a market a caller can mean.
 TRADING_DAY_MARKETS = tuple(
@@ -56,6 +62,73 @@ class MarketDataService:
         ret, err = self.quote_ctx.subscribe(codes, sub_types, subscribe_push=False)
         if ret != RET_OK:
             raise RuntimeError(f"subscribe failed: {err}")
+
+    def get_subscriptions(self) -> dict:
+        """Get the subscriptions held by this server's quote connection.
+
+        Returns:
+            The provider's subscription report, scoped to this connection with
+            ``is_all_conn=False``. 'sub_list' maps each subscription type to the
+            codes this connection holds; quota fields describe usage, and some
+            of them are provider-wide rather than per-connection — the caller is
+            told which is which at the tool boundary.
+
+        Raises:
+            RuntimeError: If not connected, or the provider rejects the query.
+        """
+        if not self.quote_ctx:
+            raise RuntimeError("Quote context not connected")
+
+        # is_all_conn=False: report what this connection holds, not what every
+        # client attached to the same OpenD holds.
+        ret, data = self.quote_ctx.query_subscription(is_all_conn=False)
+        if ret != RET_OK:
+            raise RuntimeError(f"query_subscription failed: {data}")
+
+        return data if isinstance(data, dict) else {}
+
+    def unsubscribe(self, codes: list[str], sub_types: list[str]) -> None:
+        """Release specific subscriptions held by this connection.
+
+        Args:
+            codes: Security codes to release (e.g., ['US.AAPL']).
+            sub_types: Subscription types to release (e.g., ['QUOTE']).
+
+        Raises:
+            ValueError: If either list is empty, a code is blank, or a
+                subscription type is unsupported.
+            RuntimeError: If not connected, or the provider refuses the release
+                — a minimum-hold period or a permission problem, for example.
+                The failure is surfaced as-is and not retried: repeatedly
+                re-asking a provider that imposes a cooldown does not shorten
+                it.
+        """
+        if not self.quote_ctx:
+            raise RuntimeError("Quote context not connected")
+
+        if not codes:
+            raise ValueError("codes must contain at least one security code.")
+        cleaned_codes = [str(code or "").strip() for code in codes]
+        if not all(cleaned_codes):
+            raise ValueError("codes must not contain empty security codes.")
+
+        if not sub_types:
+            raise ValueError(
+                "sub_types must contain at least one subscription type, "
+                f"such as 'QUOTE'. Valid values: {list(SUBSCRIPTION_TYPES)}."
+            )
+        cleaned_types = [
+            validate_choice("sub_types", value, SUBSCRIPTION_TYPES)
+            for value in sub_types
+        ]
+
+        # unsubscribe_all is never passed: this server releases only what it was
+        # asked to release, on its own connection.
+        ret, err = self.quote_ctx.unsubscribe(
+            code_list=cleaned_codes, subtype_list=cleaned_types
+        )
+        if ret != RET_OK:
+            raise RuntimeError(f"unsubscribe failed: {err}")
 
     def get_stock_quote(self, codes: list[str]) -> list[dict]:
         """Get real-time quotes for stocks.

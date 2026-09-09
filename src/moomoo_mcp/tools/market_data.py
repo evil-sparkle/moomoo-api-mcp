@@ -448,6 +448,127 @@ async def get_trading_days(
     }
 
 
+# The provider reports some usage figures for this connection and others across
+# every client attached to the same OpenD. Splitting them makes the scope of
+# each number explicit instead of leaving a caller to guess.
+_CONNECTION_QUOTA_FIELDS = {
+    "own_used": "used_quota",
+    "own_option_used_quota": "option_used_quota",
+    "own_security_firm": "security_firm",
+}
+_PROVIDER_QUOTA_FIELDS = {
+    "total_used": "total_used",
+    "remain": "remain",
+    "option_used_quota": "option_used_quota",
+    "option_remain_quota": "option_remain_quota",
+}
+
+
+@mcp.tool()
+async def get_subscriptions(
+    ctx: Context[ServerSession, AppContext],
+) -> dict[str, Any]:
+    """List the market-data subscriptions held by this server's connection.
+
+    get_stock_quote and get_order_book subscribe automatically, so symbols
+    appear here after you read them. Use this to see what is being held before
+    releasing anything with unsubscribe_market_data.
+
+    Returns:
+        Dictionary containing:
+        - checked_at: UTC observation time (ISO-8601, 'Z' suffix).
+        - connection: What THIS server's quote connection holds.
+          - subscriptions: {subscription_type: [codes]}.
+          - used_quota / option_used_quota / security_firm, when the provider
+            reports them.
+        - provider: Usage counted across EVERY client attached to the same
+          OpenD gateway, not just this server — total_used, remain,
+          option_used_quota, option_remain_quota, when reported.
+
+        Only fields the provider actually returns are present. No limit is
+        inferred or invented, and an absent quota field means "not reported",
+        not "unlimited".
+
+        The provider quota is shared: another client on the same gateway
+        consumes from it, so `connection` being small does not mean there is
+        headroom.
+    """
+    market_data_service = ctx.request_context.lifespan_context.market_data_service
+    report = market_data_service.get_subscriptions()
+
+    connection: dict[str, Any] = {"subscriptions": report.get("sub_list", {})}
+    for source, name in _CONNECTION_QUOTA_FIELDS.items():
+        if source in report:
+            connection[name] = report[source]
+
+    provider = {
+        name: report[source]
+        for source, name in _PROVIDER_QUOTA_FIELDS.items()
+        if source in report
+    }
+
+    held = sum(len(codes) for codes in connection["subscriptions"].values())
+    await ctx.info(f"This connection holds {held} subscriptions")
+    return {
+        "checked_at": utc_now_iso(),
+        "connection": connection,
+        "provider": provider,
+    }
+
+
+@mcp.tool()
+async def unsubscribe_market_data(
+    ctx: Context[ServerSession, AppContext],
+    codes: list[str],
+    sub_types: list[str],
+) -> dict[str, Any]:
+    """Release specific market-data subscriptions held by this connection.
+
+    Only the codes and types you name are released, and only on this server's
+    own connection — another client subscribed to the same security keeps its
+    subscription. There is no global release.
+
+    Reading a released symbol again with get_stock_quote or get_order_book
+    simply re-subscribes it.
+
+    Args:
+        codes: Security codes to release (e.g., ['US.AAPL', 'HK.00700']).
+        sub_types: Subscription types to release, e.g. ['QUOTE'] or
+            ['QUOTE', 'ORDER_BOOK']. Valid values: QUOTE, ORDER_BOOK,
+            ORDER_BOOK_ODD, TICKER, BROKER, RT_DATA, K_1M, K_3M, K_5M, K_10M,
+            K_15M, K_30M, K_60M, K_120M, K_180M, K_240M, K_DAY, K_WEEK, K_MON,
+            K_QUARTER, K_YEAR.
+
+    Returns:
+        Dictionary containing:
+        - requested_at: UTC time the release was requested.
+        - codes / sub_types: Exactly what was submitted for release.
+        - status: 'acknowledged' — the provider accepted the request.
+        - scope: 'this_connection'.
+
+        'acknowledged' means the request was accepted, not that provider state
+        has already settled. Call get_subscriptions afterwards if you need to
+        confirm what is still held.
+
+    Note:
+        Providers commonly impose a minimum subscription duration and can refuse
+        an early release. That refusal is returned as an error and is not
+        retried — re-asking does not shorten a cooldown. An unsupported
+        subscription type or an empty selection fails before the request is
+        sent.
+    """
+    market_data_service = ctx.request_context.lifespan_context.market_data_service
+    market_data_service.unsubscribe(codes=codes, sub_types=sub_types)
+    await ctx.info(f"Requested release of {len(codes)} subscriptions")
+    return {
+        "requested_at": utc_now_iso(),
+        "codes": codes,
+        "sub_types": sub_types,
+        "status": "acknowledged",
+        "scope": "this_connection",
+    }
+
+
 @mcp.tool()
 async def get_user_security_group(
     ctx: Context[ServerSession, AppContext],

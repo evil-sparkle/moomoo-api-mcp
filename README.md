@@ -56,6 +56,8 @@ This MCP server empowers developers to build custom trading skills and strategie
 - `get_historical_klines_page`: The same query with explicit continuation, returning `{data, next_cursor, has_more}`. One call fetches one page; loop until `next_cursor` is null. The cursor is bound to the query that produced it, so replaying it with a different symbol, interval, or adjustment is rejected rather than silently mixing series. An empty `data` list with `has_more: true` is possible and does not mean the range is finished.
 - `get_market_snapshot`: Get efficient market snapshots for multiple stocks.
 - `get_order_book`: View real-time bid/ask order book depth.
+- `get_subscriptions`: List the market-data subscriptions held by this server's quote connection, with usage figures split into `connection` (this server) and `provider` (every client on the same OpenD gateway). Only fields the provider actually reports are present — an absent quota means "not reported", never "unlimited".
+- `unsubscribe_market_data`: Release specific codes and subscription types held by this connection. Never global, and never another client's subscriptions. A provider that enforces a minimum subscription duration can refuse an early release; that is returned as an error and is not retried. Reading the symbol again re-subscribes it.
 - `get_market_state`: Get each instrument's current session state (`MORNING`, `REST`, `CLOSED`, `PRE_MARKET_BEGIN`, …) as the provider reports it, with a UTC observation time. It is an observation, not a schedule.
 - `get_trading_days`: Get a market's trading calendar for a date range. Dates are **market-local** calendar dates, holidays are simply absent from the list, and half days are distinguished by `trade_date_type`. Session opening and closing times are not part of the response and are never inferred. A trading date does not imply that a given instrument, or your account, may trade that day.
 - `get_option_expiration_date`: List an underlying's available option expiry dates.
@@ -274,6 +276,22 @@ If you prefer to use a simulation account instead, please let me know."
 
 [Proceeds to unlock_trade → get_account_summary]
 ```
+
+### Managing Subscriptions
+
+`get_stock_quote` and `get_order_book` subscribe automatically, so symbols
+accumulate on this server's quote connection as they are read. To release some:
+
+```text
+1. get_subscriptions()                                  → what this connection holds
+2. unsubscribe_market_data(codes=[...], sub_types=[...]) → release the ones you picked
+3. get_subscriptions()                                  → confirm what is still held
+```
+
+Step 2 reports `acknowledged`, meaning the provider accepted the request — step
+3 is how you confirm the state actually settled. The provider quota is shared
+across every client attached to the same OpenD gateway, so a small
+`connection` figure does not by itself mean there is headroom.
 
 ### Paging Through Historical Candles
 
