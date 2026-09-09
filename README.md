@@ -59,6 +59,7 @@ This MCP server empowers developers to build custom trading skills and strategie
 ### Trading
 
 - `place_order`: Place a new order (Market, Limit, Stop, etc.).
+- `preview_combo_order`: Preview what a multi-leg package would do to an account — net liquidation value, initial and maintenance margin, option buying power, withdrawable amount, and buying-power decrease — using the broker's own calculation. Read-only: it places nothing, unlocks nothing, and reserves nothing, so it works in every trading mode. A field the broker did not report comes back as `null` rather than `0`. The values are point-in-time estimates, not a quote or an acceptance.
 - `place_combo_order`: Place a multi-leg option strategy (vertical spread, straddle, etc.) as a single atomic order. Use this rather than several `place_order` calls for any multi-leg strategy — the package fills as one unit, so a strategy can't be left half-executed. To **close** a strategy, first call `get_positions(show_option_strategy_view=True)` and pass each leg's `position_id`, which the API requires on closing orders.
 - `modify_order`: Modify price or quantity of an open order.
 - `cancel_order`: Cancel an open order.

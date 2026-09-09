@@ -1,5 +1,6 @@
 """Trade service for managing Moomoo trading context and account operations."""
 
+import math
 from concurrent.futures import Future
 from typing import Any
 
@@ -12,8 +13,20 @@ from moomoo import (
     TrdMarket,
 )
 
-from moomoo_mcp.services.health import BoundedProbe, failure
+from moomoo_mcp.services.health import BoundedProbe, failure, utc_now_iso
 from moomoo_mcp.services.trading_policy import TradingPolicy
+
+
+def _null_if_missing(value: Any) -> Any:
+    """Normalize a pandas gap to None.
+
+    A field the gateway omitted arrives as NaN once the SDK builds its frame.
+    Reporting it as null says "not supplied"; reporting 0.0 would claim the
+    package has no effect on that measure, which is a different statement.
+    """
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
 
 
 class TradeService:
@@ -708,6 +721,99 @@ class TradeService:
 
         records = data.to_dict("records")
         return records[0] if records else {}
+
+    # The account-impact fields comboorder_tradinginfo_query returns. Listed
+    # here rather than passed through wholesale so a caller sees a stable set of
+    # keys, with an explicit null for anything the gateway did not supply.
+    COMBO_PREVIEW_FIELDS = (
+        "nlv_change",
+        "initial_margin_change",
+        "maintenance_margin_change",
+        "option_bp",
+        "max_withdraw_change",
+        "bp_decrease",
+    )
+
+    def preview_combo_order(
+        self,
+        combo_legs: list[dict],
+        price: float,
+        qty: int,
+        order_type: str = "NORMAL",
+        trd_env: str = "SIMULATE",
+        acc_id: int | str = "0",
+    ) -> dict:
+        """Preview the account impact of a multi-leg package without submitting it.
+
+        This is a read: it asks the gateway what the package would do to margin
+        and buying power. Nothing is placed, modified, cancelled, unlocked, or
+        reserved, so it is permitted in every trading mode — though the broker
+        can still refuse the query itself.
+
+        Leg validation and account selection are shared with place_combo_order,
+        so a package that previews is the same package that would be submitted.
+
+        Args:
+            combo_legs: Legs of the strategy, in the same format as
+                place_combo_order: 'code', 'trd_side', 'qty_ratio' (required),
+                and 'position_id' when closing an existing position.
+            price: Net price of the whole package. The sign convention is passed
+                through untouched: moomoo does not document a debit/credit
+                convention, and normalizing it here would invent one.
+            qty: Number of packages.
+            order_type: Order type ('NORMAL' for limit, 'MARKET', etc.).
+            trd_env: Trading environment ('REAL' or 'SIMULATE').
+            acc_id: Account ID. Resolved from the legs' market when omitted.
+
+        Returns:
+            Dictionary with 'checked_at' (UTC observation time), the resolved
+            'acc_id' and 'trd_env', and the gateway's impact fields. A field the
+            gateway did not supply is None, never a substituted zero.
+
+            The values are a point-in-time calculation. They are not a quote, an
+            acceptance, or a guarantee that the package would fill.
+
+        Raises:
+            ValueError: If the leg list is malformed.
+            RuntimeError: If not connected, or the gateway rejects the query.
+        """
+        if isinstance(acc_id, str):
+            acc_id = int(acc_id)
+
+        if not self.trade_ctx:
+            raise RuntimeError("Trade context not connected")
+
+        legs = self._build_combo_legs(combo_legs)
+
+        # Same account selection as placement, so the preview describes the
+        # account the order would actually reach.
+        if acc_id == 0:
+            market = self._get_market_from_code(legs[0].code)
+            if market:
+                acc_id = self._find_best_account(trd_env, market)
+
+        ret, data = self.trade_ctx.comboorder_tradinginfo_query(
+            combo_leg_list=legs,
+            price=price,
+            qty=qty,
+            order_type=order_type,
+            trd_env=trd_env,
+            acc_id=acc_id,
+        )
+        if ret != RET_OK:
+            raise RuntimeError(f"comboorder_tradinginfo_query failed: {data}")
+
+        records = data.to_dict("records") if data is not None else []
+        record = records[0] if records else {}
+
+        preview: dict[str, Any] = {
+            "checked_at": utc_now_iso(),
+            "acc_id": acc_id,
+            "trd_env": trd_env,
+        }
+        for field in self.COMBO_PREVIEW_FIELDS:
+            preview[field] = _null_if_missing(record.get(field))
+        return preview
 
     def modify_order(
         self,

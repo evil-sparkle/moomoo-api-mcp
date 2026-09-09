@@ -1,9 +1,12 @@
 """Trading tools for order management operations."""
 
+from typing import Any
+
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
 @mcp.tool()
@@ -118,6 +121,10 @@ def place_combo_order(
     plus the net price and quantity for verification. Orders placed in REAL
     environment will use real money.
 
+    Call preview_combo_order first with the same legs, price, quantity, and
+    account to show the user the margin and buying-power impact before asking
+    for confirmation.
+
     Prefer this over multiple `place_order` calls for any multi-leg strategy. A
     combo order fills as one unit or not at all. Submitting the legs separately
     risks one filling and the other not, which can convert a defined-risk position
@@ -176,6 +183,77 @@ def place_combo_order(
         acc_id=acc_id,
         remark=remark,
     )
+
+
+@mcp.tool()
+def preview_combo_order(
+    ctx: Context[ServerSession, AppContext],
+    combo_legs: list[dict],
+    price: float,
+    qty: int,
+    order_type: str = "NORMAL",
+    trd_env: str = "REAL",
+    acc_id: str = "0",
+) -> dict[str, Any]:
+    """Preview what a multi-leg option package would do to an account.
+
+    READ-ONLY. This submits nothing: no order is placed, modified, or
+    cancelled, no trading is unlocked, and no funds are reserved. It works in
+    every trading mode, including READ_ONLY, though a broker can still refuse
+    the query itself.
+
+    Use it before place_combo_order to show the user the margin and buying-power
+    impact of the exact package you are about to propose. Pass the same legs,
+    price, quantity, and account you intend to submit — a preview of a different
+    package describes a different trade.
+
+    Args:
+        combo_legs: Same format as place_combo_order. Each leg is a dict:
+            {"code": "US.AAPL260320C200000", "trd_side": "SELL",
+             "qty_ratio": 1, "position_id": "123456789"}
+            - qty_ratio is required and multiplies the order quantity for that
+              leg.
+            - position_id is required when CLOSING an existing position. Get it
+              from get_positions(show_option_strategy_view=True) and pass the
+              decimal string through unchanged.
+        price: NET price of the whole package, not a per-leg price. moomoo does
+            not document a sign convention for debit vs credit packages, so the
+            value is forwarded exactly as given and no convention is assumed.
+        qty: Number of packages (not the total contracts across legs).
+        order_type: 'NORMAL' for limit, 'MARKET', etc.
+        trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
+        acc_id: Account ID from get_accounts(). Resolved from the legs' market
+            when omitted, exactly as place_combo_order would resolve it.
+
+    Returns:
+        Dictionary containing:
+        - checked_at: UTC observation time (ISO-8601, 'Z' suffix).
+        - acc_id: The account the preview was run against, as a decimal string.
+        - trd_env: The environment the preview was run against.
+        - nlv_change: Change in net liquidation value.
+        - initial_margin_change: Change in initial margin requirement.
+        - maintenance_margin_change: Change in maintenance margin requirement.
+        - option_bp: Option buying power after the package.
+        - max_withdraw_change: Change in maximum withdrawable amount.
+        - bp_decrease: Decrease in buying power.
+
+        A field the gateway did not supply is null, not zero. Null means "not
+        reported"; zero would mean "no impact", which is a different claim.
+
+        These are point-in-time estimates from the broker, not a quote and not
+        an acceptance. Values can change before the order is submitted, and a
+        successful preview does not mean the order would fill.
+    """
+    trade_service = ctx.request_context.lifespan_context.trade_service
+    preview = trade_service.preview_combo_order(
+        combo_legs=combo_legs,
+        price=price,
+        qty=qty,
+        order_type=order_type,
+        trd_env=trd_env,
+        acc_id=acc_id,
+    )
+    return serialize_identifiers(preview)
 
 
 @mcp.tool()

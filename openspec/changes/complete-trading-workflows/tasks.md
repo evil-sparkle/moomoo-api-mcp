@@ -25,9 +25,9 @@
 
 ## 2. Options Workflow — R4, R5
 
-- [ ] 2.1 R4: Implement combo preview using shared leg validation/account selection
+- [x] 2.1 R4: Implement combo preview using shared leg validation/account selection
   and the SDK tradability query; return timestamped account-impact fields.
-- [ ] 2.2 R4: Test valid opening/closing legs, exact IDs, validation failures,
+- [x] 2.2 R4: Test valid opening/closing legs, exact IDs, validation failures,
   account selection, unavailable values, and SDK rejection. Assert no placement,
   modification, cancellation, or unlock call occurs during preview.
 - [ ] 2.3 R5: Add option expiration and chain services/tools with date and enum

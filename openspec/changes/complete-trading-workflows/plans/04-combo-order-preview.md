@@ -43,11 +43,11 @@ Read-only policy permits preview, but broker permissions can still reject it.
 
 ## Implementation Checklist
 
-- [ ] Verify query signature, response shape, units, and missing-field semantics.
-- [ ] Share validation/account selection with placement without changing its behavior.
-- [ ] Implement SDK query mapping and timestamped response.
-- [ ] Register the tool and document the difference between preview and submission.
-- [ ] Add service tests and an MCP retrieval-to-preview workflow test.
+- [x] Verify query signature, response shape, units, and missing-field semantics.
+- [x] Share validation/account selection with placement without changing its behavior.
+- [x] Implement SDK query mapping and timestamped response.
+- [x] Register the tool and document the difference between preview and submission.
+- [x] Add service tests and an MCP retrieval-to-preview workflow test.
 
 ## Acceptance Tests
 
