@@ -577,3 +577,72 @@ class TestShutdownWithAStuckConnection:
 
         probe.close()
         service.close()
+
+
+# The exact payload a live OpenD 1010 gateway returned, trimmed to the fields
+# health reads. Recorded during a read-only smoke test: `qot_logined` is a
+# bool, not the '1'/'0' string the SDK's docstring describes.
+LIVE_GLOBAL_STATE = {
+    "market_us": "AFTER_HOURS_BEGIN",
+    "market_hk": "CLOSED",
+    "server_ver": "1010",
+    "trd_logined": True,
+    "qot_logined": True,
+    "program_status_type": "READY",
+}
+
+
+class TestGatewayLoginFlag:
+    """The login flag reaches us as a bool, whatever the SDK docs say."""
+
+    def test_a_logged_in_gateway_is_not_reported_as_logged_out(self, services):
+        """Against a live gateway `str(True) == "1"` was False, inverting this."""
+        moomoo_service, trade_service = services
+        moomoo_service.quote_ctx.get_global_state.return_value = (
+            0,
+            dict(LIVE_GLOBAL_STATE),
+        )
+
+        health = moomoo_service.check_health(trade_service=trade_service)
+
+        assert health["quote"]["logged_in"] is True
+        assert health["quote"]["status"] == "ok"
+        assert health["gateway_version"] == "1010"
+
+    def test_a_logged_out_gateway_is_reported_as_logged_out(self, services):
+        moomoo_service, trade_service = services
+        moomoo_service.quote_ctx.get_global_state.return_value = (
+            0,
+            {**LIVE_GLOBAL_STATE, "qot_logined": False},
+        )
+
+        health = moomoo_service.check_health(trade_service=trade_service)
+
+        assert health["quote"]["logged_in"] is False
+        # Status still follows the return code, so this stays visible rather
+        # than being reclassified as a failure.
+        assert health["quote"]["status"] == "ok"
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (True, True),
+            (False, False),
+            ("1", True),
+            ("0", False),
+            (1, True),
+            (0, False),
+        ],
+    )
+    def test_both_documented_and_actual_shapes_are_accepted(
+        self, services, raw, expected
+    ):
+        moomoo_service, trade_service = services
+        moomoo_service.quote_ctx.get_global_state.return_value = (
+            0,
+            {**LIVE_GLOBAL_STATE, "qot_logined": raw},
+        )
+
+        health = moomoo_service.check_health(trade_service=trade_service)
+
+        assert health["quote"]["logged_in"] is expected

@@ -20,6 +20,20 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from moomoo_mcp.services.trade_service import TradeService
 
 
+def _is_logged_in(value: Any) -> bool:
+    """Interpret the gateway's quote-login flag.
+
+    The SDK's own docstring describes this as the string '1' or '0', but the
+    field it reads is a protobuf bool, and a live gateway returns ``True``.
+    Comparing against '1' therefore reported a logged-in gateway as logged out.
+    Both shapes are accepted rather than trusting either the documentation or a
+    single observation.
+    """
+    if isinstance(value, str):
+        return value.strip() == "1"
+    return bool(value)
+
+
 class MoomooService:
     """Service to manage Moomoo API connections."""
 
@@ -84,7 +98,7 @@ class MoomooService:
             # code, so a reachable gateway that has not logged in to the quote
             # server is visible without being silently reclassified.
             if "qot_logined" in data:
-                result["logged_in"] = str(data.get("qot_logined")) == "1"
+                result["logged_in"] = _is_logged_in(data.get("qot_logined"))
         return result
 
     def submit_probe(self) -> Future:

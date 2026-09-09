@@ -71,7 +71,7 @@ Recorded 2026-09-10, after implementing R1-R8.
 
 ### Automated
 
-- `pytest`: 449 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
+- `pytest`: 457 passed, 1 skipped. Run on Python 3.14 with `mcp` 1.25.0 (the
   development environment) and on Python 3.10.21 with `mcp` 1.10.0, the lowest
   supported combination.
 - `ruff check .`: 74 diagnostics, against a 110-diagnostic baseline at commit
@@ -137,6 +137,52 @@ Guarding these: `TestShutdownWithAStuckConnection` exercises shutdown *without*
 releasing the constructor — including a subprocess check that the interpreter
 exits, which an in-process test cannot observe — and `TestHealthUnderLoad`
 saturates the shared limiter before calling health.
+
+### Read-only gateway smoke test (task 4.5)
+
+Run 2026-09-10 against a live OpenD (`server_ver` 1010, two accounts) on
+127.0.0.1:11111, driving a freshly spawned server over stdio with
+`MOOMOO_TRADING_MODE` unset. Read-only tools only: no order, unlock, order
+modification, or subscription change was issued, and `get_stock_quote` and
+`get_order_book` were excluded because they auto-subscribe.
+
+- `check_health` → `connected` in 52ms, both probes `ok`, `trading_mode`
+  `READ_ONLY`. Against a closed port the lifespan still yielded and health
+  answered `disconnected` in 3.1s.
+- `get_accounts` → `acc_id` `"283726804000618080"` as a decimal string. Above
+  2^53, so this is the R2 precision fix confirmed on real data.
+- `get_market_state`, `get_market_snapshot`, `get_trading_days`,
+  `get_subscriptions`, `get_option_expiration_date`, `get_option_chain`,
+  `get_historical_klines` all returned live data.
+- `get_historical_klines` with `ktype=K_5MIN` and with `autype=UNADJUSTED` were
+  both rejected with the valid values listed, rather than silently substituting
+  daily/QFQ. The SDK's actual name is `K_5M`.
+- `preview_combo_order` on a real vertical call spread returned
+  `nlv_change -41.25`, `initial_margin_change 250.0`,
+  `maintenance_margin_change 250.0`, `option_bp 1078.57`,
+  `bp_decrease 8.75` — resolving the outstanding units question: these are
+  absolute amounts in the account's currency, not percentages or ratios. No
+  field came back as the `"N/A"` sentinel.
+- `place_order` (REAL and SIMULATE), `unlock_trade` and `cancel_order` were
+  denied by policy in 5-14ms. These were run against a **closed** port so that
+  no gateway existed to accept an order even had the guard failed; the denials
+  happened before any SDK contact, which the timings confirm.
+
+Health under a saturated worker pool was **not** re-tested live: saturating it
+means dozens of concurrent gateway queries, which risks tripping the provider's
+rate limits on someone's real account for no added signal over the automated
+test, which reproduces the defect at 30.0s against a 5s deadline.
+
+### Defect found by the smoke test
+
+`probe_quote` reported `logged_in: false` against a gateway that was logged in.
+The SDK's docstring describes `qot_logined` as the string `'1'`/`'0'`, and the
+fixtures followed the docstring, but the field it reads is a protobuf bool and
+a live gateway returns `True` — so `str(value) == "1"` was always False. The
+flag is diagnostic only, so overall status was unaffected. `_is_logged_in` now
+accepts both shapes, and the regression test uses the payload the live gateway
+actually returned. This is the third defect traceable to a fixture that encoded
+an assumption rather than an observation.
 
 ### Not verified
 
