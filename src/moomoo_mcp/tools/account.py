@@ -1,9 +1,44 @@
 """Account tools for trading account information retrieval."""
 
+import numbers
+
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+
+# 64-bit identifiers that must not cross the JSON boundary as numbers.
+_LARGE_ID_FIELDS = ("position_id", "combo_id")
+
+
+def _stringify_large_ids(rows: list[dict]) -> list[dict]:
+    """Render 64-bit position identifiers as decimal strings.
+
+    Clients that parse JSON numbers as IEEE-754 doubles silently corrupt integers
+    above 2**53, and these identifiers are around 3e18. The corruption is
+    undetectable downstream because the result is still a valid integer, so a
+    closing order would be submitted against a position that does not exist —
+    validating the input cannot recover precision already lost in transit.
+
+    Strings survive the roundtrip intact, and place_combo_order accepts them.
+    Conversion happens here, at the serialization boundary, so that in-process
+    Python callers of TradeService keep exact ints.
+
+    Anything that is not an exact integer is passed through untouched: a float here
+    has already lost precision upstream, and letting it reach place_combo_order's
+    validator surfaces that loudly rather than dressing it up as a valid id.
+    """
+    converted = []
+    for row in rows:
+        row = dict(row)
+        for field in _LARGE_ID_FIELDS:
+            value = row.get(field)
+            # numbers.Integral covers both Python ints and numpy integers from
+            # pandas. bool is Integral too, hence the explicit exclusion.
+            if isinstance(value, numbers.Integral) and not isinstance(value, bool):
+                row[field] = str(int(value))
+        converted.append(row)
+    return converted
 
 
 @mcp.tool()
@@ -112,6 +147,7 @@ async def get_positions(
     trd_env: str = "REAL",
     acc_id: str = "0",
     refresh_cache: bool = False,
+    show_option_strategy_view: bool = False,
 ) -> list[dict]:
     """Get current positions.
 
@@ -130,9 +166,23 @@ async def get_positions(
             or 'SIMULATE' (no unlock needed, for testing).
         acc_id: Account ID. Must be obtained from get_accounts().
         refresh_cache: Whether to refresh cache.
+        show_option_strategy_view: Group multi-leg option positions into strategies.
+            Set this to True before closing a spread: each strategy comes back as a
+            'COMBINED' row plus its 'LEG' rows, and every row carries the
+            'position_id' that place_combo_order requires on a closing order. Legs
+            may also show a non-zero 'can_sell_qty' here while showing 0 in the
+            default flat view, since such positions are closed as a package.
 
     Returns:
         List of position dictionaries with code, qty, cost_price, market_val, pl_ratio, etc.
+        With show_option_strategy_view=True, also position_id, combo_id,
+        strategy_type, and position_type ('COMBINED' or 'LEG').
+
+        NOTE: position_id and combo_id are returned as decimal STRINGS, not numbers.
+        They are 64-bit values that a JSON client parsing numbers as doubles would
+        silently round, and a rounded id would be submitted against the wrong
+        position. Pass them to place_combo_order exactly as received, as strings,
+        without converting them to numbers at any point.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
     positions = trade_service.get_positions(
@@ -143,9 +193,10 @@ async def get_positions(
         trd_env=trd_env,
         acc_id=acc_id,
         refresh_cache=refresh_cache,
+        show_option_strategy_view=show_option_strategy_view,
     )
     await ctx.info(f"Retrieved {len(positions)} positions from {trd_env} account")
-    return positions
+    return _stringify_large_ids(positions)
 
 
 @mcp.tool()

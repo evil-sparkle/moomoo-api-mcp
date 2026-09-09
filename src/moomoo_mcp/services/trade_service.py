@@ -1,6 +1,13 @@
 """Trade service for managing Moomoo trading context and account operations."""
 
-from moomoo import OpenSecTradeContext, OrderStatus, RET_OK, SecurityFirm, TrdMarket
+from moomoo import (
+    ComboLeg,
+    OpenSecTradeContext,
+    OrderStatus,
+    RET_OK,
+    SecurityFirm,
+    TrdMarket,
+)
 
 
 class TradeService:
@@ -202,6 +209,7 @@ class TradeService:
         trd_env: str = "SIMULATE",
         acc_id: int | str = "0",
         refresh_cache: bool = False,
+        show_option_strategy_view: bool = False,
     ) -> list[dict]:
         """Get current positions.
 
@@ -213,6 +221,10 @@ class TradeService:
             trd_env: Trading environment.
             acc_id: Account ID. Must be obtained from get_accounts().
             refresh_cache: Whether to refresh cache.
+            show_option_strategy_view: Group multi-leg option positions into
+                strategies. Each strategy is returned as a 'COMBINED' row
+                alongside its 'LEG' rows, and every row carries the
+                'position_id' that place_combo_order requires when closing.
 
         Returns:
             List of position dictionaries.
@@ -252,6 +264,7 @@ class TradeService:
             trd_env=trd_env,
             acc_id=acc_id,
             refresh_cache=refresh_cache,
+            show_option_strategy_view=show_option_strategy_view,
         )
         if ret != RET_OK:
             raise RuntimeError(f"position_list_query failed: {data}")
@@ -463,6 +476,173 @@ class TradeService:
         )
         if ret != RET_OK:
             raise RuntimeError(f"place_order failed: {data}")
+
+        records = data.to_dict("records")
+        return records[0] if records else {}
+
+    def _build_combo_legs(self, combo_legs: list[dict]) -> list[ComboLeg]:
+        """Validate leg dictionaries and convert them to SDK ComboLeg objects.
+
+        Validation happens before any gateway call so that a malformed strategy
+        fails fast with an actionable message rather than an opaque protocol error.
+
+        Args:
+            combo_legs: Leg dictionaries, each with 'code', 'trd_side', 'qty_ratio'.
+
+        Returns:
+            List of ComboLeg objects ready for the SDK.
+
+        Raises:
+            ValueError: If the leg list is malformed.
+        """
+        if len(combo_legs) < 2:
+            raise ValueError(
+                "A combo order requires at least two legs. "
+                "Use place_order for single-leg orders."
+            )
+
+        valid_sides = {"BUY", "SELL"}
+        legs: list[ComboLeg] = []
+        markets: set[str] = set()
+
+        for index, leg in enumerate(combo_legs):
+            code = str(leg.get("code") or "").strip()
+            if not code:
+                raise ValueError(f"Leg {index} is missing a non-empty 'code'.")
+
+            trd_side = str(leg.get("trd_side") or "").strip().upper()
+            if trd_side not in valid_sides:
+                raise ValueError(
+                    f"Invalid trd_side '{leg.get('trd_side')}' on leg {index}. "
+                    f"Valid options: {sorted(valid_sides)}"
+                )
+
+            # qty_ratio is a multiplier, not a convenience default: the actual
+            # quantity of a leg is (order qty x qty_ratio). Assuming 1 for an
+            # omitted ratio would silently submit a different strategy — a 1:2:1
+            # butterfly would become 1:1:1 — so an absent ratio is an error.
+            if "qty_ratio" not in leg:
+                raise ValueError(
+                    f"Leg {index} is missing 'qty_ratio'. It multiplies the order "
+                    "quantity for this leg, so it must be stated explicitly."
+                )
+            qty_ratio = leg["qty_ratio"]
+            if not isinstance(qty_ratio, int) or isinstance(qty_ratio, bool):
+                raise ValueError(
+                    f"Leg {index} has a non-integer 'qty_ratio': {qty_ratio!r}"
+                )
+            if qty_ratio <= 0:
+                raise ValueError(
+                    f"Leg {index} has a 'qty_ratio' of {qty_ratio}; it must be a "
+                    "positive integer."
+                )
+
+            market = self._get_market_from_code(code)
+            if market:
+                markets.add(market)
+
+            combo_leg = ComboLeg()
+            combo_leg.code = code
+            combo_leg.trd_side = trd_side
+            combo_leg.qty_ratio = qty_ratio
+
+            # Required by the gateway when the order closes an existing position.
+            # Obtained from get_positions(show_option_strategy_view=True).
+            # Accept an exact integer, or a decimal string. Strings matter because
+            # these identifiers exceed the range JSON consumers can represent
+            # exactly. Anything lossy is refused rather than coerced: int(True) is
+            # 1 and int(123.75) is 123, and silently trading on either would target
+            # the wrong position.
+            position_id = leg.get("position_id")
+            if position_id is not None:
+                if isinstance(position_id, bool):
+                    raise ValueError(
+                        f"Leg {index} has a boolean 'position_id': {position_id!r}"
+                    )
+                if isinstance(position_id, int):
+                    combo_leg.position_id = position_id
+                elif isinstance(position_id, str) and position_id.strip().isdigit():
+                    combo_leg.position_id = int(position_id.strip())
+                else:
+                    raise ValueError(
+                        f"Leg {index} has a non-integer 'position_id': "
+                        f"{position_id!r}. Provide an integer or a decimal string."
+                    )
+
+            legs.append(combo_leg)
+
+        if len(markets) > 1:
+            raise ValueError(
+                "All combo legs must belong to the same market, got: "
+                f"{sorted(markets)}"
+            )
+
+        return legs
+
+    def place_combo_order(
+        self,
+        combo_legs: list[dict],
+        price: float,
+        qty: int,
+        order_type: str = "NORMAL",
+        time_in_force: str = "DAY",
+        trd_env: str = "SIMULATE",
+        acc_id: int | str = "0",
+        remark: str = "",
+    ) -> dict:
+        """Place a multi-leg option strategy as a single atomic order.
+
+        The package fills as one unit or not at all, so a strategy can never be
+        left half-executed the way independent single-leg orders can.
+
+        Args:
+            combo_legs: Legs of the strategy. Each is a dict with 'code',
+                'trd_side' ('BUY' or 'SELL'), and 'qty_ratio' (positive int,
+                required — it multiplies the order qty for that leg). May also
+                carry 'position_id', which the gateway requires when the order
+                closes an existing position; obtain it from
+                get_positions(show_option_strategy_view=True).
+            price: Net price of the whole package, not a per-leg price.
+            qty: Number of packages to trade.
+            order_type: Order type ('NORMAL' for limit, 'MARKET', etc.).
+            time_in_force: Time in force ('DAY' or 'GTC'). Defaults to 'DAY'.
+            trd_env: Trading environment ('REAL' or 'SIMULATE').
+            acc_id: Account ID. Must be obtained from get_accounts().
+            remark: Order remark/note.
+
+        Returns:
+            Dictionary with order details including order_id.
+
+        Raises:
+            ValueError: If the leg list is malformed.
+            RuntimeError: If not connected, or the gateway rejects the order.
+        """
+        if isinstance(acc_id, str):
+            acc_id = int(acc_id)
+
+        if not self.trade_ctx:
+            raise RuntimeError("Trade context not connected")
+
+        legs = self._build_combo_legs(combo_legs)
+
+        # Smart account selection mirrors place_order, keyed off the legs' market.
+        if acc_id == 0:
+            market = self._get_market_from_code(legs[0].code)
+            if market:
+                acc_id = self._find_best_account(trd_env, market)
+
+        ret, data = self.trade_ctx.place_combo_order(
+            combo_leg_list=legs,
+            price=price,
+            qty=qty,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            trd_env=trd_env,
+            acc_id=acc_id,
+            remark=remark,
+        )
+        if ret != RET_OK:
+            raise RuntimeError(f"place_combo_order failed: {data}")
 
         records = data.to_dict("records")
         return records[0] if records else {}

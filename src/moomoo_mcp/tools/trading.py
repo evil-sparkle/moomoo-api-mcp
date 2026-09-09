@@ -93,6 +93,80 @@ def place_order(
 
 
 @mcp.tool()
+def place_combo_order(
+    ctx: Context[ServerSession, AppContext],
+    combo_legs: list[dict],
+    price: float,
+    qty: int,
+    order_type: str = "NORMAL",
+    time_in_force: str = "DAY",
+    trd_env: str = "REAL",
+    acc_id: str = "0",
+    remark: str = "",
+) -> dict:
+    """Place a multi-leg option strategy (vertical spread, straddle, etc.) as a
+    single atomic order.
+
+    CRITICAL: You MUST ask the user for explicit confirmation before calling this
+    tool, especially if `trd_env` is 'REAL'. Display EVERY leg (code, side, ratio)
+    plus the net price and quantity for verification. Orders placed in REAL
+    environment will use real money.
+
+    Prefer this over multiple `place_order` calls for any multi-leg strategy. A
+    combo order fills as one unit or not at all. Submitting the legs separately
+    risks one filling and the other not, which can convert a defined-risk position
+    into an undefined-risk one — for example, closing a call spread leg by leg can
+    leave a naked short call.
+
+    IMPORTANT FOR AI AGENTS:
+    - Default is REAL account as per user preference.
+    - ALWAYS confirm with user before placing orders.
+    - For SIMULATE environment, explicitly set trd_env='SIMULATE'.
+
+    Args:
+        combo_legs: The strategy's legs, at least two, all in the same market.
+            Each leg is a dict:
+                {"code": "US.AAPL260320C200000", "trd_side": "SELL",
+                 "qty_ratio": 1, "position_id": 123456789}
+            - code: Option or stock code for the leg.
+            - trd_side: 'BUY' or 'SELL' for that leg.
+            - qty_ratio: Required positive integer. It MULTIPLIES the order
+              quantity for this leg: actual leg qty = qty x qty_ratio. It is not
+              optional, because assuming 1 would silently submit a different
+              strategy (a 1:2:1 butterfly would become 1:1:1).
+            - position_id: Required when CLOSING an existing position. Get it from
+              get_positions(show_option_strategy_view=True), which returns the
+              strategy as a COMBINED row plus its LEG rows, each with a
+              position_id. Omit when opening a new position.
+        price: NET price of the whole package, not a per-leg price.
+            NOTE: moomoo's API reference does not document a sign convention for
+            debit vs credit packages. Do not assume one. Verify against the app's
+            own ticket for the same strategy before pricing a REAL order.
+        qty: Number of packages to trade (not the total contracts across legs).
+        order_type: Order type. 'NORMAL' is a limit order; 'MARKET' is also
+            supported but is rarely appropriate for a multi-leg option package.
+        time_in_force: 'DAY' (default) or 'GTC'.
+        trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
+        acc_id: Account ID from get_accounts(). Resolved automatically if omitted.
+        remark: Optional order note/remark.
+
+    Returns:
+        Dictionary with order details including order_id and order_status.
+    """
+    trade_service = ctx.request_context.lifespan_context.trade_service
+    return trade_service.place_combo_order(
+        combo_legs=combo_legs,
+        price=price,
+        qty=qty,
+        order_type=order_type,
+        time_in_force=time_in_force,
+        trd_env=trd_env,
+        acc_id=acc_id,
+        remark=remark,
+    )
+
+
+@mcp.tool()
 def modify_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,

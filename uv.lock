@@ -230,7 +230,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -355,7 +355,7 @@ wheels = [
 
 [[package]]
 name = "moomoo-api"
-version = "9.6.5608"
+version = "10.10.7008"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pandas" },
@@ -363,11 +363,11 @@ dependencies = [
     { name = "pycryptodome" },
     { name = "simplejson" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/db/7a01fc09f7ee1767c39991eb4324c373682f91a05e097707ac77a69ec77b/moomoo_api-9.6.5608.tar.gz", hash = "sha256:2b244fb46236fb10c58808440bcc43c444abe242d974285f75ad251c2d984a50", size = 4915508, upload-time = "2025-12-17T08:53:27.534Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fd/90/41bac41995adf406840c44873589e0eb8bc715c86f096ba4efe7bd1f3f97/moomoo_api-10.10.7008.tar.gz", hash = "sha256:2c721a9b8daeb141f77408300056a7b398ff252ac06d35bad6dd3b21489185c7", size = 6435262, upload-time = "2026-08-13T09:16:19.633Z" }
 
 [[package]]
 name = "moomoo-api-mcp"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
@@ -385,7 +385,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", specifier = ">=1.0.0" },
-    { name = "moomoo-api", specifier = ">=3.3.0" },
+    { name = "moomoo-api", specifier = ">=10.10.7008" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },

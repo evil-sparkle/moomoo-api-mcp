@@ -43,6 +43,7 @@ This MCP server empowers developers to build custom trading skills and strategie
 ### Trading
 
 - `place_order`: Place a new order (Market, Limit, Stop, etc.).
+- `place_combo_order`: Place a multi-leg option strategy (vertical spread, straddle, etc.) as a single atomic order. Use this rather than several `place_order` calls for any multi-leg strategy — the package fills as one unit, so a strategy can't be left half-executed. To **close** a strategy, first call `get_positions(show_option_strategy_view=True)` and pass each leg's `position_id`, which the API requires on closing orders.
 - `modify_order`: Modify price or quantity of an open order.
 - `cancel_order`: Cancel an open order.
 - `get_orders`: Get list of orders for the current day.
@@ -117,6 +118,9 @@ The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local ga
 1. **Download OpenD**:
    - Visit the [Moomoo Open API Download Page](https://www.moomoo.com/download/opend).
    - Download the version appropriate for your OS (Windows/Mac/Linux).
+   - **Version**: this server requires `moomoo-api>=10.10.7008` (for combo orders). The
+     SDK and the gateway share a version line, so run an OpenD of at least that version
+     to avoid protocol mismatches.
 
 2. **Install & Run**:
    - Install the application.
