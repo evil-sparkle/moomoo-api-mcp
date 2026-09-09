@@ -61,6 +61,8 @@ This MCP server empowers developers to build custom trading skills and strategie
 - `get_market_state`: Get each instrument's current session state (`MORNING`, `REST`, `CLOSED`, `PRE_MARKET_BEGIN`, …) as the provider reports it, with a UTC observation time. It is an observation, not a schedule.
 - `get_trading_days`: Get a market's trading calendar for a date range. Dates are **market-local** calendar dates, holidays are simply absent from the list, and half days are distinguished by `trade_date_type`. Session opening and closing times are not part of the response and are never inferred. A trading date does not imply that a given instrument, or your account, may trade that day.
 - `get_option_expiration_date`: List an underlying's available option expiry dates.
+- `get_user_security_group`: List the user's watchlist groups from the Moomoo app.
+- `get_user_security`: List the securities in one watchlist group.
 - `get_option_chain`: Get option contracts for an underlying within a range of expiry dates, filtered to calls, puts, or all. Returns the exact provider contract symbols to use in quotes, previews, and orders — never build an option symbol by hand. The provider accepts a range of at most 30 days; a wider range is rejected rather than truncated.
 
 ### Trading
