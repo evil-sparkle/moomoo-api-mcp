@@ -1,10 +1,13 @@
 
 """Market data tools for retrieving stock quotes, K-lines, snapshots, and order book."""
 
+from typing import Any
+
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.services.clock import utc_now_iso
 
 
 @mcp.tool()
@@ -245,6 +248,93 @@ async def get_order_book(
     order_book = market_data_service.get_order_book(code, num=num)
     await ctx.info(f"Retrieved order book for {code} with {num} levels")
     return order_book
+
+
+@mcp.tool()
+async def get_market_state(
+    ctx: Context[ServerSession, AppContext],
+    codes: list[str],
+) -> dict[str, Any]:
+    """Get the current session state of each instrument's market.
+
+    Reports what the provider observes right now. It is not a schedule: it says
+    nothing about when the next session begins, and it does not mean the account
+    is permitted to trade the instrument.
+
+    Args:
+        codes: Security codes (e.g., ['US.AAPL', 'HK.00700']).
+
+    Returns:
+        Dictionary containing:
+        - checked_at: UTC observation time (ISO-8601, 'Z' suffix). The state was
+          true as of this moment and can change at any session boundary.
+        - data: List of {code, stock_name, market_state} dictionaries.
+
+        market_state is the provider's own value — for example 'MORNING',
+        'REST' (midday break), 'AFTERNOON', 'CLOSED', 'PRE_MARKET_BEGIN',
+        'AFTER_HOURS_BEGIN', 'AUCTION'. These are preserved rather than reduced
+        to open/closed, because a pre-market session and a regular session do
+        not accept the same orders. Instruments in different markets can be in
+        different states in the same response.
+    """
+    market_data_service = ctx.request_context.lifespan_context.market_data_service
+    states = market_data_service.get_market_state(codes)
+    await ctx.info(f"Retrieved market state for {len(codes)} instruments")
+    return {"checked_at": utc_now_iso(), "data": states}
+
+
+@mcp.tool()
+async def get_trading_days(
+    ctx: Context[ServerSession, AppContext],
+    market: str,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Get a market's trading calendar for a date range.
+
+    Use this instead of assuming weekdays are trading days: holidays and
+    shortened sessions vary by market and are not derivable from the server's
+    clock or timezone.
+
+    Args:
+        market: Calendar market. One of 'HK', 'US', 'CN', 'NT' (Shenzhen/Shanghai
+            Connect), 'ST' (Stock Connect), 'JP', 'SG', 'MY', 'JP_FUTURE',
+            'SG_FUTURE'.
+        start: First date to include, 'YYYY-MM-DD'. Omit both dates for the 365
+            days ending today.
+        end: Last date to include, 'YYYY-MM-DD' (inclusive).
+
+    Returns:
+        Dictionary containing:
+        - market: The market queried.
+        - date_basis: Always 'market_local'. The dates below are calendar dates
+          in the market's own timezone, not the server's, and carry no time of
+          day.
+        - start / end: The requested bounds, echoed back (null when omitted and
+          resolved by the provider).
+        - data: List of {time, trade_date_type} dictionaries, one per trading
+          day. trade_date_type is 'WHOLE' for a full session, or a half-day
+          value such as 'MORNING' or 'AFTERNOON'.
+
+        Only trading days appear. A holiday is simply absent — it is not listed
+        and marked closed. Session opening and closing times are not part of
+        this response and must not be inferred from it.
+
+        A date appearing here does NOT mean a particular instrument trades that
+        day, or that the account is permitted to trade it. Combine with
+        get_market_state for the current session and with account permissions
+        for what may actually be traded.
+    """
+    market_data_service = ctx.request_context.lifespan_context.market_data_service
+    days = market_data_service.get_trading_days(market=market, start=start, end=end)
+    await ctx.info(f"Retrieved {len(days)} trading days for {market}")
+    return {
+        "market": market,
+        "date_basis": "market_local",
+        "start": start,
+        "end": end,
+        "data": days,
+    }
 
 
 @mcp.tool()

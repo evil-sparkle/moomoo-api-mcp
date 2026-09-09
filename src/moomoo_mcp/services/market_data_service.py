@@ -1,6 +1,14 @@
 """Market data service for accessing quote data via Moomoo API."""
 
-from moomoo import OpenQuoteContext, RET_OK, SubType, KLType, AuType, OptionType
+from moomoo import (
+    RET_OK,
+    AuType,
+    KLType,
+    OpenQuoteContext,
+    OptionType,
+    SubType,
+    TradeDateMarket,
+)
 
 from moomoo_mcp.services.validation import validate_choice, validate_date_range
 
@@ -9,6 +17,12 @@ from moomoo_mcp.services.validation import validate_choice, validate_date_range
 OPTION_CHAIN_MAX_SPAN_DAYS = 29
 
 OPTION_TYPES = ("ALL", "CALL", "PUT")
+
+# Markets the provider will return a trading calendar for. NONE is excluded:
+# it is the SDK's 'unspecified' placeholder, not a market a caller can mean.
+TRADING_DAY_MARKETS = tuple(
+    value for value in TradeDateMarket.get_all_key_list() if value != "N/A"
+)
 
 
 class MarketDataService:
@@ -258,6 +272,84 @@ class MarketDataService:
             raise RuntimeError(f"get_order_book failed: {data}")
 
         return data
+
+    def get_market_state(self, codes: list[str]) -> list[dict]:
+        """Get the provider's reported session state for each instrument.
+
+        Args:
+            codes: Security codes (e.g., ['US.AAPL', 'HK.00700']).
+
+        Returns:
+            List of dictionaries with 'code', 'stock_name', and 'market_state'.
+            The state is the provider's own value (for example 'MORNING',
+            'REST', 'CLOSED', 'PRE_MARKET_BEGIN'), preserved rather than reduced
+            to an open/closed boolean, because those states are not equivalent
+            and the distinctions matter for what can be traded.
+
+        Raises:
+            ValueError: If the code list is empty or contains a blank code.
+            RuntimeError: If not connected, or the provider rejects the query.
+        """
+        if not self.quote_ctx:
+            raise RuntimeError("Quote context not connected")
+
+        if not codes:
+            raise ValueError("codes must contain at least one security code.")
+        cleaned = [str(code or "").strip() for code in codes]
+        if not all(cleaned):
+            raise ValueError("codes must not contain empty security codes.")
+
+        ret, data = self.quote_ctx.get_market_state(code_list=cleaned)
+        if ret != RET_OK:
+            raise RuntimeError(f"get_market_state failed: {data}")
+
+        return data.to_dict("records")
+
+    def get_trading_days(
+        self,
+        market: str,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> list[dict]:
+        """Get the provider's trading calendar for a market and date range.
+
+        Args:
+            market: Calendar market, one of TRADING_DAY_MARKETS (e.g., 'US',
+                'HK', 'CN', 'JP', 'SG').
+            start: First date to include (YYYY-MM-DD). When omitted, the
+                provider derives it from ``end``; when both are omitted it uses
+                the 365 days ending today.
+            end: Last date to include (YYYY-MM-DD), inclusive.
+
+        Returns:
+            List of dictionaries with 'time' (a market-local calendar date) and
+            'trade_date_type' (e.g., 'WHOLE', 'MORNING', 'AFTERNOON'). Only
+            trading days appear: a holiday is absent from the list rather than
+            being marked closed, and a shortened session is distinguished by its
+            trade_date_type. Session opening and closing times are not part of
+            this response and are not inferred.
+
+        Raises:
+            ValueError: If the market is unsupported, a date is malformed, or
+                start follows end.
+            RuntimeError: If not connected, or the provider rejects the query.
+        """
+        if not self.quote_ctx:
+            raise RuntimeError("Quote context not connected")
+
+        normalized_market = validate_choice("market", market, TRADING_DAY_MARKETS)
+        validate_date_range(start, end)
+
+        ret, data = self.quote_ctx.request_trading_days(
+            market=normalized_market,
+            start=start,
+            end=end,
+        )
+        if ret != RET_OK:
+            raise RuntimeError(f"request_trading_days failed: {data}")
+
+        # request_trading_days returns a list of dicts, not a DataFrame.
+        return list(data or [])
 
     def get_user_security_group(self, group_type: int = 0) -> list[dict]:
         """Get list of user-defined security groups (watchlists).

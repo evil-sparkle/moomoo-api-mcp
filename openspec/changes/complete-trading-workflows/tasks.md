@@ -39,7 +39,7 @@
 
 ## 3. Market Data Completion — R6, R7, R8
 
-- [ ] 3.1 R6: Add market-state and trading-calendar tools with explicit date/time
+- [x] 3.1 R6: Add market-state and trading-calendar tools with explicit date/time
   semantics. Test holidays, session transitions, partial sessions, and SDK errors.
 - [ ] 3.2 R7: Add the paginated candle tool with lossless filter-bound cursors;
   retain the existing list-returning tool and document its one-page behavior.

@@ -5,12 +5,12 @@ from typing import TYPE_CHECKING, Any
 
 from moomoo import RET_OK, OpenQuoteContext
 
+from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.health import (
     HEALTH_DEADLINE_SECONDS,
     BoundedProbe,
     aggregate_status,
     failure,
-    utc_now_iso,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only

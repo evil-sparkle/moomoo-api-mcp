@@ -13,7 +13,8 @@ from moomoo import (
     TrdMarket,
 )
 
-from moomoo_mcp.services.health import BoundedProbe, failure, utc_now_iso
+from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.services.health import BoundedProbe, failure
 from moomoo_mcp.services.trading_policy import TradingPolicy
 
 

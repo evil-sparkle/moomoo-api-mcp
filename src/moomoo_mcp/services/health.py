@@ -14,7 +14,6 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from datetime import datetime, timezone
 from typing import Any
 
 # Total wall-clock budget for a full health check, per the system-health spec.
@@ -35,11 +34,6 @@ _PERMISSION_MARKERS = (
     "no right",
     "权限",
 )
-
-
-def utc_now_iso() -> str:
-    """Return the current UTC time as an ISO-8601 string with a 'Z' suffix."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def sanitize_error(value: object) -> str:

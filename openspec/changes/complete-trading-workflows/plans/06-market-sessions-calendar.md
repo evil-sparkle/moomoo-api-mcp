@@ -40,11 +40,11 @@ Local validation should reject invalid values, not normalize them to another mar
 
 ## Implementation Checklist
 
-- [ ] Verify SDK market enums, date fields, states, and available session metadata.
-- [ ] Implement both service queries and explicit error mapping.
-- [ ] Add MCP wrappers, timestamps, and date-basis metadata.
-- [ ] Test holidays, partial sessions, transitions, and invalid requests.
-- [ ] Document how a caller combines state and calendar without inferring permission.
+- [x] Verify SDK market enums, date fields, states, and available session metadata.
+- [x] Implement both service queries and explicit error mapping.
+- [x] Add MCP wrappers, timestamps, and date-basis metadata.
+- [x] Test holidays, partial sessions, transitions, and invalid requests.
+- [x] Document how a caller combines state and calendar without inferring permission.
 
 ## Acceptance Tests
 
