@@ -8,6 +8,11 @@ from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.tools.kline_cursor import (
+    decode_cursor,
+    encode_cursor,
+    resolve_date_range,
+)
 
 
 @mcp.tool()
@@ -78,7 +83,12 @@ async def get_historical_klines(
             - NONE: No adjustment
 
     Returns:
-        List of K-line dictionaries containing:
+        A SINGLE PAGE of K-line dictionaries. The provider's continuation token
+        is discarded here, so for a wide date range this list can be a prefix of
+        the range rather than all of it, with no indication that more exists.
+        Use get_historical_klines_page when completeness matters.
+
+        Each dictionary contains:
         - time_key: Candlestick timestamp
         - open: Open price
         - high: High price
@@ -185,6 +195,107 @@ async def get_option_chain(
     )
     await ctx.info(f"Retrieved {len(contracts)} option contracts for {code}")
     return contracts
+
+
+@mcp.tool()
+async def get_historical_klines_page(
+    ctx: Context[ServerSession, AppContext],
+    code: str,
+    ktype: str = "K_DAY",
+    start: str | None = None,
+    end: str | None = None,
+    max_count: int = 100,
+    autype: str = "QFQ",
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """Get historical candles one page at a time, with explicit continuation.
+
+    Use this instead of get_historical_klines when you need the whole date
+    range: get_historical_klines returns a single page and discards the
+    provider's continuation, so its list can silently be a prefix of what you
+    asked for.
+
+    One call fetches one page. To read a full range, loop:
+
+        page = get_historical_klines_page(code="US.AAPL", start=..., end=...)
+        rows = page["data"]
+        while page["has_more"]:
+            page = get_historical_klines_page(
+                code="US.AAPL", start=..., end=..., cursor=page["next_cursor"]
+            )
+            rows += page["data"]
+
+    Bound that loop. Stop when next_cursor is null, and surface an error rather
+    than treating a failed page as the end of the data.
+
+    Args:
+        code: Stock code (e.g., 'US.AAPL').
+        ktype: K-line type: K_1M, K_3M, K_5M, K_15M, K_30M, K_60M, K_DAY
+            (default), K_WEEK, K_MON, K_QUARTER, K_YEAR.
+        start: Start date 'YYYY-MM-DD'. Defaults to 365 days before end.
+        end: End date 'YYYY-MM-DD'. Defaults to today.
+        max_count: Maximum candles per page (default 100).
+        autype: Adjustment for splits/dividends: 'QFQ' (forward, default),
+            'HFQ' (backward), or 'NONE'.
+        cursor: The next_cursor from the previous page. Omit for the first page.
+            Pass every other argument unchanged alongside it — a cursor belongs
+            to one specific query, and changing a filter mid-traversal is a new
+            query, not a continuation of this one.
+
+    Returns:
+        Dictionary containing:
+        - data: List of candle dictionaries (time_key, open, high, low, close,
+          volume, turnover, change_rate), in the provider's order.
+        - next_cursor: Opaque cursor for the following page, or null when the
+          range is exhausted.
+        - has_more: True when next_cursor is non-null.
+
+        An empty data list with has_more=true is possible and does not mean the
+        range is finished — keep going until next_cursor is null.
+
+    Note:
+        When start or end is omitted, the range is resolved once on the first
+        page and carried in the cursor, so a traversal that crosses midnight
+        keeps reading the same window. A malformed cursor, or one from a
+        different query, is rejected before any provider request.
+    """
+    market_data_service = ctx.request_context.lifespan_context.market_data_service
+
+    query = {
+        "code": code,
+        "ktype": ktype,
+        "start": start,
+        "end": end,
+        "max_count": max_count,
+        "autype": autype,
+    }
+
+    if cursor is None:
+        page_req_key = None
+        resolved = resolve_date_range(start, end)
+    else:
+        page_req_key, resolved = decode_cursor(cursor, query)
+
+    resolved_start, resolved_end = resolved
+    rows, next_token = market_data_service.get_historical_klines_page(
+        code=code,
+        ktype=ktype,
+        start=resolved_start,
+        end=resolved_end,
+        max_count=max_count,
+        autype=autype,
+        page_req_key=page_req_key,
+    )
+
+    next_cursor = (
+        encode_cursor(next_token, query, resolved) if next_token is not None else None
+    )
+    await ctx.info(f"Retrieved {len(rows)} K-lines for {code}")
+    return {
+        "data": rows,
+        "next_cursor": next_cursor,
+        "has_more": next_cursor is not None,
+    }
 
 
 @mcp.tool()

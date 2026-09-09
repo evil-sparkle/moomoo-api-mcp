@@ -41,9 +41,9 @@
 
 - [x] 3.1 R6: Add market-state and trading-calendar tools with explicit date/time
   semantics. Test holidays, session transitions, partial sessions, and SDK errors.
-- [ ] 3.2 R7: Add the paginated candle tool with lossless filter-bound cursors;
+- [x] 3.2 R7: Add the paginated candle tool with lossless filter-bound cursors;
   retain the existing list-returning tool and document its one-page behavior.
-- [ ] 3.3 R7: Test multiple pages, terminal and empty intermediate pages, corrupt
+- [x] 3.3 R7: Test multiple pages, terminal and empty intermediate pages, corrupt
   cursors, filter mismatch, later-page errors, and exact candle ordering.
 - [ ] 3.4 R8: Expose current-connection subscription inspection and explicit release.
 - [ ] 3.5 R8: Test subscription reuse, quota reporting, explicit release, failed

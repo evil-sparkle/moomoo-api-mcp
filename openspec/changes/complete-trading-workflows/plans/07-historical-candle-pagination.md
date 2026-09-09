@@ -42,11 +42,11 @@ Keep compatibility code out of the service's financial-data mapping logic.
 
 ## Implementation Checklist
 
-- [ ] Verify SDK token type, date defaults, page-size limits, and ordering guarantees.
-- [ ] Define the new result schema and versioned cursor codec.
-- [ ] Add service/tool pagination with explicit filter validation.
-- [ ] Keep the old method's response stable and document the new tool.
-- [ ] Add multi-page and malformed-cursor regression tests through MCP serialization.
+- [x] Verify SDK token type, date defaults, page-size limits, and ordering guarantees.
+- [x] Define the new result schema and versioned cursor codec.
+- [x] Add service/tool pagination with explicit filter validation.
+- [x] Keep the old method's response stable and document the new tool.
+- [x] Add multi-page and malformed-cursor regression tests through MCP serialization.
 
 ## Acceptance Tests
 

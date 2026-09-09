@@ -106,6 +106,9 @@ class MarketDataService:
 
         Returns:
             List of K-line dictionaries with time_key, open, high, low, close, volume.
+            This is one page: the provider's continuation token is discarded, so
+            the list can be a prefix of the requested range. Use
+            get_historical_klines_page to traverse the whole range.
 
         Raises:
             RuntimeError: If K-line retrieval fails.
@@ -129,6 +132,60 @@ class MarketDataService:
             raise RuntimeError(f"request_history_kline failed: {data}")
 
         return data.to_dict("records")
+
+    def get_historical_klines_page(
+        self,
+        code: str,
+        ktype: str = "K_DAY",
+        start: str | None = None,
+        end: str | None = None,
+        max_count: int = 100,
+        autype: str = "QFQ",
+        page_req_key: bytes | None = None,
+    ) -> tuple[list[dict], bytes | None]:
+        """Fetch one page of historical candles and the provider's continuation.
+
+        Unlike get_historical_klines, the provider's continuation token is
+        returned instead of discarded, so a caller can walk the whole range.
+
+        Args:
+            code: Stock code (e.g., 'US.AAPL').
+            ktype: K-line type (K_1M ... K_YEAR).
+            start: Start date (YYYY-MM-DD). Resolved by the caller for paging.
+            end: End date (YYYY-MM-DD).
+            max_count: Maximum candles in this page.
+            autype: Adjustment type: QFQ, HFQ, or NONE.
+            page_req_key: Continuation token from the previous page, or None for
+                the first page.
+
+        Returns:
+            Tuple of (candle dictionaries, continuation token). The token is
+            None when the provider has no further pages. A page can be empty
+            while still carrying a token.
+
+        Raises:
+            RuntimeError: If not connected, or the provider rejects the query.
+        """
+        if not self.quote_ctx:
+            raise RuntimeError("Quote context not connected")
+
+        ktype_enum = getattr(KLType, ktype, KLType.K_DAY)
+        autype_enum = getattr(AuType, autype, AuType.QFQ)
+
+        ret, data, next_page_req_key = self.quote_ctx.request_history_kline(
+            code=code,
+            start=start,
+            end=end,
+            ktype=ktype_enum,
+            autype=autype_enum,
+            max_count=max_count,
+            page_req_key=page_req_key,
+        )
+        if ret != RET_OK:
+            raise RuntimeError(f"request_history_kline failed: {data}")
+
+        rows = data.to_dict("records") if data is not None else []
+        return rows, next_page_req_key
 
     def get_option_expiration_date(self, code: str) -> list[dict]:
         """Get the option expiration dates available for an underlying.

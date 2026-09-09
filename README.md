@@ -52,7 +52,8 @@ This MCP server empowers developers to build custom trading skills and strategie
 ### Market Data
 
 - `get_stock_quote`: Get real-time stock quotes.
-- `get_historical_klines`: Retrieve historical candlestick data (Day, Week, Min, etc.).
+- `get_historical_klines`: Retrieve historical candlestick data (Day, Week, Min, etc.). Returns a **single page** — the provider's continuation token is discarded, so for a wide date range the list can be a prefix of the range with no indication that more exists. Kept unchanged for existing callers.
+- `get_historical_klines_page`: The same query with explicit continuation, returning `{data, next_cursor, has_more}`. One call fetches one page; loop until `next_cursor` is null. The cursor is bound to the query that produced it, so replaying it with a different symbol, interval, or adjustment is rejected rather than silently mixing series. An empty `data` list with `has_more: true` is possible and does not mean the range is finished.
 - `get_market_snapshot`: Get efficient market snapshots for multiple stocks.
 - `get_order_book`: View real-time bid/ask order book depth.
 - `get_market_state`: Get each instrument's current session state (`MORNING`, `REST`, `CLOSED`, `PRE_MARKET_BEGIN`, …) as the provider reports it, with a UTC observation time. It is an observation, not a schedule.
@@ -273,6 +274,24 @@ If you prefer to use a simulation account instead, please let me know."
 
 [Proceeds to unlock_trade → get_account_summary]
 ```
+
+### Paging Through Historical Candles
+
+```text
+page = get_historical_klines_page(code="US.AAPL", start="2025-01-01", end="2025-12-31")
+rows = page["data"]
+while page["has_more"]:
+    page = get_historical_klines_page(
+        code="US.AAPL", start="2025-01-01", end="2025-12-31",
+        cursor=page["next_cursor"],
+    )
+    rows += page["data"]
+```
+
+Pass every non-cursor argument through unchanged on each iteration, bound the
+loop, and treat a failed page as an error rather than as the end of the data.
+Omitted `start`/`end` are resolved once on the first page and carried in the
+cursor, so a traversal that crosses midnight keeps reading the same window.
 
 ### Option Strategy Workflow
 
