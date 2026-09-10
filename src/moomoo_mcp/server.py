@@ -10,7 +10,11 @@ from moomoo.common import ft_logger
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
-from moomoo_mcp.services.trading_policy import TradingPolicy, TradingPolicyError
+from moomoo_mcp.services.trading_policy import (
+    TradingMode,
+    TradingPolicy,
+    TradingPolicyError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +129,15 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
                 )
 
         if trade_service.trade_ctx is not None:
-            # Auto-unlock trade if password is configured in environment
-            _auto_unlock_trade(trade_service)
+            if policy.mode is TradingMode.READ_ONLY:
+                try:
+                    trade_service.lock_trade()
+                    logger.info("Proactively locked trade gateway on startup in READ_ONLY mode.")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Failed to proactively lock trade on OpenD: {exc}")
+            elif policy.mode is TradingMode.REAL:
+                # Auto-unlock trade if password is configured in environment
+                _auto_unlock_trade(trade_service)
 
         # Create market data service using the shared quote context
         market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
@@ -154,7 +165,13 @@ import moomoo_mcp.tools.trading
 
 def main():
     """Entry point for the MCP server."""
-    mcp.run()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()
+    if transport in ("sse", "streamable-http"):
+        mcp.run(transport=transport)
+    else:
+        mcp.run()
+
 
 if __name__ == "__main__":
     main()
+

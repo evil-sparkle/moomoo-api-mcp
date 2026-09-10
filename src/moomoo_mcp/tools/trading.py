@@ -432,15 +432,20 @@ async def get_deals(
     Returns:
         List of deal dictionaries with deal_id, order_id, code, qty, price,
         trd_side, create_time, etc.
+
+        NOTE: deal_id is returned as a decimal STRING, not a number.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return await run_blocking(
-        trade_service.get_deals,
-        code=code,
-        trd_env=trd_env,
-        acc_id=acc_id,
-        refresh_cache=refresh_cache,
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.get_deals,
+            code=code,
+            trd_env=trd_env,
+            acc_id=acc_id,
+            refresh_cache=refresh_cache,
+        )
     )
+
 
 
 @mcp.tool()
@@ -511,13 +516,18 @@ async def get_history_deals(
 
     Returns:
         List of historical deal dictionaries.
+
+        NOTE: deal_id is returned as a decimal STRING, not a number.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return await run_blocking(
-        trade_service.get_history_deals,
-        code=code,
-        start=start,
-        end=end,
-        trd_env=trd_env,
-        acc_id=acc_id,
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.get_history_deals,
+            code=code,
+            start=start,
+            end=end,
+            trd_env=trd_env,
+            acc_id=acc_id,
+        )
     )
+

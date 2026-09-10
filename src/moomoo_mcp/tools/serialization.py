@@ -18,7 +18,7 @@ from typing import Any
 
 # Identifiers only. Quantities, prices, and balances stay numeric: they are used
 # in arithmetic by clients, and their magnitudes are nowhere near 2**53.
-IDENTIFIER_FIELDS = frozenset({"acc_id", "position_id", "combo_id"})
+IDENTIFIER_FIELDS = frozenset({"acc_id", "position_id", "combo_id", "deal_id"})
 
 
 class IdentifierSerializationError(ValueError):

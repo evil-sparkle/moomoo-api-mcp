@@ -2,9 +2,12 @@
 
 import logging
 import math
+import os
 import threading
+from collections.abc import Iterator
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import contextmanager
 from typing import Any
 
 from moomoo import (
@@ -494,7 +497,7 @@ class TradeService:
             order_type=order_type,
             code=code,
             price=price,
-            order_id=order_id,
+            order_id=order_id if order_id else None,
             adjust_limit=adjust_limit,
             trd_env=trd_env,
             acc_id=acc_id,
@@ -583,6 +586,50 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"unlock_trade failed: {data}")
 
+    def lock_trade(self) -> None:
+        """Lock trade operations on OpenD gateway.
+
+        Raises:
+            RuntimeError: If trade context is not connected or locking fails.
+        """
+        if not self.trade_ctx:
+            raise RuntimeError("Trade context not connected")
+
+        ret, data = self.trade_ctx.unlock_trade(is_unlock=False)
+        if ret != RET_OK:
+            raise RuntimeError(f"lock_trade failed: {data}")
+
+    @contextmanager
+    def _jit_trade_unlock(self, trd_env: str) -> Iterator[None]:
+        """Momentarily unlock OpenD for order execution, then re-lock.
+
+        Only REAL environment requires unlock. SIMULATE never needs unlock.
+        If no credentials are set in environment, this yields without unlocking.
+        Always re-locks in a finally block to ensure OpenD does not stay unlocked.
+        """
+        req_env = str(trd_env).strip().upper()
+        if req_env != "REAL":
+            yield
+            return
+
+        password = os.environ.get("MOOMOO_TRADE_PASSWORD")
+        password_md5 = os.environ.get("MOOMOO_TRADE_PASSWORD_MD5")
+
+        if not password and not password_md5:
+            yield
+            return
+
+        self.unlock_trade(password=password, password_md5=password_md5)
+        try:
+            yield
+        finally:
+            try:
+                self.lock_trade()
+            except Exception as exc:
+                logger.error(
+                    f"Failed to re-lock trade gateway in JIT finally block: {exc}"
+                )
+
     def place_order(
         self,
         code: str,
@@ -660,27 +707,28 @@ class TradeService:
                 "trail_type and trail_value are required for trailing stop order types"
             )
 
-        ret, data = self.trade_ctx.place_order(
-            price=price,
-            qty=qty,
-            code=code,
-            trd_side=trd_side,
-            order_type=order_type,
-            time_in_force=time_in_force,
-            adjust_limit=adjust_limit,
-            aux_price=aux_price,
-            trail_type=trail_type,
-            trail_value=trail_value,
-            trail_spread=trail_spread,
-            trd_env=trd_env,
-            acc_id=acc_id,
-            remark=remark,
-        )
-        if ret != RET_OK:
-            raise RuntimeError(f"place_order failed: {data}")
+        with self._jit_trade_unlock(trd_env):
+            ret, data = self.trade_ctx.place_order(
+                price=price,
+                qty=qty,
+                code=code,
+                trd_side=trd_side,
+                order_type=order_type,
+                time_in_force=time_in_force,
+                adjust_limit=adjust_limit,
+                aux_price=aux_price,
+                trail_type=trail_type,
+                trail_value=trail_value,
+                trail_spread=trail_spread,
+                trd_env=trd_env,
+                acc_id=acc_id,
+                remark=remark,
+            )
+            if ret != RET_OK:
+                raise RuntimeError(f"place_order failed: {data}")
 
-        records = data.to_dict("records")
-        return records[0] if records else {}
+            records = data.to_dict("records")
+            return records[0] if records else {}
 
     def _build_combo_legs(self, combo_legs: list[dict]) -> list[ComboLeg]:
         """Validate leg dictionaries and convert them to SDK ComboLeg objects.
@@ -837,21 +885,22 @@ class TradeService:
             if market:
                 acc_id = self._find_best_account(trd_env, market)
 
-        ret, data = self.trade_ctx.place_combo_order(
-            combo_leg_list=legs,
-            price=price,
-            qty=qty,
-            order_type=order_type,
-            time_in_force=time_in_force,
-            trd_env=trd_env,
-            acc_id=acc_id,
-            remark=remark,
-        )
-        if ret != RET_OK:
-            raise RuntimeError(f"place_combo_order failed: {data}")
+        with self._jit_trade_unlock(trd_env):
+            ret, data = self.trade_ctx.place_combo_order(
+                combo_leg_list=legs,
+                price=price,
+                qty=qty,
+                order_type=order_type,
+                time_in_force=time_in_force,
+                trd_env=trd_env,
+                acc_id=acc_id,
+                remark=remark,
+            )
+            if ret != RET_OK:
+                raise RuntimeError(f"place_combo_order failed: {data}")
 
-        records = _plain_combo_legs(data.to_dict("records"))
-        return records[0] if records else {}
+            records = _plain_combo_legs(data.to_dict("records"))
+            return records[0] if records else {}
 
     # The account-impact fields comboorder_tradinginfo_query returns. Listed
     # here rather than passed through wholesale so a caller sees a stable set of
@@ -982,20 +1031,21 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.modify_order(
-            modify_order_op=modify_order_op,
-            order_id=order_id,
-            qty=qty,
-            price=price,
-            adjust_limit=adjust_limit,
-            trd_env=trd_env,
-            acc_id=acc_id,
-        )
-        if ret != RET_OK:
-            raise RuntimeError(f"modify_order failed: {data}")
+        with self._jit_trade_unlock(trd_env):
+            ret, data = self.trade_ctx.modify_order(
+                modify_order_op=modify_order_op,
+                order_id=order_id,
+                qty=qty,
+                price=price,
+                adjust_limit=adjust_limit,
+                trd_env=trd_env,
+                acc_id=acc_id,
+            )
+            if ret != RET_OK:
+                raise RuntimeError(f"modify_order failed: {data}")
 
-        records = data.to_dict("records")
-        return records[0] if records else {}
+            records = data.to_dict("records")
+            return records[0] if records else {}
 
     def cancel_order(
         self,
@@ -1028,20 +1078,21 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.modify_order(
-            modify_order_op="CANCEL",
-            order_id=order_id,
-            qty=0,
-            price=0,
-            adjust_limit=0,
-            trd_env=trd_env,
-            acc_id=acc_id,
-        )
-        if ret != RET_OK:
-            raise RuntimeError(f"cancel_order failed: {data}")
+        with self._jit_trade_unlock(trd_env):
+            ret, data = self.trade_ctx.modify_order(
+                modify_order_op="CANCEL",
+                order_id=order_id,
+                qty=0,
+                price=0,
+                adjust_limit=0,
+                trd_env=trd_env,
+                acc_id=acc_id,
+            )
+            if ret != RET_OK:
+                raise RuntimeError(f"cancel_order failed: {data}")
 
-        records = data.to_dict("records")
-        return records[0] if records else {}
+            records = data.to_dict("records")
+            return records[0] if records else {}
 
     def get_orders(
         self,

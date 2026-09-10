@@ -1,0 +1,43 @@
+services:
+  opend:
+    image: ubuntu:22.04
+    container_name: moomoo-opend
+    restart: unless-stopped
+    volumes:
+      # Mount the OpenD directory containing binary and libraries
+      - ${OPEND_DIR:-../moomooOpenD}:/opt/moomooOpenD
+      # Persistent named volume preserving device authorization and AppData
+      - opend-data:/root/.moomooOpenD
+    working_dir: /opt/moomooOpenD
+    command: ["./OpenD", "-login_region=sg", "-lang=en"]
+    networks:
+      - trading-net
+    # Port 11111 is NOT mapped to the host; only accessible to moomoo-mcp within trading-net.
+
+  moomoo-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: moomoo-api-mcp
+    restart: unless-stopped
+    environment:
+      - MOOMOO_OPEND_HOST=opend
+      - MOOMOO_OPEND_PORT=11111
+      - MOOMOO_SECURITY_FIRM=${MOOMOO_SECURITY_FIRM:-FUTUSG}
+      - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
+      - MOOMOO_TRADE_PASSWORD_MD5=${MOOMOO_TRADE_PASSWORD_MD5:-}
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-sse}
+    ports:
+      # Bind MCP SSE endpoint strictly to localhost on host machine
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - opend
+    networks:
+      - trading-net
+
+networks:
+  trading-net:
+    driver: bridge
+
+volumes:
+  opend-data:

@@ -292,7 +292,8 @@ async def get_cash_flow(
     - If user wants SIMULATE account, they must explicitly request it.
 
     Args:
-        clearing_date: Filter by clearing date (YYYY-MM-DD format).
+        clearing_date: Filter by clearing date ('YYYY-MM-DD'). Some brokers
+            (e.g., FUTUSG) require clearing_date to be specified.
         trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
             testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().
@@ -395,3 +396,22 @@ async def unlock_trade(
     )
     await ctx.info("Trade unlocked successfully - REAL account data is now accessible")
     return {"status": "unlocked", "message": "You can now access REAL account data by setting trd_env='REAL' in other tools"}
+
+
+@mcp.tool()
+async def lock_trade(
+    ctx: Context[ServerSession, AppContext],
+) -> dict[str, Any]:
+    """Lock trade operations on OpenD gateway.
+
+    Can be called at any time to return the OpenD gateway to a locked state.
+    Safe to call in any mode (READ_ONLY, SIMULATE, REAL).
+
+    Returns:
+        Status dictionary with {'status': 'locked'}.
+    """
+    trade_service = ctx.request_context.lifespan_context.trade_service
+    await run_blocking(trade_service.lock_trade)
+    await ctx.info("Trade locked successfully on OpenD gateway")
+    return {"status": "locked", "message": "Trading on OpenD is now locked"}
+

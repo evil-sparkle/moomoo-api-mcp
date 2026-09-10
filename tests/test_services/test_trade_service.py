@@ -144,6 +144,22 @@ class TestGetMaxTradable:
 
         assert result["max_cash_buy"] == 100
         mock_trade_ctx.acctradinginfo_query.assert_called_once()
+        _, kwargs = mock_trade_ctx.acctradinginfo_query.call_args
+        assert kwargs["order_id"] is None
+
+    def test_get_max_tradable_custom_order_id(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test max tradable when order_id is provided."""
+        df = pd.DataFrame([{"max_cash_buy": 100}])
+        mock_trade_ctx.acctradinginfo_query.return_value = (0, df)
+
+        trade_service_with_mock.get_max_tradable(
+            order_type="NORMAL", code="US.AAPL", price=150.0, order_id="ORDER123"
+        )
+
+        _, kwargs = mock_trade_ctx.acctradinginfo_query.call_args
+        assert kwargs["order_id"] == "ORDER123"
 
 
 class TestGetMarginRatio:
@@ -203,6 +219,84 @@ class TestUnlockTrade:
 
         with pytest.raises(RuntimeError, match="unlock_trade failed"):
             trade_service_with_mock.unlock_trade(password="wrongpass")
+
+
+class TestLockTrade:
+    """Tests for lock_trade."""
+
+    def test_lock_trade_success(self, trade_service_with_mock, mock_trade_ctx):
+        """Test successful trade lock."""
+        mock_trade_ctx.unlock_trade.return_value = (0, None)
+
+        trade_service_with_mock.lock_trade()
+
+        mock_trade_ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+
+    def test_lock_trade_error(self, trade_service_with_mock, mock_trade_ctx):
+        """Test trade lock error handling."""
+        mock_trade_ctx.unlock_trade.return_value = (-1, "Gateway busy")
+
+        with pytest.raises(RuntimeError, match="lock_trade failed"):
+            trade_service_with_mock.lock_trade()
+
+
+class TestJitTradeUnlock:
+    """Tests for _jit_trade_unlock context manager."""
+
+    def test_jit_unlock_real_with_md5(
+        self, trade_service_with_mock, mock_trade_ctx, monkeypatch
+    ):
+        """Test JIT unlock on REAL environment with password MD5."""
+        monkeypatch.setenv("MOOMOO_TRADE_PASSWORD_MD5", "hash123")
+        monkeypatch.delenv("MOOMOO_TRADE_PASSWORD", raising=False)
+        mock_trade_ctx.unlock_trade.return_value = (0, None)
+
+        with trade_service_with_mock._jit_trade_unlock(trd_env="REAL"):
+            mock_trade_ctx.unlock_trade.assert_called_once_with(
+                password=None, password_md5="hash123", is_unlock=True
+            )
+
+        # After exiting context, should have called lock (is_unlock=False)
+        assert mock_trade_ctx.unlock_trade.call_count == 2
+        mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
+
+    def test_jit_unlock_always_relocks_on_exception(
+        self, trade_service_with_mock, mock_trade_ctx, monkeypatch
+    ):
+        """Test JIT unlock guarantees relock even when order raises exception."""
+        monkeypatch.setenv("MOOMOO_TRADE_PASSWORD_MD5", "hash123")
+        mock_trade_ctx.unlock_trade.return_value = (0, None)
+
+        with pytest.raises(ValueError, match="Order exploded"):
+            with trade_service_with_mock._jit_trade_unlock(trd_env="REAL"):
+                raise ValueError("Order exploded")
+
+        # Must have re-locked
+        assert mock_trade_ctx.unlock_trade.call_count == 2
+        mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
+
+    def test_jit_unlock_skipped_for_simulate(
+        self, trade_service_with_mock, mock_trade_ctx, monkeypatch
+    ):
+        """Test JIT unlock is skipped for SIMULATE environment."""
+        monkeypatch.setenv("MOOMOO_TRADE_PASSWORD_MD5", "hash123")
+
+        with trade_service_with_mock._jit_trade_unlock(trd_env="SIMULATE"):
+            pass
+
+        mock_trade_ctx.unlock_trade.assert_not_called()
+
+    def test_jit_unlock_noop_when_no_credentials(
+        self, trade_service_with_mock, mock_trade_ctx, monkeypatch
+    ):
+        """Test JIT unlock is a no-op when credentials are not configured."""
+        monkeypatch.delenv("MOOMOO_TRADE_PASSWORD", raising=False)
+        monkeypatch.delenv("MOOMOO_TRADE_PASSWORD_MD5", raising=False)
+
+        with trade_service_with_mock._jit_trade_unlock(trd_env="REAL"):
+            pass
+
+        mock_trade_ctx.unlock_trade.assert_not_called()
 
 
 class TestPlaceOrder:

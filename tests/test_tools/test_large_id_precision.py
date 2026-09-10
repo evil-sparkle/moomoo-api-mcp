@@ -39,6 +39,7 @@ class TestIdentifierSerializer:
                 "acc_id": ACCOUNT_ID,
                 "position_id": STRATEGY_ID,
                 "combo_id": LEG_ID,
+                "deal_id": UNSAFE_ID,
             }
         ]
 
@@ -47,15 +48,19 @@ class TestIdentifierSerializer:
         assert out[0]["acc_id"] == str(ACCOUNT_ID)
         assert out[0]["position_id"] == str(STRATEGY_ID)
         assert out[0]["combo_id"] == str(LEG_ID)
+        assert out[0]["deal_id"] == str(UNSAFE_ID)
 
     def test_numpy_ints_from_pandas_are_handled(self):
-        df = pd.DataFrame([{"position_id": STRATEGY_ID, "combo_id": LEG_ID}])
+        df = pd.DataFrame(
+            [{"position_id": STRATEGY_ID, "combo_id": LEG_ID, "deal_id": UNSAFE_ID}]
+        )
         rows = df.to_dict("records")
 
         out = serialize_identifiers(rows)
 
         assert out[0]["position_id"] == str(STRATEGY_ID)
         assert out[0]["combo_id"] == str(LEG_ID)
+        assert out[0]["deal_id"] == str(UNSAFE_ID)
 
     def test_missing_ids_left_alone(self):
         rows = [{"code": "US.AAPL", "qty": 10}]
@@ -252,6 +257,30 @@ class TestAccountToolsThroughMcp:
 
         with pytest.raises(Exception, match="position_id"):
             await call_tool("get_positions")
+
+    @pytest.mark.asyncio
+    async def test_get_deals_emits_string_ids(self, call_tool, mock_trade_service):
+        mock_trade_service.get_deals.return_value = [
+            {"deal_id": UNSAFE_ID, "order_id": "FS123", "code": "US.AAPL"}
+        ]
+
+        result = await call_tool("get_deals")
+
+        assert result.json_blocks[0]["deal_id"] == str(UNSAFE_ID)
+        assert result.structured["result"][0]["deal_id"] == str(UNSAFE_ID)
+
+    @pytest.mark.asyncio
+    async def test_get_history_deals_emits_string_ids(
+        self, call_tool, mock_trade_service
+    ):
+        mock_trade_service.get_history_deals.return_value = [
+            {"deal_id": UNSAFE_ID, "order_id": "FS123", "code": "US.AAPL"}
+        ]
+
+        result = await call_tool("get_history_deals")
+
+        assert result.json_blocks[0]["deal_id"] == str(UNSAFE_ID)
+        assert result.structured["result"][0]["deal_id"] == str(UNSAFE_ID)
 
 
 class TestRetrievalToRequestRoundtrip:

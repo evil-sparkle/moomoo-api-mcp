@@ -75,3 +75,4 @@ known-first-party = ["moomoo_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]

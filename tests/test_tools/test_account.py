@@ -17,6 +17,7 @@ from moomoo_mcp.tools.account import (
     get_margin_ratio,
     get_cash_flow,
     unlock_trade,
+    lock_trade,
 )
 
 
@@ -200,6 +201,16 @@ async def test_unlock_trade_env_vars(mcp_context, mock_trade_service):
         password="env_password",
         password_md5=None
     )
+
+
+@pytest.mark.asyncio
+async def test_lock_trade(mcp_context, mock_trade_service):
+    """Test lock_trade tool."""
+    result = await lock_trade(mcp_context)
+
+    assert result["status"] == "locked"
+    mock_trade_service.lock_trade.assert_called_once()
+
 
 
 @pytest.mark.asyncio
