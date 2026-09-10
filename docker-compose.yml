@@ -9,7 +9,23 @@ services:
       # Persistent named volume preserving device authorization and AppData
       - opend-data:/root/.moomooOpenD
     working_dir: /opt/moomooOpenD
-    command: ["./OpenD", "-login_region=sg", "-lang=en"]
+    environment:
+      - LD_LIBRARY_PATH=/opt/moomooOpenD
+      - MOOMOO_LOGIN_ACCOUNT=${MOOMOO_LOGIN_ACCOUNT:-}
+      - MOOMOO_LOGIN_PWD_MD5=${MOOMOO_LOGIN_PWD_MD5:-}
+      - MOOMOO_LOGIN_BY_REMEMBER=${MOOMOO_LOGIN_BY_REMEMBER:-1}
+      - MOOMOO_LOGIN_REGION=${MOOMOO_LOGIN_REGION:-sg}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -n "$$MOOMOO_LOGIN_PWD_MD5" ]; then
+          exec ./OpenD -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+        elif [ "$$MOOMOO_LOGIN_BY_REMEMBER" = "1" ] && [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
+          exec ./OpenD -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_by_remember=1 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+        else
+          exec ./OpenD -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+        fi
     networks:
       - trading-net
     # Port 11111 is NOT mapped to the host; only accessible to moomoo-mcp within trading-net.
