@@ -267,9 +267,11 @@ class TestJitTradeUnlock:
         monkeypatch.setenv("MOOMOO_TRADE_PASSWORD_MD5", "hash123")
         mock_trade_ctx.unlock_trade.return_value = (0, None)
 
-        with pytest.raises(ValueError, match="Order exploded"):
-            with trade_service_with_mock._jit_trade_unlock(trd_env="REAL"):
-                raise ValueError("Order exploded")
+        with (
+            pytest.raises(ValueError, match="Order exploded"),
+            trade_service_with_mock._jit_trade_unlock(trd_env="REAL"),
+        ):
+            raise ValueError("Order exploded")
 
         # Must have re-locked
         assert mock_trade_ctx.unlock_trade.call_count == 2

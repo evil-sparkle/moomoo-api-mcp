@@ -220,7 +220,7 @@ async def test_get_assets_string_id(mcp_context, mock_trade_service):
         "cash": 10000.0,
         "market_val": 5000.0
     }
-    
+
     # Use a large ID that would lose precision if treated as float/number in JSON
     large_id_str = "283726802397238513"
 
