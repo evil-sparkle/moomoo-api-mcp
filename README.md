@@ -133,6 +133,72 @@ moomoo-api-mcp
 
 ---
 
+## 🐳 Containerized Deployment (Docker Compose)
+
+Running OpenD and the MCP server via Docker isolates the OpenD gateway on an internal bridge network (`trading-net`), protects trading credentials, and persists device authorization across restarts.
+
+### 1. Build the Images
+
+```bash
+docker compose build
+```
+*(OpenD is automatically downloaded and installed for `linux/amd64` via Rosetta/emulation on Apple Silicon or natively on x86_64 servers.)*
+
+### 2. Initial Device Activation (Interactive Login)
+
+OpenD requires an interactive verification code (SMS/2FA) on initial device registration:
+
+```bash
+docker compose run --rm opend
+```
+
+Follow the prompts in your terminal:
+1. **Account**: Enter your Moomoo ID, email, or phone number.
+2. **Password**: Enter your login password.
+3. **Remember Password? `[Y/N]`**: Enter **`Y`** *(Crucial: saves encrypted session token in the persistent `opend-data` Docker volume)*.
+4. **Verification Code**: Enter the SMS code sent to your phone.
+
+Once OpenD reports that login succeeded, exit or terminate the process (`Ctrl+C`). Your device credentials and session tokens are preserved in the named Docker volume `opend-data`.
+
+### 3. Configure `.env` for Headless Operation
+
+Copy the sample environment file:
+```bash
+cp .env.example .env
+```
+
+Set your account number so OpenD knows which saved session to load:
+```env
+MOOMOO_LOGIN_ACCOUNT=12345678
+MOOMOO_LOGIN_REGION=sg        # sg (Singapore), us, hk, etc.
+MOOMOO_SECURITY_FIRM=FUTUSG   # FUTUSG (Singapore), FUTUINC (US), etc.
+MOOMOO_TRADING_MODE=READ_ONLY  # READ_ONLY (default), SIMULATE, or REAL
+```
+
+> **Security Note**: You **do not need to store your login password** in `.env`. When `MOOMOO_LOGIN_BY_REMEMBER=1` (default), OpenD authenticates headlessly using the encrypted token stored in `opend-data`.
+
+### 4. Start the Stack
+
+```bash
+# Start OpenD gateway and MCP server in background
+docker compose up -d
+
+# Check OpenD logs
+docker compose logs -f opend
+
+# Check MCP server logs
+docker compose logs -f moomoo-mcp
+```
+
+### 5. Stop the Stack
+
+```bash
+docker compose down
+```
+*(Your login state remains safely preserved in the `opend-data` volume.)*
+
+---
+
 ## Configuration
 
 ### 1. Prerequisites
@@ -237,6 +303,20 @@ Add the server to your `claude_desktop_config.json`:
         "MOOMOO_TRADE_PASSWORD": "your_trading_password",
         "MOOMOO_SECURITY_FIRM": "FUTUSG"
       }
+    }
+  }
+}
+```
+
+#### Option C: Containerized Deployment (Docker SSE)
+
+When running the server via Docker Compose (`MCP_TRANSPORT=sse`), the server listens on `http://127.0.0.1:8000/sse`:
+
+```json
+{
+  "mcpServers": {
+    "moomoo": {
+      "url": "http://127.0.0.1:8000/sse"
     }
   }
 }
