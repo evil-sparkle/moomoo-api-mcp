@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -5,7 +6,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from moomoo.common import ft_logger
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.market_data_service import MarketDataService
@@ -17,6 +22,26 @@ from moomoo_mcp.services.trading_policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class BearerAuthMiddleware(BaseHTTPMiddleware):
+    """Enforces constant-time bearer token authorization on HTTP/SSE requests."""
+
+    def __init__(self, app, auth_token: str) -> None:
+        super().__init__(app)
+        self.auth_token = auth_token
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+            if hmac.compare_digest(token, self.auth_token):
+                return await call_next(request)
+
+        return JSONResponse(
+            {"detail": "Unauthorized: Invalid or missing bearer token."},
+            status_code=401,
+        )
 
 
 # Disable moomoo library console logging to prevent corruption of MCP stdout protocol
@@ -162,6 +187,18 @@ mcp = FastMCP(
     dependencies=["moomoo-api", "pandas"],
     host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("FASTMCP_PORT", "8000")),
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[
+            "127.0.0.1:*",
+            "localhost:*",
+            "127.0.0.1",
+            "localhost",
+            "0.0.0.0:*",
+            "0.0.0.0",
+            "testserver",
+        ],
+    ),
 )
 
 # Import tools to register them
@@ -171,11 +208,32 @@ import moomoo_mcp.tools.system  # noqa: E402, F401
 import moomoo_mcp.tools.trading  # noqa: E402, F401
 
 
+def create_sse_app(auth_token: str | None = None):
+    """Build the Starlette SSE application with optional bearer auth."""
+    app = mcp.sse_app()
+    raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
+    token = raw.strip()
+    if token:
+        app.add_middleware(BearerAuthMiddleware, auth_token=token)
+    return app
+
+
 def main():
     """Entry point for the MCP server."""
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()
+    auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
+
     if transport in ("sse", "streamable-http"):
-        mcp.run(transport=transport)
+        if auth_token:
+            logger.info("Enabling bearer token authentication for SSE.")
+            import uvicorn
+
+            app = create_sse_app(auth_token=auth_token)
+            host = os.environ.get("FASTMCP_HOST", "127.0.0.1")
+            port = int(os.environ.get("FASTMCP_PORT", "8000"))
+            uvicorn.run(app, host=host, port=port)
+        else:
+            mcp.run(transport=transport)
     else:
         mcp.run()
 

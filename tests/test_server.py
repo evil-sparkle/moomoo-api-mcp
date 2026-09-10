@@ -259,3 +259,78 @@ class TestStartupTradingMode:
         assert trade_service.policy.mode is TradingMode.REAL
         assert trade_service.unlock_trade.call_count == 1
         trade_service.place_order.assert_not_called()
+
+
+class TestFastMCPSecurity:
+    """Tests for FastMCP SSE authentication and transport security."""
+
+    def test_sse_app_rejects_missing_auth_token(self) -> None:
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_sse_app
+
+        app = create_sse_app(auth_token="test_secure_token_123")
+        client = TestClient(app)
+
+        response = client.get("/sse")
+        assert response.status_code == 401
+        assert "Unauthorized" in response.text
+
+    def test_sse_app_rejects_invalid_bearer_token(self) -> None:
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_sse_app
+
+        app = create_sse_app(auth_token="test_secure_token_123")
+        client = TestClient(app)
+
+        response = client.get(
+            "/sse",
+            headers={"Authorization": "Bearer wrong_token_abc"},
+        )
+        assert response.status_code == 401
+        assert "Unauthorized" in response.text
+
+    def test_bearer_auth_middleware_accepts_valid_token(self) -> None:
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import BearerAuthMiddleware
+
+        async def endpoint(_request):
+            return PlainTextResponse("ok")
+
+        app = Starlette(routes=[Route("/test", endpoint)])
+        app.add_middleware(BearerAuthMiddleware, auth_token="test_secure_token_123")
+        client = TestClient(app)
+
+        response = client.get(
+            "/test",
+            headers={"Authorization": "Bearer test_secure_token_123"},
+        )
+        assert response.status_code == 200
+        assert response.text == "ok"
+
+    def test_bearer_auth_middleware_rejects_invalid_token(self) -> None:
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import BearerAuthMiddleware
+
+        async def endpoint(_request):
+            return PlainTextResponse("ok")
+
+        app = Starlette(routes=[Route("/test", endpoint)])
+        app.add_middleware(BearerAuthMiddleware, auth_token="test_secure_token_123")
+        client = TestClient(app)
+
+        response = client.get(
+            "/test",
+            headers={"Authorization": "Bearer wrong_token"},
+        )
+        assert response.status_code == 401
+

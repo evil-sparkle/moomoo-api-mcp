@@ -676,6 +676,7 @@ class TradeService:
         # Checked first, before the account lookup below: a denied order must
         # make no gateway request at all, not even to resolve an account.
         self.policy.check_write("place_order", trd_env)
+        self.policy.check_order_limits("place_order", qty=qty, price=price)
 
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
@@ -871,6 +872,7 @@ class TradeService:
             RuntimeError: If not connected, or the gateway rejects the order.
         """
         self.policy.check_write("place_combo_order", trd_env)
+        self.policy.check_order_limits("place_combo_order", qty=qty, price=price)
 
         if isinstance(acc_id, str):
             acc_id = int(acc_id)

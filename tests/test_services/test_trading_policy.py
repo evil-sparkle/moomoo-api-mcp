@@ -259,3 +259,61 @@ class TestPolicyErrorMessages:
             policy.check_unlock()
 
         assert "password does not change the mode" in str(excinfo.value)
+
+
+class TestTradingGuardrails:
+    """Configured limits protect against excessive order size and notional."""
+
+    def test_from_env_parses_valid_limits(self):
+        env = {
+            "MOOMOO_TRADING_MODE": "REAL",
+            "MOOMOO_MAX_ORDER_QTY": "500",
+            "MOOMOO_MAX_ORDER_NOTIONAL": "25000.50",
+        }
+        policy = TradingPolicy.from_env(env)
+        assert policy.mode is TradingMode.REAL
+        assert policy.max_order_qty == 500.0
+        assert policy.max_order_notional == 25000.50
+
+    def test_from_env_rejects_non_numeric_qty(self):
+        env = {"MOOMOO_MAX_ORDER_QTY": "invalid"}
+        with pytest.raises(TradingModeConfigError):
+            TradingPolicy.from_env(env)
+
+    def test_from_env_rejects_negative_notional(self):
+        env = {"MOOMOO_MAX_ORDER_NOTIONAL": "-100"}
+        with pytest.raises(TradingModeConfigError):
+            TradingPolicy.from_env(env)
+
+    def test_quantity_limit_enforced(self):
+        policy = TradingPolicy(TradingMode.REAL, max_order_qty=100)
+        # 100 is permitted
+        policy.check_order_limits("place_order", qty=100)
+        # 101 is rejected
+        with pytest.raises(TradingPolicyError, match="order quantity 101 exceeds"):
+            policy.check_order_limits("place_order", qty=101)
+
+    def test_notional_limit_enforced(self):
+        policy = TradingPolicy(TradingMode.REAL, max_order_notional=1000.0)
+        # 10 shares @ $100 = $1,000 -> allowed
+        policy.check_order_limits("place_order", qty=10, price=100.0)
+        # 11 shares @ $100 = $1,100 -> rejected
+        with pytest.raises(TradingPolicyError, match="estimated order notional"):
+            policy.check_order_limits("place_order", qty=11, price=100.0)
+
+    def test_service_place_order_blocked_by_quantity_guardrail(self, ctx):
+        policy = TradingPolicy(TradingMode.SIMULATE, max_order_qty=50)
+        service = _service(TradingMode.SIMULATE, ctx)
+        # Inject policy with guardrails
+        service.policy = policy
+
+        with pytest.raises(TradingPolicyError, match="order quantity 100 exceeds"):
+            service.place_order(
+                code="US.AAPL",
+                price=150.0,
+                qty=100,
+                trd_side="BUY",
+                trd_env="SIMULATE",
+            )
+        ctx.place_order.assert_not_called()
+

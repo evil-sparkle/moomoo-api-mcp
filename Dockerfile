@@ -15,9 +15,16 @@ ENV FASTMCP_PORT=8000
 COPY pyproject.toml README.md LICENSE ./
 RUN uv pip install --system --no-cache "."
 
-# Copy source tree and install project
+# Copy source tree and install project cleanly (non-editable in production image)
 COPY src/ ./src/
-RUN uv pip install --system --no-cache -e .
+RUN uv pip install --system --no-cache "."
+
+# Create unprivileged application user
+RUN groupadd -g 10001 appuser \
+    && useradd -u 10001 -g appuser -m -d /home/appuser appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
 

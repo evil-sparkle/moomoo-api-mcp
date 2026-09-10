@@ -7,14 +7,15 @@ services:
         OPEND_VERSION: ${OPEND_VERSION:-10.10.7008}
         OPEND_TAG: ${OPEND_TAG:-v10.10.7008-opend}
         OPEND_URL: ${OPEND_URL:-https://github.com/evil-sparkle/moomoo-api-mcp/releases/download/v10.10.7008-opend/moomoo_OpenD_10.10.7008_Ubuntu18.04.tar.gz}
+        OPEND_SHA256: ${OPEND_SHA256:-d38aad772b296f922e3b270119ca1abbadadc61cd3a45826e1b087a5b79069a5}
     platform: linux/amd64
     container_name: moomoo-opend
     restart: unless-stopped
     stdin_open: true
     tty: true
     volumes:
-      # Persistent volume preserving device authorization and session tokens
-      - ${OPEND_DATA_DIR:-opend-data}:/root/.com.moomoo.OpenD
+      # Persistent volume preserving device authorization and session tokens for non-root opend user
+      - ${OPEND_DATA_DIR:-opend-data}:/home/opend/.com.moomoo.OpenD
     working_dir: /opt/moomooOpenD
     environment:
       - LD_LIBRARY_PATH=/opt/moomooOpenD
@@ -62,6 +63,9 @@ services:
       - MOOMOO_SECURITY_FIRM=${MOOMOO_SECURITY_FIRM:-FUTUSG}
       - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
       - MOOMOO_TRADE_PASSWORD_MD5=${MOOMOO_TRADE_PASSWORD_MD5:-}
+      - MOOMOO_MAX_ORDER_QTY=${MOOMOO_MAX_ORDER_QTY:-}
+      - MOOMOO_MAX_ORDER_NOTIONAL=${MOOMOO_MAX_ORDER_NOTIONAL:-}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       - FASTMCP_HOST=0.0.0.0
       - FASTMCP_PORT=8000
       - MCP_TRANSPORT=${MCP_TRANSPORT:-sse}
