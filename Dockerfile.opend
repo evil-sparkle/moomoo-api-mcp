@@ -19,9 +19,10 @@ ARG OPEND_SHA256=d38aad772b296f922e3b270119ca1abbadadc61cd3a45826e1b087a5b79069a
 # Download OpenD from GitHub Release (with fallback to Moomoo CDN) and verify SHA256 integrity
 RUN echo "Fetching OpenD from ${OPEND_URL}..." \
     && mkdir -p /tmp/opend_unpack \
-    && if ! curl -fsSL "${OPEND_URL}" -o /tmp/opend.tar.gz; then \
+    && if ! curl -fL --retry 5 --retry-delay 3 --retry-all-errors -C - --connect-timeout 20 "${OPEND_URL}" -o /tmp/opend.tar.gz; then \
          echo "GitHub Release asset not reachable, falling back to Moomoo CDN..."; \
-         curl -fsSL "https://softwaredownload.futustatic.com/moomoo_OpenD_${OPEND_VERSION}_Ubuntu18.04.tar.gz" -o /tmp/opend.tar.gz; \
+         rm -f /tmp/opend.tar.gz; \
+         curl -fL --retry 5 --retry-delay 3 --retry-all-errors -C - --connect-timeout 20 "https://softwaredownload.futustatic.com/moomoo_OpenD_${OPEND_VERSION}_Ubuntu18.04.tar.gz" -o /tmp/opend.tar.gz; \
        fi \
     && echo "${OPEND_SHA256}  /tmp/opend.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/opend.tar.gz -C /tmp/opend_unpack \
