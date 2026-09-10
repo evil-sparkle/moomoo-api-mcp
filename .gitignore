@@ -104,3 +104,8 @@ moomoo_OpenD*
 
 # Git worktrees
 .worktrees/
+
+# Local deployment overlays & private runbooks
+docker-compose.*.yml
+!docker-compose.yml
+docs/deploy-*.md
