@@ -101,3 +101,6 @@ debug.log
 *.tar.gz
 *.7z
 moomoo_OpenD*
+
+# Git worktrees
+.worktrees/
