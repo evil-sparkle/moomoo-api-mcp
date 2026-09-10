@@ -2,9 +2,9 @@
 
 ## ADDED Requirements
 
-### Support placing orders
+### Requirement: Support Placing Orders
 
-The system must allow placing orders with `code`, `side`, `qty`, `price`, `order_type`, and `trd_env`.
+The system MUST allow placing orders with `code`, `side`, `qty`, `price`, `order_type`, and `trd_env`.
 Supported order types include: `NORMAL` (Limit), `MARKET`, `STOP`, `STOP_LIMIT`, `TRAILING_STOP`, `TRAILING_STOP_LIMIT`, `AUCTION`, `AUCTION_LIMIT`, etc.
 
 #### Scenario: Place Limit Buy Order

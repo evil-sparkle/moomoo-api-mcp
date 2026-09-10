@@ -1,10 +1,14 @@
-# Order Retrieval
+# order-retrieval Specification
 
-## ADDED Requirements
+## Purpose
 
-### Support Getting Order List
+Provides capabilities for retrieving active orders, order status histories, and executed trade deals.
 
-The system must allow retrieving a list of orders (today's orders) filtered by environment and account.
+## Requirements
+
+### Requirement: Support Getting Order List
+
+The system MUST allow retrieving a list of orders (today's orders) filtered by environment and account.
 
 #### Scenario: Get Today's Orders
 
@@ -12,9 +16,9 @@ Given the user wants to see their orders
 When they call `get_orders(trd_env='REAL')`
 Then the tool should return a list of orders including order ID, code, side, price, qty, status.
 
-### Support Getting Deal List
+### Requirement: Support Getting Deal List
 
-The system must allow retrieving a list of executed deals.
+The system MUST allow retrieving a list of executed deals.
 
 #### Scenario: Get Today's Deals
 

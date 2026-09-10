@@ -1,10 +1,14 @@
-# Order Modification and Cancellation
+# order-modification Specification
 
-## ADDED Requirements
+## Purpose
 
-### Support Modifying Orders
+Provides capabilities for modifying open orders (adjusting quantity, price, or limit parameters) and cancelling open orders.
 
-The system must allow modifying price, quantity, or other attributes of an open order.
+## Requirements
+
+### Requirement: Support Modifying Orders
+
+The system MUST allow modifying price, quantity, or other attributes of an open order.
 
 #### Scenario: Modify Order Price
 
@@ -13,9 +17,9 @@ When a user calls `modify_order(order_id='12345', op='NORMAL', price=355.0)`
 Then the order modification request should be sent to Moomoo
 And the tool should return success status.
 
-### Support Cancelling Orders
+### Requirement: Support Cancelling Orders
 
-The system must allow cancelling an open order.
+The system MUST allow cancelling an open order.
 
 #### Scenario: Cancel Order
 

@@ -1,8 +1,12 @@
-# Spec: Watchlist Management
+# watchlist-management Specification
 
-## ADDED Requirements
+## Purpose
 
-### R1: List Security Groups
+Provides tools for inspecting user-defined security groups and querying constituent stocks within specific watchlists.
+
+## Requirements
+
+### Requirement: List Security Groups
 
 The system MUST provide a tool to list all user-defined security groups.
 
@@ -12,7 +16,7 @@ The system MUST provide a tool to list all user-defined security groups.
 - **When** the `get_user_security_group` tool is called
 - **Then** it returns a list of groups, including their IDs and names
 
-### R2: List Group Securities
+### Requirement: List Group Securities
 
 The system MUST provide a tool to list all securities within a specific security group.
 
