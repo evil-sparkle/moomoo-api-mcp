@@ -227,11 +227,15 @@ The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local ga
 
 To enable **REAL account** access, you must securely provide your credentials.
 
-| Variable                | Description                                                | Example     |
-| ----------------------- | ---------------------------------------------------------- | ----------- |
-| `MOOMOO_TRADING_MODE`   | Which writes this server may issue. Default `READ_ONLY`.     | `SIMULATE`  |
-| `MOOMOO_TRADE_PASSWORD` | Your trading password (plain text)                           | `123456`    |
-| `MOOMOO_SECURITY_FIRM`  | Your broker region (e.g., FUTUSG, FUTUINC)                   | `FUTUSG`    |
+| Variable                    | Description                                                           | Example       |
+| --------------------------- | --------------------------------------------------------------------- | ------------- |
+| `MOOMOO_TRADING_MODE`       | Which writes this server may issue. Default `READ_ONLY`.              | `SIMULATE`    |
+| `MOOMOO_TRADE_PASSWORD`     | Your trading password (plain text)                                    | `123456`      |
+| `MOOMOO_TRADE_PASSWORD_MD5` | MD5 hash of 6-digit trade PIN (alternative to plain text)             | `e10adc...`   |
+| `MOOMOO_SECURITY_FIRM`      | Your broker region (e.g., FUTUSG, FUTUINC)                            | `FUTUSG`      |
+| `MCP_AUTH_TOKEN`            | Optional: Bearer token secret required for MCP SSE/HTTP clients       | `secret-token`|
+| `MOOMOO_MAX_ORDER_QTY`      | Optional: Safety cap on maximum quantity/shares per order             | `500`         |
+| `MOOMOO_MAX_ORDER_NOTIONAL` | Optional: Safety cap on maximum estimated notional ($) per order      | `25000`       |
 
 #### Trading mode
 
@@ -310,17 +314,24 @@ Add the server to your `claude_desktop_config.json`:
 
 #### Option C: Containerized Deployment (Docker SSE)
 
-When running the server via Docker Compose (`MCP_TRANSPORT=sse`), the server listens on `http://127.0.0.1:8000/sse`:
+When running the server via Docker Compose (`MCP_TRANSPORT=sse`), the server listens on `http://127.0.0.1:8000/sse`.
+
+If `MCP_AUTH_TOKEN` is configured, client requests must provide the bearer token in the `Authorization` header:
 
 ```json
 {
   "mcpServers": {
     "moomoo": {
-      "url": "http://127.0.0.1:8000/sse"
+      "url": "http://127.0.0.1:8000/sse",
+      "headers": {
+        "Authorization": "Bearer your_generated_auth_token"
+      }
     }
   }
 }
 ```
+
+> **Generating `MCP_AUTH_TOKEN`**: Generate a secure random token with `openssl rand -hex 32` and set it in your `.env` file (`MCP_AUTH_TOKEN=...`). If left unset, authentication is disabled (suitable for local-only STDIO).
 
 > **Security**: Never commit your password to version control. The `env` block in the config file remains local.
 
