@@ -327,7 +327,8 @@ async def get_market_snapshot(
     Returns comprehensive market data including price, volume, and fundamentals.
 
     Args:
-        codes: List of stock codes (up to 400). E.g., ['US.AAPL', 'US.TSLA', 'HK.00700'].
+        codes: List of stock codes (up to 400).
+            E.g., ['US.AAPL', 'US.TSLA', 'HK.00700'].
 
     Returns:
         List of snapshot dictionaries containing:

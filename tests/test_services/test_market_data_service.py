@@ -1,8 +1,9 @@
 """Unit tests for MarketDataService."""
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
 import pandas as pd
+import pytest
 
 from moomoo_mcp.services.market_data_service import MarketDataService
 
@@ -108,10 +109,26 @@ class TestGetHistoricalKlines:
 
     def test_get_historical_klines_success(self, market_data_service, mock_quote_ctx):
         """Test successful K-line retrieval."""
-        df = pd.DataFrame([
-            {"time_key": "2025-01-01 00:00:00", "open": 150.0, "close": 151.0, "high": 152.0, "low": 149.0, "volume": 1000},
-            {"time_key": "2025-01-02 00:00:00", "open": 151.0, "close": 152.0, "high": 153.0, "low": 150.0, "volume": 1100},
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "time_key": "2025-01-01 00:00:00",
+                    "open": 150.0,
+                    "close": 151.0,
+                    "high": 152.0,
+                    "low": 149.0,
+                    "volume": 1000,
+                },
+                {
+                    "time_key": "2025-01-02 00:00:00",
+                    "open": 151.0,
+                    "close": 152.0,
+                    "high": 153.0,
+                    "low": 150.0,
+                    "volume": 1100,
+                },
+            ]
+        )
         mock_quote_ctx.request_history_kline.return_value = (0, df, None)
 
         result = market_data_service.get_historical_klines("US.AAPL", ktype="K_DAY")
@@ -120,9 +137,13 @@ class TestGetHistoricalKlines:
         assert result[0]["open"] == 150.0
         assert result[1]["close"] == 152.0
 
-    def test_get_historical_klines_with_dates(self, market_data_service, mock_quote_ctx):
+    def test_get_historical_klines_with_dates(
+        self, market_data_service, mock_quote_ctx
+    ):
         """Test K-line retrieval with date range."""
-        df = pd.DataFrame([{"time_key": "2025-01-01 00:00:00", "open": 150.0, "close": 151.0}])
+        df = pd.DataFrame(
+            [{"time_key": "2025-01-01 00:00:00", "open": 150.0, "close": 151.0}]
+        )
         mock_quote_ctx.request_history_kline.return_value = (0, df, None)
 
         result = market_data_service.get_historical_klines(
@@ -142,7 +163,9 @@ class TestGetHistoricalKlines:
 
     def test_get_historical_klines_1m(self, market_data_service, mock_quote_ctx):
         """Test 1-minute K-line retrieval."""
-        df = pd.DataFrame([{"time_key": "2025-01-01 09:30:00", "open": 150.0, "close": 150.5}])
+        df = pd.DataFrame(
+            [{"time_key": "2025-01-01 09:30:00", "open": 150.0, "close": 150.5}]
+        )
         mock_quote_ctx.request_history_kline.return_value = (0, df, None)
 
         result = market_data_service.get_historical_klines("US.AAPL", ktype="K_1M")
@@ -173,9 +196,16 @@ class TestGetMarketSnapshot:
 
     def test_get_market_snapshot_success(self, market_data_service, mock_quote_ctx):
         """Test successful snapshot retrieval."""
-        df = pd.DataFrame([
-            {"code": "US.AAPL", "last_price": 150.0, "volume": 1000000, "pe_ratio": 25.0},
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "code": "US.AAPL",
+                    "last_price": 150.0,
+                    "volume": 1000000,
+                    "pe_ratio": 25.0,
+                },
+            ]
+        )
         mock_quote_ctx.get_market_snapshot.return_value = (0, df)
 
         result = market_data_service.get_market_snapshot(["US.AAPL"])
@@ -187,14 +217,18 @@ class TestGetMarketSnapshot:
 
     def test_get_market_snapshot_multiple(self, market_data_service, mock_quote_ctx):
         """Test snapshot for multiple stocks (watchlist scenario)."""
-        df = pd.DataFrame([
-            {"code": "US.AAPL", "last_price": 150.0},
-            {"code": "US.TSLA", "last_price": 250.0},
-            {"code": "US.GOOGL", "last_price": 140.0},
-        ])
+        df = pd.DataFrame(
+            [
+                {"code": "US.AAPL", "last_price": 150.0},
+                {"code": "US.TSLA", "last_price": 250.0},
+                {"code": "US.GOOGL", "last_price": 140.0},
+            ]
+        )
         mock_quote_ctx.get_market_snapshot.return_value = (0, df)
 
-        result = market_data_service.get_market_snapshot(["US.AAPL", "US.TSLA", "US.GOOGL"])
+        result = market_data_service.get_market_snapshot(
+            ["US.AAPL", "US.TSLA", "US.GOOGL"]
+        )
 
         assert len(result) == 3
 
@@ -251,7 +285,7 @@ class TestGetOrderBook:
         }
         mock_quote_ctx.get_order_book.return_value = (0, order_book_data)
 
-        result = market_data_service.get_order_book("US.AAPL", num=5)
+        market_data_service.get_order_book("US.AAPL", num=5)
 
         mock_quote_ctx.get_order_book.assert_called_once_with("US.AAPL", num=5)
 

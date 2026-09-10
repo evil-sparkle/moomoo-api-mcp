@@ -1,23 +1,25 @@
 """Unit tests for account tools."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
-from mcp.shared.context import RequestContext
 from mcp.server.fastmcp import Context
+from mcp.shared.context import RequestContext
+
 from moomoo_mcp.server import AppContext
 from moomoo_mcp.services.base_service import MoomooService
-from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.market_data_service import MarketDataService
+from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.tools.account import (
-    get_accounts,
     get_account_summary,
+    get_accounts,
     get_assets,
-    get_positions,
-    get_max_tradable,
-    get_margin_ratio,
     get_cash_flow,
-    unlock_trade,
+    get_margin_ratio,
+    get_max_tradable,
+    get_positions,
     lock_trade,
+    unlock_trade,
 )
 
 
@@ -113,8 +115,12 @@ async def test_get_account_summary(mcp_context, mock_trade_service):
     assert "positions" in result
     assert result["assets"]["cash"] == 10000.0
     assert len(result["positions"]) == 1
-    mock_trade_service.get_assets.assert_called_once_with(trd_env="SIMULATE", acc_id="123")
-    mock_trade_service.get_positions.assert_called_once_with(trd_env="SIMULATE", acc_id="123")
+    mock_trade_service.get_assets.assert_called_once_with(
+        trd_env="SIMULATE", acc_id="123"
+    )
+    mock_trade_service.get_positions.assert_called_once_with(
+        trd_env="SIMULATE", acc_id="123"
+    )
 
 
 @pytest.mark.asyncio

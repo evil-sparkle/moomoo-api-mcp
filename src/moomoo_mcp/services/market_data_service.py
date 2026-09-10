@@ -72,7 +72,8 @@ class MarketDataService:
     """Service to access market data via OpenQuoteContext.
 
     This service provides methods to retrieve market quotes, historical K-line data,
-    snapshots, and order book data. It uses the shared OpenQuoteContext from MoomooService.
+    snapshots, and order book data. It uses the shared OpenQuoteContext from
+    MoomooService.
     """
 
     def __init__(self, quote_ctx: OpenQuoteContext):
@@ -88,7 +89,8 @@ class MarketDataService:
 
         Args:
             codes: List of stock codes (e.g., ['US.AAPL', 'HK.00700']).
-            sub_types: List of subscription types (e.g., [SubType.QUOTE, SubType.ORDER_BOOK]).
+            sub_types: List of subscription types (e.g.,
+                [SubType.QUOTE, SubType.ORDER_BOOK]).
 
         Raises:
             RuntimeError: If subscription fails.
@@ -411,8 +413,8 @@ class MarketDataService:
     def get_order_book(self, code: str, num: int = 10) -> dict:
         """Get order book (market depth) for a stock.
 
-        This method automatically subscribes to the stock before fetching the order book.
-        Returns bid and ask price levels with volumes.
+        This method automatically subscribes to the stock before fetching
+        the order book. Returns bid and ask price levels with volumes.
 
         Args:
             code: Stock code (e.g., 'HK.00700').

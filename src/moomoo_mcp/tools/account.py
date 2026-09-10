@@ -65,7 +65,8 @@ async def get_account_summary(
         acc_id: Account ID. Must be obtained from get_accounts().
 
     Returns:
-        Dictionary with 'assets' (cash, market_val, etc.) and 'positions' (list of holdings).
+        Dictionary with 'assets' (cash, market_val, etc.) and 'positions'
+        (list of holdings).
 
         NOTE: acc_id, position_id, and combo_id are returned as decimal STRINGS
         throughout, including inside the nested positions. Balances and
@@ -80,7 +81,9 @@ async def get_account_summary(
         trade_service.get_positions, trd_env=trd_env, acc_id=acc_id
     )
 
-    await ctx.info(f"Retrieved summary for {trd_env} account: {len(positions)} positions")
+    await ctx.info(
+        f"Retrieved summary for {trd_env} account: {len(positions)} positions"
+    )
 
     return serialize_identifiers(
         {
@@ -175,7 +178,8 @@ async def get_positions(
             default flat view, since such positions are closed as a package.
 
     Returns:
-        List of position dictionaries with code, qty, cost_price, market_val, pl_ratio, etc.
+        List of position dictionaries with code, qty, cost_price, market_val,
+        pl_ratio, etc.
         With show_option_strategy_view=True, also position_id, combo_id,
         strategy_type, and position_type ('COMBINED' or 'LEG').
 
@@ -383,7 +387,8 @@ async def unlock_trade(
         password_md5 = os.environ.get("MOOMOO_TRADE_PASSWORD_MD5")
         await ctx.info("Attempting to unlock using environment variables")
     else:
-        # If one is empty but provided as "None" string, ensure it's None for the service call
+        # If one is empty but provided as "None" string, ensure it's None for
+        # the service call
         if pwd_is_empty:
             password = None
         if md5_is_empty:
@@ -395,7 +400,13 @@ async def unlock_trade(
         trade_service.unlock_trade, password=password, password_md5=password_md5
     )
     await ctx.info("Trade unlocked successfully - REAL account data is now accessible")
-    return {"status": "unlocked", "message": "You can now access REAL account data by setting trd_env='REAL' in other tools"}
+    return {
+        "status": "unlocked",
+        "message": (
+            "You can now access REAL account data by setting "
+            "trd_env='REAL' in other tools"
+        ),
+    }
 
 
 @mcp.tool()

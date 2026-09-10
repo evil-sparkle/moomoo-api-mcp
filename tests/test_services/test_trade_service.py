@@ -1,8 +1,9 @@
 """Unit tests for TradeService."""
 
-import pytest
 from unittest.mock import MagicMock, patch
+
 import pandas as pd
+import pytest
 
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
@@ -123,7 +124,7 @@ class TestGetPositions:
         df = pd.DataFrame([{"code": "US.AAPL", "qty": 100}])
         mock_trade_ctx.position_list_query.return_value = (0, df)
 
-        result = trade_service_with_mock.get_positions(code="US.AAPL")
+        trade_service_with_mock.get_positions(code="US.AAPL")
 
         mock_trade_ctx.position_list_query.assert_called_once()
         call_kwargs = mock_trade_ctx.position_list_query.call_args.kwargs
@@ -335,7 +336,9 @@ class TestPlaceOrder:
     def test_place_order_error(self, trade_service_with_mock, mock_trade_ctx):
         """Test order placement failure."""
         # Setup mock for smart account selection
-        acc_df = pd.DataFrame([{"acc_id": 123, "trd_env": "SIMULATE", "market_auth": ["US"]}])
+        acc_df = pd.DataFrame(
+            [{"acc_id": 123, "trd_env": "SIMULATE", "market_auth": ["US"]}]
+        )
         mock_trade_ctx.get_acc_list.return_value = (0, acc_df)
         mock_trade_ctx.place_order.return_value = (-1, "Order rejected")
 

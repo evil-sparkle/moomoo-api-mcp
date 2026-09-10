@@ -1,8 +1,9 @@
 """Unit tests for watchlist (user security) methods in MarketDataService."""
 
-import pytest
 from unittest.mock import MagicMock
+
 import pandas as pd
+import pytest
 
 from moomoo_mcp.services.market_data_service import MarketDataService
 

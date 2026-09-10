@@ -4,9 +4,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-
 from mcp.server.fastmcp import FastMCP
 from moomoo.common import ft_logger
+
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
@@ -24,7 +24,7 @@ if hasattr(ft_logger, "logger") and hasattr(ft_logger.logger, "console_logger"):
     # Clear existing handlers
     ft_logger.logger.console_logger.handlers = []
     # Replace the internal consoleHandler reference with a NullHandler.
-    # This ensures that when fontColor/info/error is called and it tries to re-add 
+    # This ensures that when fontColor/info/error is called and it tries to re-add
     # self.consoleHandler, it adds a harmless NullHandler instead of a StreamHandler.
     ft_logger.logger.consoleHandler = logging.NullHandler()
 
@@ -77,7 +77,10 @@ def _auto_unlock_trade(trade_service: TradeService) -> None:
             logger.info("Trade unlocked successfully. REAL account access enabled.")
         else:
             trade_service.unlock_trade(password_md5=password_md5)
-            logger.info("Trade unlocked successfully (via MD5). REAL account access enabled.")
+            logger.info(
+                "Trade unlocked successfully (via MD5). "
+                "REAL account access enabled."
+            )
     except RuntimeError as e:
         logger.warning(
             f"Failed to unlock trade: {e}. "
@@ -87,7 +90,7 @@ def _auto_unlock_trade(trade_service: TradeService) -> None:
 
 
 @asynccontextmanager
-async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
+async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage moomoo connections lifecycle."""
     # Read OpenD connection settings from environment
     opend_host = os.environ.get("MOOMOO_OPEND_HOST", "127.0.0.1")
@@ -100,7 +103,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     policy = TradingPolicy.from_env()
     logger.info(f"Trading mode: {policy.mode.value}")
 
-    # Read security firm from environment (e.g., FUTUSG for Singapore, FUTUSECURITIES for HK)
+    # Read security firm from env (e.g. FUTUSG for SG, FUTUSECURITIES for HK)
     security_firm = os.environ.get("MOOMOO_SECURITY_FIRM")
     if security_firm:
         logger.info(f"Using security firm: {security_firm}")
@@ -132,7 +135,9 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
             if policy.mode is TradingMode.READ_ONLY:
                 try:
                     trade_service.lock_trade()
-                    logger.info("Proactively locked trade gateway on startup in READ_ONLY mode.")
+                    logger.info(
+                        "Proactively locked trade gateway on startup in READ_ONLY mode."
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"Failed to proactively lock trade on OpenD: {exc}")
             elif policy.mode is TradingMode.REAL:
@@ -154,14 +159,15 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 mcp = FastMCP(
     "Moomoo Trading",
     lifespan=app_lifespan,
-    dependencies=["moomoo-api", "pandas"] 
+    dependencies=["moomoo-api", "pandas"]
 )
 
 # Import tools to register them
-import moomoo_mcp.tools.system
-import moomoo_mcp.tools.account
-import moomoo_mcp.tools.market_data
-import moomoo_mcp.tools.trading
+import moomoo_mcp.tools.account  # noqa: E402, F401
+import moomoo_mcp.tools.market_data  # noqa: E402, F401
+import moomoo_mcp.tools.system  # noqa: E402, F401
+import moomoo_mcp.tools.trading  # noqa: E402, F401
+
 
 def main():
     """Entry point for the MCP server."""

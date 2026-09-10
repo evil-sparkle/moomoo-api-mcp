@@ -11,10 +11,10 @@ from contextlib import contextmanager
 from typing import Any
 
 from moomoo import (
+    RET_OK,
     ComboLeg,
     OpenSecTradeContext,
     OrderStatus,
-    RET_OK,
     SecurityFirm,
     TrdMarket,
 )
@@ -149,14 +149,15 @@ class TradeService:
 
         converted = []
         for status_str in status_filter_list:
-            # OrderStatus has the attribute matching the string (e.g., OrderStatus.SUBMITTED)
+            # OrderStatus has attribute matching string (e.g. OrderStatus.SUBMITTED)
             status_enum = getattr(OrderStatus, status_str.upper(), None)
             if status_enum is None:
                 valid_statuses = [
-                    "UNSUBMITTED", "WAITING_SUBMIT", "SUBMITTING", "SUBMIT_FAILED",
-                    "SUBMITTED", "FILLED_PART", "FILLED_ALL",
-                    "CANCELLING_PART", "CANCELLING_ALL", "CANCELLED_PART", "CANCELLED_ALL",
-                    "REJECTED", "DISABLED", "DELETED", "FAILED", "NONE"
+                    "UNSUBMITTED", "WAITING_SUBMIT", "SUBMITTING",
+                    "SUBMIT_FAILED", "SUBMITTED", "FILLED_PART", "FILLED_ALL",
+                    "CANCELLING_PART", "CANCELLING_ALL", "CANCELLED_PART",
+                    "CANCELLED_ALL", "REJECTED", "DISABLED", "DELETED",
+                    "FAILED", "NONE",
                 ]
                 raise ValueError(
                     f"Invalid order status: '{status_str}'. "
@@ -180,19 +181,19 @@ class TradeService:
 
         Returns:
             Account ID if found, otherwise 0 (default).
-            
+
         Raises:
              ValueError: If no suitable account is found.
         """
         try:
             accounts = self.get_accounts()
         except Exception as e:
-            # Re-raise as a ValueError to ensure the caller knows account finding failed.
+            # Re-raise as ValueError to indicate account finding failed.
             raise ValueError("Failed to retrieve account list from the API.") from e
 
         # Filter by environment
         env_accounts = [acc for acc in accounts if acc.get("trd_env") == trd_env]
-        
+
         if not env_accounts:
             # Raise an error if no accounts are found for the environment.
             raise ValueError(f"No accounts found for the '{trd_env}' environment.")
@@ -200,7 +201,7 @@ class TradeService:
         # Moomoo market codes mapping to market_auth strings
         # Adjust as needed based on actual API values
         target_market = market.upper()
-        
+
         supported_markets = []
 
         for acc in env_accounts:
@@ -208,15 +209,15 @@ class TradeService:
             # Note: The field name might be 'trdmarket_auth' based on debug output
             market_auth = acc.get("market_auth") or acc.get("trdmarket_auth") or []
             supported_markets.extend(market_auth)
-            
+
             if target_market in market_auth:
                 return acc["acc_id"]
-        
+
         # If we are here, we found accounts for the env, but none support the market
-        unique_supported = sorted(list(set(supported_markets)))
+        unique_supported = sorted(set(supported_markets))
         raise ValueError(
-            f"No account found in {trd_env} environment that supports trading in {market}. "
-            f"Available accounts support: {unique_supported}"
+            f"No account found in {trd_env} environment that supports trading in "
+            f"{market}. Available accounts support: {unique_supported}"
         )
 
     def _open_trade_context(self) -> None:
@@ -687,7 +688,7 @@ class TradeService:
             market = self._get_market_from_code(code)
             if market:
                 # Try to find a specific account for this market
-                # If valid account found, use it. 
+                # If valid account found, use it.
                 # If none found that support the market, it will raise ValueError
                 acc_id = self._find_best_account(trd_env, market)
 
@@ -1009,7 +1010,8 @@ class TradeService:
 
         Args:
             order_id: Order ID to modify.
-            modify_order_op: Modification operation ('NORMAL', 'CANCEL', 'DISABLE', 'ENABLE', 'DELETE').
+            modify_order_op: Modification operation ('NORMAL', 'CANCEL',
+                'DISABLE', 'ENABLE', 'DELETE').
             qty: New quantity (optional).
             price: New price (optional).
             adjust_limit: Adjust limit percentage.
@@ -1107,9 +1109,10 @@ class TradeService:
         Args:
             code: Filter by stock code.
             status_filter_list: Filter by order statuses (as strings).
-                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING, SUBMIT_FAILED,
-                SUBMITTED, FILLED_PART, FILLED_ALL, CANCELLING_PART, CANCELLING_ALL,
-                CANCELLED_PART, CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
+                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING,
+                SUBMIT_FAILED, SUBMITTED, FILLED_PART, FILLED_ALL,
+                CANCELLING_PART, CANCELLING_ALL, CANCELLED_PART,
+                CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
             trd_env: Trading environment.
             acc_id: Account ID.
             refresh_cache: Whether to refresh cache.
@@ -1191,16 +1194,18 @@ class TradeService:
         Args:
             code: Filter by stock code.
             status_filter_list: Filter by order statuses (as strings).
-                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING, SUBMIT_FAILED,
-                SUBMITTED, FILLED_PART, FILLED_ALL, CANCELLING_PART, CANCELLING_ALL,
-                CANCELLED_PART, CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
+                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING,
+                SUBMIT_FAILED, SUBMITTED, FILLED_PART, FILLED_ALL,
+                CANCELLING_PART, CANCELLING_ALL, CANCELLED_PART,
+                CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
             start: Start date (YYYY-MM-DD).
             end: End date (YYYY-MM-DD).
             trd_env: Trading environment.
             acc_id: Account ID.
 
         Returns:
-            List of historical order dictionaries. Returns empty list if no orders found.
+            List of historical order dictionaries.
+            Returns empty list if no orders found.
         """
         if isinstance(acc_id, str):
             acc_id = int(acc_id)

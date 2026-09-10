@@ -56,8 +56,8 @@ async def place_order(
             - 'MARKET': Market order.
             - 'ABSOLUTE_LIMIT': Limit order (HK only, exact price match required).
             - 'AUCTION': Auction order (HK).
-            - 'AUCTION_LIMIT': Auction limit order (HK).
-            - 'SPECIAL_LIMIT': Special limit / Market IOC (HK, partial fill then cancel).
+            - 'SPECIAL_LIMIT': Special limit / Market IOC
+              (HK, partial fill then cancel).
             - 'SPECIAL_LIMIT_ALL': Special limit all-or-none (HK, fill all or cancel).
             - 'STOP': Stop market order.
             - 'STOP_LIMIT': Stop limit order.

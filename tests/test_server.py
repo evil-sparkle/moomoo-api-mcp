@@ -25,7 +25,9 @@ class TestAutoUnlockTrade:
         mock_trade_service.policy = REAL_POLICY
         mock_trade_service.get_accounts.return_value = [{"acc_id": 123}]
 
-        with patch.dict(os.environ, {"MOOMOO_TRADE_PASSWORD": "test_password"}, clear=False):
+        with patch.dict(
+            os.environ, {"MOOMOO_TRADE_PASSWORD": "test_password"}, clear=False
+        ):
             _auto_unlock_trade(mock_trade_service)
 
         # get_accounts must be called first to initialize account context
@@ -67,9 +69,9 @@ class TestAutoUnlockTrade:
         mock_trade_service.policy = REAL_POLICY
 
         # Create a clean environment without the password vars
-        clean_env = {k: v for k, v in os.environ.items() 
+        clean_env = {k: v for k, v in os.environ.items()
                      if k not in ("MOOMOO_TRADE_PASSWORD", "MOOMOO_TRADE_PASSWORD_MD5")}
-        
+
         with patch.dict(os.environ, clean_env, clear=True):
             _auto_unlock_trade(mock_trade_service)
 
@@ -81,7 +83,9 @@ class TestAutoUnlockTrade:
         mock_trade_service.policy = REAL_POLICY
         mock_trade_service.unlock_trade.side_effect = RuntimeError("Invalid password")
 
-        with patch.dict(os.environ, {"MOOMOO_TRADE_PASSWORD": "wrong_password"}, clear=False):
+        with patch.dict(
+            os.environ, {"MOOMOO_TRADE_PASSWORD": "wrong_password"}, clear=False
+        ):
             # Should not raise an exception
             _auto_unlock_trade(mock_trade_service)
 
