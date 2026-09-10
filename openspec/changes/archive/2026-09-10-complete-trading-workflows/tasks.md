@@ -60,7 +60,7 @@
 - [x] 4.5 If an authorized gateway is available, run read-only health, discovery,
   calendar, and preview smoke checks. Record unavailable broker features as limits.
   These checks must not submit a live order.
-- [ ] 4.6 Review each slice, select the release version, and archive approved
+- [x] 4.6 Review each slice, select the release version, and archive approved
   changes only after deployment in the dependency order described in the proposal.
 
 ## 5. Verification Record
