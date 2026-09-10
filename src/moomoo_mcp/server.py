@@ -159,7 +159,9 @@ async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
 mcp = FastMCP(
     "Moomoo Trading",
     lifespan=app_lifespan,
-    dependencies=["moomoo-api", "pandas"]
+    dependencies=["moomoo-api", "pandas"],
+    host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
+    port=int(os.environ.get("FASTMCP_PORT", "8000")),
 )
 
 # Import tools to register them
