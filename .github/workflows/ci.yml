@@ -41,23 +41,55 @@ jobs:
     outputs:
       moomoo-api-mcp: ${{ steps.filter.outputs.moomoo-api-mcp }}
       moomoo-opend: ${{ steps.filter.outputs.moomoo-opend }}
+      baseline: ${{ steps.filter.outputs.baseline }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # so `git diff HEAD~1..HEAD` works; on a brand-new
-                           # repo with one commit, HEAD~1 is the empty tree
-                           # and every tracked file appears in the diff
+          fetch-depth: 0   # so full commit history is available for baseline comparison
 
       - id: filter
         name: Compute per-image change map
         run: |
           current="${GITHUB_SHA:-HEAD}"
-          if git rev-parse --quiet --verify "${current}^" >/dev/null 2>&1; then
-            prev="${current}^"
-          else
-            prev="$(git hash-object -t tree --stdin < /dev/null)"
+          before="${{ github.event.before }}"
+          event_name="${GITHUB_EVENT_NAME}"
+
+          # Detect comparison baseline: support multi-commit pushes and PRs
+          # Require ^{commit} to ensure git verifies the object exists in the repo
+          is_valid_base=false
+          if [ "${event_name}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            if [ -n "${base}" ] && git rev-parse --quiet --verify "${base}^{commit}" >/dev/null 2>&1; then
+              prev="$(git rev-parse --verify "${base}^{commit}")"
+              is_valid_base=true
+            fi
+          elif [ -n "${before}" ] && [ "${before}" != "0000000000000000000000000000000000000000" ]; then
+            if git rev-parse --quiet --verify "${before}^{commit}" >/dev/null 2>&1; then
+              prev="$(git rev-parse --verify "${before}^{commit}")"
+              is_valid_base=true
+            fi
           fi
-          mapfile -t changed < <(git diff --name-only "${prev}" "${current}")
+
+          # If push/PR baseline cannot be established, force full build for both images
+          if [ "${is_valid_base}" = "false" ]; then
+            echo "No valid baseline commit available; triggering full build for both images."
+            echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
+            echo "moomoo-opend=true" >> "$GITHUB_OUTPUT"
+            echo "baseline=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Propagate git diff failures instead of silently continuing
+          if ! changed_raw=$(git diff --name-only "${prev}" "${current}"); then
+            echo "git diff failed between ${prev} and ${current}; triggering full build."
+            echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
+            echo "moomoo-opend=true" >> "$GITHUB_OUTPUT"
+            echo "baseline=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mapfile -t changed <<< "${changed_raw}"
+          echo "baseline=${prev}" >> "$GITHUB_OUTPUT"
 
           # Declare which paths each image rebuilds on. The "needed" set has
           # to include every Dockerfile input. OpenD's image has *no* repo
@@ -87,20 +119,13 @@ jobs:
               opend=true
               continue
             fi
-            # Match `path` against any entry in either `needed_*` list, with
-            # the directory-shape handling explicit: an entry ending in `/`
-            # matches exact-prefix via shell parameter expansion; otherwise
-            # it's a literal equality test. No regex, no globs.
+            # Match path against needed_* entries without regex
             matched=""
             for needed in "${needed_mcp[@]}" "${needed_opend[@]}"; do
               ends_in_slash=false
               [ "${needed}" != "${needed%/}" ] && ends_in_slash=true
               if [ "${ends_in_slash}" = "true" ]; then
                 prefix="${needed%/}/"
-                # prefix-match: stripping `prefix` from the front of `path`
-                # returns a different string iff `path` began with `prefix`.
-                # Note this also fires for the directory itself (e.g. "src/"
-                # matches when path is exactly "src/"), which is what we want.
                 [ "${path#"${prefix}"}" = "${path}" ] && continue
               else
                 [ "${path}" != "${needed}" ] && continue
@@ -111,8 +136,6 @@ jobs:
             if [ -z "${matched}" ]; then
               continue
             fi
-            # Bucket: which image owns this `needed` entry? Linear search
-            # is fine — each list has fewer than ten items.
             for n in "${needed_mcp[@]}"; do
               if [ "${matched}" = "${n}" ]; then
                 mcp=true
@@ -127,8 +150,8 @@ jobs:
             done
           done
 
-          # Honor the contract: PRs / feature branches / first-push always
-          # build both. Only main pushes follow the filter.
+          # Honor the contract: PRs / feature branches always build both.
+          # Only main pushes follow the filter.
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
             || [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             mcp=true
@@ -158,12 +181,11 @@ jobs:
             dockerfile: ./Dockerfile
           - image: moomoo-opend
             dockerfile: ./Dockerfile.opend
-    # Skip the matrix entry when `changes` says nothing relevant moved. GHA
-    # counts a skipped job as "successful" for `needs` purposes, so the
-    # calling workflow sees a green build either way.
-    if: needs.changes.outputs[matrix.image] == 'true'
     steps:
       - uses: actions/checkout@v4
+
+      - name: Fetch git tags
+        run: git fetch --tags --force
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -180,38 +202,116 @@ jobs:
         if: env.PUSH == 'true'
         uses: aws-actions/amazon-ecr-login@v2
 
+      # When an image is unchanged on a main push, do not spend minutes rebuilding it.
+      # Instead, tag the existing ECR image from the baseline commit with the new commit
+      # tags so the deploy wrapper always finds both images at the exact same commit SHA.
+      - name: Retag unchanged image in ECR
+        id: retag
+        if: env.PUSH == 'true' && needs.changes.outputs[matrix.image] != 'true'
+        run: |
+          deploy_tag="${GITHUB_SHA::7}"
+          audit_tag="commit-${GITHUB_SHA}"
+          repo="${{ matrix.image }}"
+          region="${{ vars.AWS_REGION }}"
+          baseline="${{ needs.changes.outputs.baseline }}"
+
+          # If changes job had no verified baseline commit, must rebuild from source.
+          if [ -z "${baseline}" ]; then
+            echo "No baseline commit available to retag from. Building from source."
+            echo "rebuild_needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          baseline_sha="${baseline}"
+          baseline_short="${baseline:0:7}"
+          echo "Querying ECR for baseline commit image (${repo}:${baseline_short} or ${repo}:${baseline_sha})..."
+
+          target_manifest=""
+          target_digest=""
+          for candidate_tag in "${baseline_short}" "${baseline_sha}" "commit-${baseline_sha}"; do
+            d=$(aws ecr batch-get-image \
+              --region "${region}" \
+              --repository-name "${repo}" \
+              --image-ids "imageTag=${candidate_tag}" \
+              --query 'images[0].imageId.imageDigest' \
+              --output text 2>/dev/null || true)
+
+            if [ -n "${d}" ] && [ "${d}" != "None" ]; then
+              m=$(aws ecr batch-get-image \
+                --region "${region}" \
+                --repository-name "${repo}" \
+                --image-ids "imageTag=${candidate_tag}" \
+                --query 'images[0].imageManifest' \
+                --output text 2>/dev/null || true)
+
+              if [ -n "${m}" ] && [ "${m}" != "None" ]; then
+                target_digest="${d}"
+                target_manifest="${m}"
+                echo "Found baseline image in ECR under tag '${candidate_tag}' with digest '${target_digest}'."
+                break
+              fi
+            fi
+          done
+
+          if [ -z "${target_manifest}" ] || [ "${target_manifest}" = "None" ]; then
+            echo "No baseline image found in ECR for ${repo} at commit ${baseline}. Building from source."
+            echo "rebuild_needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Retagging baseline image with new commit tags: ${deploy_tag}, ${audit_tag}"
+          tags_to_apply=("${deploy_tag}" "${audit_tag}")
+
+          while IFS= read -r tag; do
+            if [ "${tag}" != "${tag#v}" ]; then
+              tags_to_apply+=("${tag}")
+            fi
+          done < <(git tag --points-at HEAD)
+
+          for t in "${tags_to_apply[@]}"; do
+            echo "Applying tag '${t}' to ${repo}..."
+            if ! err_msg=$(aws ecr put-image \
+              --region "${region}" \
+              --repository-name "${repo}" \
+              --image-tag "${t}" \
+              --image-manifest "${target_manifest}" 2>&1); then
+
+              # If put-image failed, verify if the tag already points to the exact same digest
+              existing_digest=$(aws ecr batch-get-image \
+                --region "${region}" \
+                --repository-name "${repo}" \
+                --image-ids "imageTag=${t}" \
+                --query 'images[0].imageId.imageDigest' \
+                --output text 2>/dev/null || true)
+
+              if [ -n "${existing_digest}" ] && [ "${existing_digest}" = "${target_digest}" ]; then
+                echo "Tag '${t}' already exists pointing to matching digest ${target_digest} (idempotent)."
+              else
+                echo "Error: Failed to apply tag '${t}' to ${repo}: ${err_msg}" >&2
+                exit 1
+              fi
+            fi
+          done
+
+          echo "rebuild_needed=false" >> "$GITHUB_OUTPUT"
+
       - name: Resolve image tags
         id: tags
+        if: needs.changes.outputs[matrix.image] == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
         run: |
-          # Two tags per push:
-          #   :latest                  — what the VPS pulls (mutable, single
-          #                              image at any moment)
-          #   :commit-<full-SHA>       — audit anchor. Lives under the
-          #                              'commit-' prefix so the lifecycle
-          #                              policy can keep-last-3 without
-          #                              touching releases ('v*').
-          # When HEAD carries an annotated `v*` tag (the project's release
-          # convention), that tag is also pushed. The lifecycle policy keeps
-          # every 'v*' image forever; the ECR prefix filter targets 'commit-*'
-          # and 'v*' specifically, leaving :latest untouched (single mutable
-          # image, no accumulation to bound).
+          deploy_tag="${GITHUB_SHA::7}"
           audit_tag="commit-${GITHUB_SHA}"
 
           if [ "${PUSH}" = "true" ]; then
             image="${{ steps.ecr.outputs.registry }}/${{ matrix.image }}"
             release_tags=""
-            # No regex: pass every tag at HEAD through; anything starting
-            # with 'v' is a release tag by project convention, anything else
-            # is dropped at push time by the ECR action's imageTag sanity check.
             while IFS= read -r tag; do
               if [ "${tag}" != "${tag#v}" ]; then
                 release_tags="${release_tags:+${release_tags},}${image}:${tag}"
               fi
             done < <(git tag --points-at HEAD)
-            # Compose the tag list. Order: full-SHA, latest, audit-tag,
-            # then any release tags. Each rule in the lifecycle policy only
-            # sees the prefix it cares about.
-            tags="${image}:${GITHUB_SHA},${image}:latest,${image}:${audit_tag}"
+
+            tags="${image}:${GITHUB_SHA},${image}:latest,${image}:${deploy_tag},${image}:${audit_tag}"
             if [ -n "${release_tags}" ]; then
               tags="${tags},${release_tags}"
             fi
@@ -221,12 +321,12 @@ jobs:
           fi
 
       - name: Build and push
+        if: needs.changes.outputs[matrix.image] == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: ${{ env.PUSH == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
-          # Keeps the OpenD layer (a ~470MB download) out of most builds.
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}

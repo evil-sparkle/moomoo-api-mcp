@@ -54,7 +54,8 @@ separately once its runtime configuration is ready.
 
 The remote server needs its own rootless Docker installation. Check its
 `docker info` output for `name=rootless` using the deployment user's context.
-Then use the same Compose file and `docker compose build` on that server.
+For CI-built ECR images, follow [the VPS deployment runbook](deploy-vps.md).
+It pulls both images using the rootless context; no build on the VPS is needed.
 Local images are not automatically copied to the remote server.
 
 Rootless mode controls the daemon's host privileges. UID 0 inside a container

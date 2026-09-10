@@ -367,7 +367,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/fd/90/41bac41995adf4068
 
 [[package]]
 name = "moomoo-api-mcp"
-version = "0.1.8"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

@@ -141,8 +141,10 @@ moomoo-api-mcp
    This project follows [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`). To publish a new version:
    ```bash
    # 1. Bump the version in pyproject.toml (e.g. from 0.1.8 to 0.2.0)
-   # 2. Commit the version bump
-   git commit -am "chore: release v0.2.0"
+   uv lock
+   # 2. Stage the version files and any intended release changes, including new files
+   git add pyproject.toml uv.lock
+   git commit -m "chore: release v0.2.0"
 
    # 3. Create an annotated git tag
    git tag -a v0.2.0 -m "Release v0.2.0: Multi-leg options, market discovery, trading policy, container deployment"
