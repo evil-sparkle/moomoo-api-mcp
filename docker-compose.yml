@@ -27,7 +27,7 @@ services:
       - -c
       - |
         has_token=0
-        if [ -d "/root/.com.moomoo.OpenD/F3CNN" ] && [ -n "$$(find /root/.com.moomoo.OpenD/F3CNN -type f 2>/dev/null)" ]; then
+        if [ -d "/root/.com.moomoo.OpenD/F3CNN/UserAccMap" ] || [ -n "$$(ls -A /root/.com.moomoo.OpenD/F3CNN/ftnet/auth_acc_list 2>/dev/null)" ]; then
           has_token=1
         fi
 
