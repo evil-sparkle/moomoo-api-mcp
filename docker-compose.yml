@@ -20,11 +20,11 @@ services:
       - -c
       - |
         if [ -n "$$MOOMOO_LOGIN_PWD_MD5" ]; then
-          exec ./OpenD -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+          exec ./OpenD -api_ip=0.0.0.0 -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
         elif [ "$$MOOMOO_LOGIN_BY_REMEMBER" = "1" ] && [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
-          exec ./OpenD -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_by_remember=1 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+          exec ./OpenD -api_ip=0.0.0.0 -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_by_remember=1 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
         else
-          exec ./OpenD -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+          exec ./OpenD -api_ip=0.0.0.0 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
         fi
     networks:
       - trading-net
