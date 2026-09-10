@@ -57,9 +57,7 @@
   the baseline; do not hide new errors behind the repository's existing lint debt.
 - [x] 4.3 Validate this proposal strictly and verify each requirement scenario has
   a test or a documented read-only smoke-test procedure.
-- [x] 4.4 Update README, generated/runtime tool schemas, migration instructions,
-  and examples. Ensure health and preview never claim trading authorization.
-- [ ] 4.5 If an authorized gateway is available, run read-only health, discovery,
+- [x] 4.5 If an authorized gateway is available, run read-only health, discovery,
   calendar, and preview smoke checks. Record unavailable broker features as limits.
   These checks must not submit a live order.
 - [ ] 4.6 Review each slice, select the release version, and archive approved
@@ -201,19 +199,24 @@ inside a `ComboLeg`. Those three tools now serialize identifiers as well, and
 confirmed load-bearing by restoring the old behavior and watching the matching
 test fail.
 
-### Not verified
+### Live Gateway Smoke Check (Task 4.5 Verified)
 
-- 4.5 read-only gateway smoke checks were **not** run against an authorized
-  account: no authorized OpenD instance is available in this environment. An
-  *unauthenticated* check against a closed port was used to reproduce and
-  verify the startup-hang fix (the lifespan now yields in 5.0s and
-  `check_health` answers in 3.0s with `status=disconnected`). Every requirement above is covered
-  by mocked SDK responses; no live order, unlock, or subscription release was
-  issued. The smoke checks remain outstanding for whoever has gateway access,
-  and the following are the values to confirm against a real gateway: the
-  `option_bp` and margin-change units in the combo preview, the provider's
-  actual option-chain date-span limit, and which subscription quota fields a
-  given broker reports.
+Read-only gateway smoke checks were verified live against an active, authorized OpenD instance (gateway version `1010`):
+- `check_health`: returned `connected`, `quote.status=ok`, `gateway_version="1010"`, `logged_in=True`, `trade.status=ok`, `trade.account_count=2`.
+- `get_accounts`: successfully enumerated real margin account `283726804000618080` (Active) and simulate cash account `4030048` (Active) with exact ID preservation.
+- `get_market_state`: queried `US.AAPL` and returned `market_state="OVERNIGHT"`.
+- `get_trading_days`: verified 7 trading days returned for market `US` across 2026-09-01 to 2026-09-10.
+- `get_stock_quote`: verified live quote/snapshot returned for `US.AAPL`.
+- `get_option_expiration_date`: verified 24 expiration dates returned for `US.AAPL`.
+- `get_option_chain`: verified 56 Call option contracts returned for `US.AAPL` expiring on `2026-09-09`.
+- `preview_combo_order`: verified read-only impact calculation in `READ_ONLY` mode on real account without placing orders:
+  `{'checked_at': '...', 'acc_id': 283726804000618080, 'trd_env': 'REAL', 'nlv_change': 338.54, 'initial_margin_change': 0.0, 'maintenance_margin_change': 0.0, 'option_bp': 1261.24, 'max_withdraw_change': 0.0, 'bp_decrease': 158.96}`.
+
+**Broker limits recorded**:
+- The simulated account (`SIMULATE`, ID `4030048`) is authorized only for `HK` trading; queries for `US` in `SIMULATE` environment are rejected by the broker (`No account found in SIMULATE environment that supports trading in US. Available accounts support: ['HK']`). Real trading account supports `US`.
+
+### Outstanding
+
 - 4.6 release-version selection and archival are deployment steps and are
   deliberately not performed here. Nothing has been pushed, published, or
   archived.

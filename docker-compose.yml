@@ -6,8 +6,8 @@ services:
     volumes:
       # Mount the OpenD directory containing binary and libraries
       - ${OPEND_DIR:-../moomooOpenD}:/opt/moomooOpenD
-      # Persistent named volume preserving device authorization and AppData
-      - opend-data:/root/.com.moomoo.OpenD
+      # Persistent volume preserving device authorization and session tokens
+      - ${OPEND_DATA_DIR:-opend-data}:/root/.com.moomoo.OpenD
     working_dir: /opt/moomooOpenD
     environment:
       - LD_LIBRARY_PATH=/opt/moomooOpenD
