@@ -27,8 +27,9 @@ services:
       - /bin/sh
       - -c
       - |
+        DATA_DIR="$${HOME:-/home/opend}/.com.moomoo.OpenD"
         has_token=0
-        if [ -d "/root/.com.moomoo.OpenD/F3CNN/UserAccMap" ] || [ -n "$$(ls -A /root/.com.moomoo.OpenD/F3CNN/ftnet/auth_acc_list 2>/dev/null)" ]; then
+        if [ -d "$$DATA_DIR/F3CNN/UserAccMap" ] || [ -n "$$(ls -A $$DATA_DIR/F3CNN/ftnet/auth_acc_list 2>/dev/null)" ] || [ -d "/root/.com.moomoo.OpenD/F3CNN/UserAccMap" ]; then
           has_token=1
         fi
 
