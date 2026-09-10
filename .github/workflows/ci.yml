@@ -31,10 +31,117 @@ jobs:
         run: |
           uv run pytest
 
+  # Decide which images actually need to be rebuilt for this push. The result
+  # is consumed by docker-build per matrix entry via needs.changes.outputs.*.
+  # PRs and feature-branch pushes set all entries to true (always build, to
+  # catch Dockerfile regressions) — only main pushes honor the filter.
+  changes:
+    name: Detect changed image paths
+    runs-on: ubuntu-latest
+    outputs:
+      moomoo-api-mcp: ${{ steps.filter.outputs.moomoo-api-mcp }}
+      moomoo-opend: ${{ steps.filter.outputs.moomoo-opend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # so `git diff HEAD~1..HEAD` works; on a brand-new
+                           # repo with one commit, HEAD~1 is the empty tree
+                           # and every tracked file appears in the diff
+
+      - id: filter
+        name: Compute per-image change map
+        run: |
+          current="${GITHUB_SHA:-HEAD}"
+          if git rev-parse --quiet --verify "${current}^" >/dev/null 2>&1; then
+            prev="${current}^"
+          else
+            prev="$(git hash-object -t tree --stdin < /dev/null)"
+          fi
+          mapfile -t changed < <(git diff --name-only "${prev}" "${current}")
+
+          # Declare which paths each image rebuilds on. The "needed" set has
+          # to include every Dockerfile input. OpenD's image has *no* repo
+          # files — only network-fetched release assets — so its only relevant
+          # keys are Dockerfiles themselves and the workflow.
+          needed_mcp=(
+            "Dockerfile"
+            "pyproject.toml"
+            "README.md"
+            "LICENSE"
+            "src/"
+          )
+          needed_opend=(
+            "Dockerfile.opend"
+          )
+
+          mcp=false
+          opend=false
+          for path in "${changed[@]}"; do
+            # Workflow + overlay changes always force both — never quietly
+            # skip what the deploy path depends on.
+            if [ "${path}" = ".github/workflows/ci.yml" ] \
+              || [ "${path}" = ".dockerignore" ] \
+              || [ "${path}" = "docker-compose.yml" ] \
+              || [ "${path}" = "docker-compose.prod.yml" ]; then
+              mcp=true
+              opend=true
+              continue
+            fi
+            # Match `path` against any entry in either `needed_*` list, with
+            # the directory-shape handling explicit: an entry ending in `/`
+            # matches exact-prefix via shell parameter expansion; otherwise
+            # it's a literal equality test. No regex, no globs.
+            matched=""
+            for needed in "${needed_mcp[@]}" "${needed_opend[@]}"; do
+              ends_in_slash=false
+              [ "${needed}" != "${needed%/}" ] && ends_in_slash=true
+              if [ "${ends_in_slash}" = "true" ]; then
+                prefix="${needed%/}/"
+                # prefix-match: stripping `prefix` from the front of `path`
+                # returns a different string iff `path` began with `prefix`.
+                # Note this also fires for the directory itself (e.g. "src/"
+                # matches when path is exactly "src/"), which is what we want.
+                [ "${path#"${prefix}"}" = "${path}" ] && continue
+              else
+                [ "${path}" != "${needed}" ] && continue
+              fi
+              matched="${needed}"
+              break
+            done
+            if [ -z "${matched}" ]; then
+              continue
+            fi
+            # Bucket: which image owns this `needed` entry? Linear search
+            # is fine — each list has fewer than ten items.
+            for n in "${needed_mcp[@]}"; do
+              if [ "${matched}" = "${n}" ]; then
+                mcp=true
+                break
+              fi
+            done
+            for n in "${needed_opend[@]}"; do
+              if [ "${matched}" = "${n}" ]; then
+                opend=true
+                break
+              fi
+            done
+          done
+
+          # Honor the contract: PRs / feature branches / first-push always
+          # build both. Only main pushes follow the filter.
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
+            || [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            mcp=true
+            opend=true
+          fi
+
+          echo "moomoo-api-mcp=${mcp}" >> "$GITHUB_OUTPUT"
+          echo "moomoo-opend=${opend}" >> "$GITHUB_OUTPUT"
+
   docker-build:
     name: Build ${{ matrix.image }}
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, changes]
     permissions:
       contents: read
       id-token: write   # required to mint the OIDC token for AWS
@@ -51,6 +158,10 @@ jobs:
             dockerfile: ./Dockerfile
           - image: moomoo-opend
             dockerfile: ./Dockerfile.opend
+    # Skip the matrix entry when `changes` says nothing relevant moved. GHA
+    # counts a skipped job as "successful" for `needs` purposes, so the
+    # calling workflow sees a green build either way.
+    if: needs.changes.outputs[matrix.image] == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -72,9 +183,39 @@ jobs:
       - name: Resolve image tags
         id: tags
         run: |
+          # Two tags per push:
+          #   :latest                  — what the VPS pulls (mutable, single
+          #                              image at any moment)
+          #   :commit-<full-SHA>       — audit anchor. Lives under the
+          #                              'commit-' prefix so the lifecycle
+          #                              policy can keep-last-3 without
+          #                              touching releases ('v*').
+          # When HEAD carries an annotated `v*` tag (the project's release
+          # convention), that tag is also pushed. The lifecycle policy keeps
+          # every 'v*' image forever; the ECR prefix filter targets 'commit-*'
+          # and 'v*' specifically, leaving :latest untouched (single mutable
+          # image, no accumulation to bound).
+          audit_tag="commit-${GITHUB_SHA}"
+
           if [ "${PUSH}" = "true" ]; then
             image="${{ steps.ecr.outputs.registry }}/${{ matrix.image }}"
-            echo "tags=${image}:${GITHUB_SHA},${image}:latest" >> "$GITHUB_OUTPUT"
+            release_tags=""
+            # No regex: pass every tag at HEAD through; anything starting
+            # with 'v' is a release tag by project convention, anything else
+            # is dropped at push time by the ECR action's imageTag sanity check.
+            while IFS= read -r tag; do
+              if [ "${tag}" != "${tag#v}" ]; then
+                release_tags="${release_tags:+${release_tags},}${image}:${tag}"
+              fi
+            done < <(git tag --points-at HEAD)
+            # Compose the tag list. Order: full-SHA, latest, audit-tag,
+            # then any release tags. Each rule in the lifecycle policy only
+            # sees the prefix it cares about.
+            tags="${image}:${GITHUB_SHA},${image}:latest,${image}:${audit_tag}"
+            if [ -n "${release_tags}" ]; then
+              tags="${tags},${release_tags}"
+            fi
+            echo "tags=${tags}" >> "$GITHUB_OUTPUT"
           else
             echo "tags=${{ matrix.image }}:test" >> "$GITHUB_OUTPUT"
           fi

@@ -108,4 +108,7 @@ moomoo_OpenD*
 # Local deployment overlays & private runbooks
 docker-compose.*.yml
 !docker-compose.yml
+!docker-compose.prod.yml
 docs/deploy-*.md
+!docs/deploy-vps.md
+.deploy.env

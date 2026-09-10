@@ -1,0 +1,8 @@
+# Production images published by CI. Use scripts/compose-prod.sh.
+services:
+  opend:
+    build: !reset null
+    image: "${ECR_REGISTRY:?Run scripts/deploy.sh --prepare first}/moomoo-opend:${IMAGE_TAG:?Run scripts/deploy.sh --prepare first}"
+  moomoo-mcp:
+    build: !reset null
+    image: "${ECR_REGISTRY:?Run scripts/deploy.sh --prepare first}/moomoo-api-mcp:${IMAGE_TAG:?Run scripts/deploy.sh --prepare first}"
