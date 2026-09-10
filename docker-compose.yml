@@ -1,0 +1,61 @@
+services:
+  opend:
+    build:
+      context: .
+      dockerfile: Dockerfile.opend
+      args:
+        OPEND_VERSION: ${OPEND_VERSION:-10.10.7008}
+        OPEND_TAG: ${OPEND_TAG:-v10.10.7008-opend}
+        OPEND_URL: ${OPEND_URL:-https://github.com/evil-sparkle/moomoo-api-mcp/releases/download/v10.10.7008-opend/moomoo_OpenD_10.10.7008_Ubuntu18.04.tar.gz}
+    platform: linux/amd64
+    container_name: moomoo-opend
+    restart: unless-stopped
+    volumes:
+      # Persistent volume preserving device authorization and session tokens
+      - ${OPEND_DATA_DIR:-opend-data}:/root/.com.moomoo.OpenD
+    working_dir: /opt/moomooOpenD
+    environment:
+      - LD_LIBRARY_PATH=/opt/moomooOpenD
+      - MOOMOO_LOGIN_ACCOUNT=${MOOMOO_LOGIN_ACCOUNT:-}
+      - MOOMOO_LOGIN_PWD_MD5=${MOOMOO_LOGIN_PWD_MD5:-}
+      - MOOMOO_LOGIN_BY_REMEMBER=${MOOMOO_LOGIN_BY_REMEMBER:-1}
+      - MOOMOO_LOGIN_REGION=${MOOMOO_LOGIN_REGION:-sg}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -n "$$MOOMOO_LOGIN_PWD_MD5" ]; then
+          exec ./OpenD -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+        elif [ "$$MOOMOO_LOGIN_BY_REMEMBER" = "1" ] && [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
+          exec ./OpenD -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_by_remember=1 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+        else
+          exec ./OpenD -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+        fi
+    ports:
+      # Bind MCP SSE endpoint strictly to localhost on host machine
+      # (Published via opend because moomoo-mcp shares its network namespace)
+      - "127.0.0.1:8000:8000"
+    # Port 11111 is NOT mapped to the host; only accessible to moomoo-mcp via localhost.
+
+  moomoo-mcp:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: moomoo-api-mcp
+    restart: unless-stopped
+    network_mode: "service:opend"
+    environment:
+      - MOOMOO_OPEND_HOST=127.0.0.1
+      - MOOMOO_OPEND_PORT=11111
+      - MOOMOO_SECURITY_FIRM=${MOOMOO_SECURITY_FIRM:-FUTUSG}
+      - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
+      - MOOMOO_TRADE_PASSWORD_MD5=${MOOMOO_TRADE_PASSWORD_MD5:-}
+      - FASTMCP_HOST=0.0.0.0
+      - FASTMCP_PORT=8000
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-sse}
+    depends_on:
+      - opend
+
+volumes:
+  opend-data:

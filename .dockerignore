@@ -1,0 +1,11 @@
+# Only send files required by the Dockerfiles.
+*
+!Dockerfile
+!Dockerfile.opend
+!pyproject.toml
+!README.md
+!LICENSE
+!src/
+!src/**
+**/__pycache__/
+**/*.pyc

@@ -1,13 +1,17 @@
 """Trading tools for order management operations."""
 
+from typing import Any
+
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.tools.offload import run_blocking
+from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
 @mcp.tool()
-def place_order(
+async def place_order(
     ctx: Context[ServerSession, AppContext],
     code: str,
     price: float,
@@ -34,6 +38,12 @@ def place_order(
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account as per user preference.
     - ALWAYS confirm with user before placing orders.
+
+    TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
+    permits them — READ_ONLY blocks every write, SIMULATE allows only
+    trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
+    error; the request is never rerouted to a different environment. Call
+    check_health to see the configured mode.
     - For SIMULATE environment, explicitly set trd_env='SIMULATE'.
 
     Args:
@@ -46,8 +56,8 @@ def place_order(
             - 'MARKET': Market order.
             - 'ABSOLUTE_LIMIT': Limit order (HK only, exact price match required).
             - 'AUCTION': Auction order (HK).
-            - 'AUCTION_LIMIT': Auction limit order (HK).
-            - 'SPECIAL_LIMIT': Special limit / Market IOC (HK, partial fill then cancel).
+            - 'SPECIAL_LIMIT': Special limit / Market IOC
+              (HK, partial fill then cancel).
             - 'SPECIAL_LIMIT_ALL': Special limit all-or-none (HK, fill all or cancel).
             - 'STOP': Stop market order.
             - 'STOP_LIMIT': Stop limit order.
@@ -74,7 +84,8 @@ def place_order(
         time_in_force, etc.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.place_order(
+    return await run_blocking(
+        trade_service.place_order,
         code=code,
         price=price,
         qty=qty,
@@ -93,7 +104,167 @@ def place_order(
 
 
 @mcp.tool()
-def modify_order(
+async def place_combo_order(
+    ctx: Context[ServerSession, AppContext],
+    combo_legs: list[dict],
+    price: float,
+    qty: int,
+    order_type: str = "NORMAL",
+    time_in_force: str = "DAY",
+    trd_env: str = "REAL",
+    acc_id: str = "0",
+    remark: str = "",
+) -> dict:
+    """Place a multi-leg option strategy (vertical spread, straddle, etc.) as a
+    single atomic order.
+
+    CRITICAL: You MUST ask the user for explicit confirmation before calling this
+    tool, especially if `trd_env` is 'REAL'. Display EVERY leg (code, side, ratio)
+    plus the net price and quantity for verification. Orders placed in REAL
+    environment will use real money.
+
+    Call preview_combo_order first with the same legs, price, quantity, and
+    account to show the user the margin and buying-power impact before asking
+    for confirmation.
+
+    Prefer this over multiple `place_order` calls for any multi-leg strategy. A
+    combo order fills as one unit or not at all. Submitting the legs separately
+    risks one filling and the other not, which can convert a defined-risk position
+    into an undefined-risk one — for example, closing a call spread leg by leg can
+    leave a naked short call.
+
+    IMPORTANT FOR AI AGENTS:
+    - Default is REAL account as per user preference.
+    - ALWAYS confirm with user before placing orders.
+
+    TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
+    permits them — READ_ONLY blocks every write, SIMULATE allows only
+    trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
+    error; the request is never rerouted to a different environment. Call
+    check_health to see the configured mode.
+    - For SIMULATE environment, explicitly set trd_env='SIMULATE'.
+
+    Args:
+        combo_legs: The strategy's legs, at least two, all in the same market.
+            Each leg is a dict:
+                {"code": "US.AAPL260320C200000", "trd_side": "SELL",
+                 "qty_ratio": 1, "position_id": 123456789}
+            - code: Option or stock code for the leg.
+            - trd_side: 'BUY' or 'SELL' for that leg.
+            - qty_ratio: Required positive integer. It MULTIPLIES the order
+              quantity for this leg: actual leg qty = qty x qty_ratio. It is not
+              optional, because assuming 1 would silently submit a different
+              strategy (a 1:2:1 butterfly would become 1:1:1).
+            - position_id: Required when CLOSING an existing position. Get it from
+              get_positions(show_option_strategy_view=True), which returns the
+              strategy as a COMBINED row plus its LEG rows, each with a
+              position_id. Omit when opening a new position.
+        price: NET price of the whole package, not a per-leg price.
+            NOTE: moomoo's API reference does not document a sign convention for
+            debit vs credit packages. Do not assume one. Verify against the app's
+            own ticket for the same strategy before pricing a REAL order.
+        qty: Number of packages to trade (not the total contracts across legs).
+        order_type: Order type. 'NORMAL' is a limit order; 'MARKET' is also
+            supported but is rarely appropriate for a multi-leg option package.
+        time_in_force: 'DAY' (default) or 'GTC'.
+        trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
+        acc_id: Account ID from get_accounts(). Resolved automatically if omitted.
+        remark: Optional order note/remark.
+
+    Returns:
+        Dictionary with order details including order_id and order_status.
+    """
+    trade_service = ctx.request_context.lifespan_context.trade_service
+    # A combo order's legs each carry a 64-bit position_id.
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.place_combo_order,
+            combo_legs=combo_legs,
+            price=price,
+            qty=qty,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            trd_env=trd_env,
+            acc_id=acc_id,
+            remark=remark,
+        )
+    )
+
+
+@mcp.tool()
+async def preview_combo_order(
+    ctx: Context[ServerSession, AppContext],
+    combo_legs: list[dict],
+    price: float,
+    qty: int,
+    order_type: str = "NORMAL",
+    trd_env: str = "REAL",
+    acc_id: str = "0",
+) -> dict[str, Any]:
+    """Preview what a multi-leg option package would do to an account.
+
+    READ-ONLY. This submits nothing: no order is placed, modified, or
+    cancelled, no trading is unlocked, and no funds are reserved. It works in
+    every trading mode, including READ_ONLY, though a broker can still refuse
+    the query itself.
+
+    Use it before place_combo_order to show the user the margin and buying-power
+    impact of the exact package you are about to propose. Pass the same legs,
+    price, quantity, and account you intend to submit — a preview of a different
+    package describes a different trade.
+
+    Args:
+        combo_legs: Same format as place_combo_order. Each leg is a dict:
+            {"code": "US.AAPL260320C200000", "trd_side": "SELL",
+             "qty_ratio": 1, "position_id": "123456789"}
+            - qty_ratio is required and multiplies the order quantity for that
+              leg.
+            - position_id is required when CLOSING an existing position. Get it
+              from get_positions(show_option_strategy_view=True) and pass the
+              decimal string through unchanged.
+        price: NET price of the whole package, not a per-leg price. moomoo does
+            not document a sign convention for debit vs credit packages, so the
+            value is forwarded exactly as given and no convention is assumed.
+        qty: Number of packages (not the total contracts across legs).
+        order_type: 'NORMAL' for limit, 'MARKET', etc.
+        trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
+        acc_id: Account ID from get_accounts(). Resolved from the legs' market
+            when omitted, exactly as place_combo_order would resolve it.
+
+    Returns:
+        Dictionary containing:
+        - checked_at: UTC observation time (ISO-8601, 'Z' suffix).
+        - acc_id: The account the preview was run against, as a decimal string.
+        - trd_env: The environment the preview was run against.
+        - nlv_change: Change in net liquidation value.
+        - initial_margin_change: Change in initial margin requirement.
+        - maintenance_margin_change: Change in maintenance margin requirement.
+        - option_bp: Option buying power after the package.
+        - max_withdraw_change: Change in maximum withdrawable amount.
+        - bp_decrease: Decrease in buying power.
+
+        A field the gateway did not supply is null, not zero. Null means "not
+        reported"; zero would mean "no impact", which is a different claim.
+
+        These are point-in-time estimates from the broker, not a quote and not
+        an acceptance. Values can change before the order is submitted, and a
+        successful preview does not mean the order would fill.
+    """
+    trade_service = ctx.request_context.lifespan_context.trade_service
+    preview = await run_blocking(
+        trade_service.preview_combo_order,
+        combo_legs=combo_legs,
+        price=price,
+        qty=qty,
+        order_type=order_type,
+        trd_env=trd_env,
+        acc_id=acc_id,
+    )
+    return serialize_identifiers(preview)
+
+
+@mcp.tool()
+async def modify_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,
     modify_order_op: str,
@@ -113,6 +284,12 @@ def modify_order(
     - Default is REAL account as per user preference.
     - ALWAYS confirm with user before modifying orders.
 
+    TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
+    permits them — READ_ONLY blocks every write, SIMULATE allows only
+    trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
+    error; the request is never rerouted to a different environment. Call
+    check_health to see the configured mode.
+
     Args:
         order_id: Order ID to modify. Get from get_orders().
         modify_order_op: Modification operation:
@@ -131,7 +308,8 @@ def modify_order(
         Dictionary with modified order details.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.modify_order(
+    return await run_blocking(
+        trade_service.modify_order,
         order_id=order_id,
         modify_order_op=modify_order_op,
         qty=qty,
@@ -143,7 +321,7 @@ def modify_order(
 
 
 @mcp.tool()
-def cancel_order(
+async def cancel_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,
     trd_env: str = "REAL",
@@ -159,6 +337,12 @@ def cancel_order(
     - Default is REAL account as per user preference.
     - ALWAYS confirm with user before cancelling orders.
 
+    TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
+    permits them — READ_ONLY blocks every write, SIMULATE allows only
+    trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
+    error; the request is never rerouted to a different environment. Call
+    check_health to see the configured mode.
+
     Args:
         order_id: Order ID to cancel. Get from get_orders().
         trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
@@ -168,7 +352,8 @@ def cancel_order(
         Dictionary with cancelled order details.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.cancel_order(
+    return await run_blocking(
+        trade_service.cancel_order,
         order_id=order_id,
         trd_env=trd_env,
         acc_id=acc_id,
@@ -176,7 +361,7 @@ def cancel_order(
 
 
 @mcp.tool()
-def get_orders(
+async def get_orders(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     status_filter_list: list[str] | None = None,
@@ -207,17 +392,21 @@ def get_orders(
         order_type, order_status, created_time, updated_time, etc.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.get_orders(
-        code=code,
-        status_filter_list=status_filter_list,
-        trd_env=trd_env,
-        acc_id=acc_id,
-        refresh_cache=refresh_cache,
+    # A combo order's legs each carry a 64-bit position_id.
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.get_orders,
+            code=code,
+            status_filter_list=status_filter_list,
+            trd_env=trd_env,
+            acc_id=acc_id,
+            refresh_cache=refresh_cache,
+        )
     )
 
 
 @mcp.tool()
-def get_deals(
+async def get_deals(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     trd_env: str = "REAL",
@@ -243,18 +432,24 @@ def get_deals(
     Returns:
         List of deal dictionaries with deal_id, order_id, code, qty, price,
         trd_side, create_time, etc.
+
+        NOTE: deal_id is returned as a decimal STRING, not a number.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.get_deals(
-        code=code,
-        trd_env=trd_env,
-        acc_id=acc_id,
-        refresh_cache=refresh_cache,
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.get_deals,
+            code=code,
+            trd_env=trd_env,
+            acc_id=acc_id,
+            refresh_cache=refresh_cache,
+        )
     )
 
 
+
 @mcp.tool()
-def get_history_orders(
+async def get_history_orders(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     status_filter_list: list[str] | None = None,
@@ -282,18 +477,22 @@ def get_history_orders(
         List of historical order dictionaries.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.get_history_orders(
-        code=code,
-        status_filter_list=status_filter_list,
-        start=start,
-        end=end,
-        trd_env=trd_env,
-        acc_id=acc_id,
+    # A combo order's legs each carry a 64-bit position_id.
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.get_history_orders,
+            code=code,
+            status_filter_list=status_filter_list,
+            start=start,
+            end=end,
+            trd_env=trd_env,
+            acc_id=acc_id,
+        )
     )
 
 
 @mcp.tool()
-def get_history_deals(
+async def get_history_deals(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     start: str = "",
@@ -317,12 +516,18 @@ def get_history_deals(
 
     Returns:
         List of historical deal dictionaries.
+
+        NOTE: deal_id is returned as a decimal STRING, not a number.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return trade_service.get_history_deals(
-        code=code,
-        start=start,
-        end=end,
-        trd_env=trd_env,
-        acc_id=acc_id,
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.get_history_deals,
+            code=code,
+            start=start,
+            end=end,
+            trd_env=trd_env,
+            acc_id=acc_id,
+        )
     )
+

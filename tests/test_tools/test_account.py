@@ -1,21 +1,24 @@
 """Unit tests for account tools."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
-from mcp.shared.context import RequestContext
 from mcp.server.fastmcp import Context
+from mcp.shared.context import RequestContext
+
 from moomoo_mcp.server import AppContext
 from moomoo_mcp.services.base_service import MoomooService
-from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.market_data_service import MarketDataService
+from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.tools.account import (
-    get_accounts,
     get_account_summary,
+    get_accounts,
     get_assets,
-    get_positions,
-    get_max_tradable,
-    get_margin_ratio,
     get_cash_flow,
+    get_margin_ratio,
+    get_max_tradable,
+    get_positions,
+    lock_trade,
     unlock_trade,
 )
 
@@ -75,7 +78,9 @@ async def test_get_accounts(mcp_context, mock_trade_service):
     result = await get_accounts(mcp_context)
 
     assert len(result) == 1
-    assert result[0]["acc_id"] == 123
+    # Identifiers cross the MCP boundary as decimal strings (R2).
+    assert result[0]["acc_id"] == "123"
+    assert result[0]["trd_env"] == "REAL"
     mock_trade_service.get_accounts.assert_called_once()
 
 
@@ -110,8 +115,12 @@ async def test_get_account_summary(mcp_context, mock_trade_service):
     assert "positions" in result
     assert result["assets"]["cash"] == 10000.0
     assert len(result["positions"]) == 1
-    mock_trade_service.get_assets.assert_called_once_with(trd_env="SIMULATE", acc_id="123")
-    mock_trade_service.get_positions.assert_called_once_with(trd_env="SIMULATE", acc_id="123")
+    mock_trade_service.get_assets.assert_called_once_with(
+        trd_env="SIMULATE", acc_id="123"
+    )
+    mock_trade_service.get_positions.assert_called_once_with(
+        trd_env="SIMULATE", acc_id="123"
+    )
 
 
 @pytest.mark.asyncio
@@ -201,15 +210,25 @@ async def test_unlock_trade_env_vars(mcp_context, mock_trade_service):
 
 
 @pytest.mark.asyncio
+async def test_lock_trade(mcp_context, mock_trade_service):
+    """Test lock_trade tool."""
+    result = await lock_trade(mcp_context)
+
+    assert result["status"] == "locked"
+    mock_trade_service.lock_trade.assert_called_once()
+
+
+
+@pytest.mark.asyncio
 async def test_get_assets_string_id(mcp_context, mock_trade_service):
     """Test get_assets tool with string account ID to verify precision preservation."""
     mock_trade_service.get_assets.return_value = {
         "cash": 10000.0,
         "market_val": 5000.0
     }
-    
+
     # Use a large ID that would lose precision if treated as float/number in JSON
-    large_id_str = "283726802397238513"
+    large_id_str = "987654321098765431"
 
     result = await get_assets(mcp_context, trd_env="REAL", acc_id=large_id_str)
 
@@ -221,3 +240,55 @@ async def test_get_assets_string_id(mcp_context, mock_trade_service):
         refresh_cache=False,
         currency=None
     )
+
+
+class TestGuidanceMatchesPolicy:
+    """Tool descriptions must not tell an agent to do something policy denies.
+
+    READ_ONLY is the default trading mode and it denies unlock while permitting
+    reads. Instructing an agent to unlock before reading therefore manufactures
+    a policy failure for a read that would have worked.
+    """
+
+    READ_TOOLS = [
+        get_accounts,
+        get_account_summary,
+        get_assets,
+        get_positions,
+        get_max_tradable,
+        get_cash_flow,
+    ]
+
+    @pytest.mark.parametrize("tool", READ_TOOLS, ids=lambda t: t.__name__)
+    def test_no_read_tool_mandates_unlocking_first(self, tool):
+        doc = " ".join((tool.__doc__ or "").split()).lower()
+
+        assert "you must call unlock_trade first" not in doc
+        assert "must first call unlock_trade" not in doc
+        assert "requires unlock_trade first" not in doc
+
+    @pytest.mark.parametrize("tool", READ_TOOLS, ids=lambda t: t.__name__)
+    def test_read_tools_that_mention_unlocking_qualify_it(self, tool):
+        doc = " ".join((tool.__doc__ or "").split())
+
+        if "unlock_trade" not in doc:
+            return
+        assert "may require unlock_trade" in doc or "unlock_trade for why" in doc
+
+    def test_unlock_tool_warns_against_calling_it_pre_emptively(self):
+        doc = " ".join((unlock_trade.__doc__ or "").split())
+
+        assert "DO NOT call this pre-emptively" in doc
+        assert "READ_ONLY" in doc
+
+    @pytest.mark.asyncio
+    async def test_a_real_read_needs_no_unlock_in_read_only_mode(
+        self, call_tool, mock_trade_service
+    ):
+        """The behaviour the guidance now describes: read first, no unlock."""
+        mock_trade_service.get_positions.return_value = [{"code": "US.AAPL", "qty": 1}]
+
+        result = await call_tool("get_positions", {"trd_env": "REAL"})
+
+        assert result.structured["result"][0]["qty"] == 1
+        mock_trade_service.unlock_trade.assert_not_called()

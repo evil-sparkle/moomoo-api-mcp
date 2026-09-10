@@ -1,18 +1,20 @@
 """Unit tests for market data tools."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
-from mcp.shared.context import RequestContext
 from mcp.server.fastmcp import Context
+from mcp.shared.context import RequestContext
+
 from moomoo_mcp.server import AppContext
 from moomoo_mcp.services.base_service import MoomooService
-from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.market_data_service import MarketDataService
+from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.tools.market_data import (
-    get_stock_quote,
     get_historical_klines,
     get_market_snapshot,
     get_order_book,
+    get_stock_quote,
 )
 
 
@@ -87,14 +89,22 @@ async def test_get_stock_quote_multiple(mcp_context, mock_market_data_service):
     result = await get_stock_quote(mcp_context, codes=["US.AAPL", "US.TSLA"])
 
     assert len(result) == 2
-    mock_market_data_service.get_stock_quote.assert_called_once_with(["US.AAPL", "US.TSLA"])
+    mock_market_data_service.get_stock_quote.assert_called_once_with(
+        ["US.AAPL", "US.TSLA"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_get_historical_klines(mcp_context, mock_market_data_service):
     """Test get_historical_klines tool."""
     mock_market_data_service.get_historical_klines.return_value = [
-        {"time_key": "2025-01-01", "open": 150.0, "close": 151.0, "high": 152.0, "low": 149.0}
+        {
+            "time_key": "2025-01-01",
+            "open": 150.0,
+            "close": 151.0,
+            "high": 152.0,
+            "low": 149.0,
+        }
     ]
 
     result = await get_historical_klines(mcp_context, code="US.AAPL")

@@ -1,0 +1,34 @@
+FROM --platform=linux/amd64 ubuntu:22.04
+
+# Install runtime dependencies for downloading and running OpenD
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    tar \
+    gzip \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/moomooOpenD
+
+ARG OPEND_VERSION=10.10.7008
+ARG OPEND_TAG=v10.10.7008-opend
+ARG OPEND_URL=https://github.com/evil-sparkle/moomoo-api-mcp/releases/download/${OPEND_TAG}/moomoo_OpenD_${OPEND_VERSION}_Ubuntu18.04.tar.gz
+
+# Download OpenD from GitHub Release (with fallback to Moomoo CDN)
+RUN echo "Fetching OpenD from ${OPEND_URL}..." \
+    && mkdir -p /tmp/opend_unpack \
+    && if ! curl -fsSL "${OPEND_URL}" -o /tmp/opend.tar.gz; then \
+         echo "GitHub Release asset not reachable, falling back to Moomoo CDN..."; \
+         curl -fsSL "https://softwaredownload.futustatic.com/moomoo_OpenD_${OPEND_VERSION}_Ubuntu18.04.tar.gz" -o /tmp/opend.tar.gz; \
+       fi \
+    && tar -xzf /tmp/opend.tar.gz -C /tmp/opend_unpack \
+    && opend_binary="$(find /tmp/opend_unpack -type f -name OpenD -print -quit)" \
+    && test -n "$opend_binary" \
+    && cp -a "$(dirname "$opend_binary")/." /opt/moomooOpenD/ \
+    && rm -rf /tmp/opend.tar.gz /tmp/opend_unpack \
+    && chmod +x /opt/moomooOpenD/OpenD
+
+ENV LD_LIBRARY_PATH=/opt/moomooOpenD
+
+EXPOSE 11111

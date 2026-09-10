@@ -1,6 +1,99 @@
 """Trade service for managing Moomoo trading context and account operations."""
 
-from moomoo import OpenSecTradeContext, OrderStatus, RET_OK, SecurityFirm, TrdMarket
+import logging
+import math
+import os
+import threading
+from collections.abc import Iterator
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import contextmanager
+from typing import Any
+
+from moomoo import (
+    RET_OK,
+    ComboLeg,
+    OpenSecTradeContext,
+    OrderStatus,
+    SecurityFirm,
+    TrdMarket,
+)
+
+from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.services.health import (
+    SYNC_CONNECT_TIMEOUT_SECONDS,
+    BoundedProbe,
+    failure,
+    run_detached,
+)
+from moomoo_mcp.services.trading_policy import TradingPolicy
+
+logger = logging.getLogger(__name__)
+
+# How long startup waits for the trade connection before carrying on
+# without it. The worker keeps trying in the background.
+CONNECT_TIMEOUT_SECONDS = 5.0
+
+
+# Every attribute ComboLeg defines. Listed here rather than read off the
+# instance so a future SDK field cannot silently widen the response, and so a
+# leg the gateway sent without one still has the key.
+COMBO_LEG_FIELDS = ("code", "trd_side", "qty_ratio", "position_id", "pred_side")
+
+
+def _plain_combo_legs(records: list[dict]) -> list[dict]:
+    """Convert the SDK's ComboLeg objects in ``records`` into plain dicts.
+
+    order_list_query, history_order_list_query and place_combo_order all return
+    a ``combo_legs`` column holding ComboLeg instances. They are ordinary Python
+    objects with no JSON representation, so a single spread order made the whole
+    MCP response unserializable: the tool failed outright instead of degrading
+    one row, hiding every other order in the list.
+
+    Converting here also exposes each leg's position_id to the identifier
+    serialization the tool layer applies. That walk traverses dicts and lists
+    and could not see inside an opaque object, so a 64-bit leg identifier was
+    reaching double-parsing clients as a number.
+
+    The records come straight from ``DataFrame.to_dict``, so they are already
+    the caller's own copies and are updated in place.
+    """
+    for record in records:
+        legs = record.get("combo_legs")
+        if not isinstance(legs, (list, tuple)):
+            continue
+        record["combo_legs"] = [
+            {field: getattr(leg, field, None) for field in COMBO_LEG_FIELDS}
+            if isinstance(leg, ComboLeg)
+            else leg
+            for leg in legs
+        ]
+    return records
+
+
+# What the SDK's decoders substitute for a field the gateway did not send.
+# Confirmed against ComboOrderTradingInfoQuery.unpack_rsp, which writes this
+# string — not a number and not NaN — for every absent impact field.
+SDK_MISSING_SENTINEL = "N/A"
+
+
+def _null_if_missing(value: Any) -> Any:
+    """Normalize the SDK's missing-value markers to None.
+
+    A field the gateway omitted reaches us as the string "N/A" from the SDK's
+    decoder, or as NaN if it went through a pandas frame that widened a column.
+    Both mean "not supplied".
+
+    Reporting null says exactly that. Passing "N/A" through would put a string
+    in a numeric field, and substituting 0.0 would claim the package has no
+    effect on that measure — a different statement, and a dangerous one when the
+    measure is a margin requirement.
+    """
+    if isinstance(value, str) and value.strip() == SDK_MISSING_SENTINEL:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
 
 
 class TradeService:
@@ -11,6 +104,7 @@ class TradeService:
         host: str = "127.0.0.1",
         port: int = 11111,
         security_firm: str | None = None,
+        policy: TradingPolicy | None = None,
     ):
         """Initialize TradeService.
 
@@ -19,11 +113,19 @@ class TradeService:
             port: Port number of OpenD gateway.
             security_firm: Securities firm identifier (e.g., 'FUTUSG' for Singapore,
                 'FUTUSECURITIES' for HK). If None, no filter is applied.
+            policy: Trading policy governing which order environments this
+                service may write to. Defaults to read-only, so a service
+                constructed without an explicit intent cannot send an order.
         """
         self.host = host
         self.port = port
         self.security_firm = security_firm
+        self.policy = policy or TradingPolicy()
         self.trade_ctx: OpenSecTradeContext | None = None
+        self._trade_probe = BoundedProbe("trade")
+        self._connect_lock = threading.Lock()
+        self._connect_future: Future | None = None
+        self._closed = False
 
     def _convert_status_filter(
         self, status_filter_list: list[str] | None
@@ -47,14 +149,15 @@ class TradeService:
 
         converted = []
         for status_str in status_filter_list:
-            # OrderStatus has the attribute matching the string (e.g., OrderStatus.SUBMITTED)
+            # OrderStatus has attribute matching string (e.g. OrderStatus.SUBMITTED)
             status_enum = getattr(OrderStatus, status_str.upper(), None)
             if status_enum is None:
                 valid_statuses = [
-                    "UNSUBMITTED", "WAITING_SUBMIT", "SUBMITTING", "SUBMIT_FAILED",
-                    "SUBMITTED", "FILLED_PART", "FILLED_ALL",
-                    "CANCELLING_PART", "CANCELLING_ALL", "CANCELLED_PART", "CANCELLED_ALL",
-                    "REJECTED", "DISABLED", "DELETED", "FAILED", "NONE"
+                    "UNSUBMITTED", "WAITING_SUBMIT", "SUBMITTING",
+                    "SUBMIT_FAILED", "SUBMITTED", "FILLED_PART", "FILLED_ALL",
+                    "CANCELLING_PART", "CANCELLING_ALL", "CANCELLED_PART",
+                    "CANCELLED_ALL", "REJECTED", "DISABLED", "DELETED",
+                    "FAILED", "NONE",
                 ]
                 raise ValueError(
                     f"Invalid order status: '{status_str}'. "
@@ -78,19 +181,19 @@ class TradeService:
 
         Returns:
             Account ID if found, otherwise 0 (default).
-            
+
         Raises:
              ValueError: If no suitable account is found.
         """
         try:
             accounts = self.get_accounts()
         except Exception as e:
-            # Re-raise as a ValueError to ensure the caller knows account finding failed.
+            # Re-raise as ValueError to indicate account finding failed.
             raise ValueError("Failed to retrieve account list from the API.") from e
 
         # Filter by environment
         env_accounts = [acc for acc in accounts if acc.get("trd_env") == trd_env]
-        
+
         if not env_accounts:
             # Raise an error if no accounts are found for the environment.
             raise ValueError(f"No accounts found for the '{trd_env}' environment.")
@@ -98,7 +201,7 @@ class TradeService:
         # Moomoo market codes mapping to market_auth strings
         # Adjust as needed based on actual API values
         target_market = market.upper()
-        
+
         supported_markets = []
 
         for acc in env_accounts:
@@ -106,20 +209,19 @@ class TradeService:
             # Note: The field name might be 'trdmarket_auth' based on debug output
             market_auth = acc.get("market_auth") or acc.get("trdmarket_auth") or []
             supported_markets.extend(market_auth)
-            
+
             if target_market in market_auth:
                 return acc["acc_id"]
-        
+
         # If we are here, we found accounts for the env, but none support the market
-        unique_supported = sorted(list(set(supported_markets)))
+        unique_supported = sorted(set(supported_markets))
         raise ValueError(
-            f"No account found in {trd_env} environment that supports trading in {market}. "
-            f"Available accounts support: {unique_supported}"
+            f"No account found in {trd_env} environment that supports trading in "
+            f"{market}. Available accounts support: {unique_supported}"
         )
 
-    def connect(self) -> None:
-        """Initialize connection to OpenD trade context."""
-        # Build kwargs for OpenSecTradeContext
+    def _open_trade_context(self) -> None:
+        """Construct the SDK trade context and publish it when it is ready."""
         kwargs = {"host": self.host, "port": self.port}
 
         # Add security_firm if specified
@@ -129,13 +231,111 @@ class TradeService:
             if firm_enum:
                 kwargs["security_firm"] = firm_enum
 
-        self.trade_ctx = OpenSecTradeContext(**kwargs)
+        trade_ctx = OpenSecTradeContext(**kwargs)
+        trade_ctx.set_sync_query_connect_timeout(SYNC_CONNECT_TIMEOUT_SECONDS)
+
+        with self._connect_lock:
+            if self._closed:
+                # close() ran while this was still retrying. Publishing the
+                # context now would leak a live connection past shutdown.
+                should_close = True
+            else:
+                self.trade_ctx = trade_ctx
+                should_close = False
+        if should_close:
+            trade_ctx.close()
+
+    def connect(self, timeout: float | None = None) -> None:
+        """Start the trade connection, waiting at most ``timeout`` seconds.
+
+        OpenSecTradeContext offers no async-connect option and its constructor
+        does not raise when OpenD is unreachable — it retries every six seconds
+        forever. Calling it inline would hang the MCP lifespan before it yields,
+        taking check_health down with the gateway it exists to diagnose.
+
+        So it runs on a single background worker. If the gateway is down this
+        returns once the timeout elapses, health reports the trade service as
+        unavailable, and the worker publishes the context if OpenD later
+        appears. Only one such worker ever exists: repeated calls join the one
+        in flight rather than stacking up connection attempts.
+
+        Args:
+            timeout: Seconds to wait for the connection before returning.
+                Defaults to ``CONNECT_TIMEOUT_SECONDS``.
+        """
+        if timeout is None:
+            timeout = CONNECT_TIMEOUT_SECONDS
+
+        with self._connect_lock:
+            self._closed = False
+            future = self._connect_future
+            if future is None or future.done():
+                future = run_detached(self._open_trade_context, "trade-connect")
+                self._connect_future = future
+
+        try:
+            future.result(timeout=timeout)
+        except FutureTimeoutError:
+            logger.warning(
+                f"Trade connection to {self.host}:{self.port} is still being "
+                f"established after {timeout:.0f}s. The server remains available; "
+                "check_health reports the trade service until it connects."
+            )
+        except Exception as exc:  # noqa: BLE001 - startup must stay available
+            logger.error(f"Trade connection failed: {exc}")
 
     def close(self) -> None:
-        """Close trade context connection."""
-        if self.trade_ctx:
-            self.trade_ctx.close()
+        """Close the trade context and abandon any connection still in flight.
+
+        A connection attempt cannot be interrupted: the SDK constructor owns its
+        thread until OpenD answers. Shutdown therefore does not wait for it. It
+        marks the service closed — so a worker that eventually succeeds closes
+        the context it built instead of publishing it — and drops the future.
+        The worker is a daemon thread, so the interpreter can exit while the
+        constructor is still retrying.
+        """
+        self._trade_probe.close()
+        with self._connect_lock:
+            # Set before releasing the lock so a worker that is still retrying
+            # closes whatever it eventually builds instead of publishing it.
+            self._closed = True
+            self._connect_future = None
+            trade_ctx = self.trade_ctx
             self.trade_ctx = None
+        if trade_ctx:
+            trade_ctx.close()
+
+    def probe_trade(self) -> dict[str, Any]:
+        """Actively check trade connectivity with a read-only account listing.
+
+        ``get_acc_list`` is the lightest trade read that proves the trade socket
+        is answering; it neither unlocks trading nor mutates anything. Only the
+        return code and the number of visible accounts are reported — never
+        account identifiers, balances, or positions.
+        """
+        trade_ctx = self.trade_ctx
+        if trade_ctx is None:
+            return failure(
+                "unavailable", "Trade context not initialized", reason="not_initialized"
+            )
+
+        ret, data = trade_ctx.get_acc_list()
+        if ret != RET_OK:
+            return failure("error", data)
+
+        try:
+            account_count = len(data)
+        except TypeError:
+            account_count = 0
+        return {"status": "ok", "account_count": account_count}
+
+    def submit_probe(self) -> Future:
+        """Start (or join) the bounded trade connectivity probe."""
+        return self._trade_probe.submit(self.probe_trade)
+
+    def collect_probe(self, future: Future, timeout: float) -> dict[str, Any]:
+        """Collect a trade probe result within the remaining health deadline."""
+        return self._trade_probe.collect(future, timeout)
 
     def get_accounts(self) -> list[dict]:
         """Get list of trading accounts.
@@ -202,6 +402,7 @@ class TradeService:
         trd_env: str = "SIMULATE",
         acc_id: int | str = "0",
         refresh_cache: bool = False,
+        show_option_strategy_view: bool = False,
     ) -> list[dict]:
         """Get current positions.
 
@@ -213,6 +414,10 @@ class TradeService:
             trd_env: Trading environment.
             acc_id: Account ID. Must be obtained from get_accounts().
             refresh_cache: Whether to refresh cache.
+            show_option_strategy_view: Group multi-leg option positions into
+                strategies. Each strategy is returned as a 'COMBINED' row
+                alongside its 'LEG' rows, and every row carries the
+                'position_id' that place_combo_order requires when closing.
 
         Returns:
             List of position dictionaries.
@@ -252,6 +457,7 @@ class TradeService:
             trd_env=trd_env,
             acc_id=acc_id,
             refresh_cache=refresh_cache,
+            show_option_strategy_view=show_option_strategy_view,
         )
         if ret != RET_OK:
             raise RuntimeError(f"position_list_query failed: {data}")
@@ -292,7 +498,7 @@ class TradeService:
             order_type=order_type,
             code=code,
             price=price,
-            order_id=order_id,
+            order_id=order_id if order_id else None,
             adjust_limit=adjust_limit,
             trd_env=trd_env,
             acc_id=acc_id,
@@ -363,8 +569,13 @@ class TradeService:
             password_md5: MD5 hash of trade password (alternative to password).
 
         Raises:
+            TradingPolicyError: If the configured mode does not permit unlocking.
             RuntimeError: If unlock fails.
         """
+        # Checked before the connection check so a denied unlock never reaches
+        # the gateway, whatever the connection state.
+        self.policy.check_unlock()
+
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
@@ -375,6 +586,50 @@ class TradeService:
         )
         if ret != RET_OK:
             raise RuntimeError(f"unlock_trade failed: {data}")
+
+    def lock_trade(self) -> None:
+        """Lock trade operations on OpenD gateway.
+
+        Raises:
+            RuntimeError: If trade context is not connected or locking fails.
+        """
+        if not self.trade_ctx:
+            raise RuntimeError("Trade context not connected")
+
+        ret, data = self.trade_ctx.unlock_trade(is_unlock=False)
+        if ret != RET_OK:
+            raise RuntimeError(f"lock_trade failed: {data}")
+
+    @contextmanager
+    def _jit_trade_unlock(self, trd_env: str) -> Iterator[None]:
+        """Momentarily unlock OpenD for order execution, then re-lock.
+
+        Only REAL environment requires unlock. SIMULATE never needs unlock.
+        If no credentials are set in environment, this yields without unlocking.
+        Always re-locks in a finally block to ensure OpenD does not stay unlocked.
+        """
+        req_env = str(trd_env).strip().upper()
+        if req_env != "REAL":
+            yield
+            return
+
+        password = os.environ.get("MOOMOO_TRADE_PASSWORD")
+        password_md5 = os.environ.get("MOOMOO_TRADE_PASSWORD_MD5")
+
+        if not password and not password_md5:
+            yield
+            return
+
+        self.unlock_trade(password=password, password_md5=password_md5)
+        try:
+            yield
+        finally:
+            try:
+                self.lock_trade()
+            except Exception as exc:
+                logger.error(
+                    f"Failed to re-lock trade gateway in JIT finally block: {exc}"
+                )
 
     def place_order(
         self,
@@ -413,7 +668,15 @@ class TradeService:
 
         Returns:
             Dictionary with order details including order_id.
+
+        Raises:
+            TradingPolicyError: If the configured mode does not permit a write
+                to trd_env.
         """
+        # Checked first, before the account lookup below: a denied order must
+        # make no gateway request at all, not even to resolve an account.
+        self.policy.check_write("place_order", trd_env)
+
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
 
@@ -425,7 +688,7 @@ class TradeService:
             market = self._get_market_from_code(code)
             if market:
                 # Try to find a specific account for this market
-                # If valid account found, use it. 
+                # If valid account found, use it.
                 # If none found that support the market, it will raise ValueError
                 acc_id = self._find_best_account(trd_env, market)
 
@@ -445,27 +708,293 @@ class TradeService:
                 "trail_type and trail_value are required for trailing stop order types"
             )
 
-        ret, data = self.trade_ctx.place_order(
+        with self._jit_trade_unlock(trd_env):
+            ret, data = self.trade_ctx.place_order(
+                price=price,
+                qty=qty,
+                code=code,
+                trd_side=trd_side,
+                order_type=order_type,
+                time_in_force=time_in_force,
+                adjust_limit=adjust_limit,
+                aux_price=aux_price,
+                trail_type=trail_type,
+                trail_value=trail_value,
+                trail_spread=trail_spread,
+                trd_env=trd_env,
+                acc_id=acc_id,
+                remark=remark,
+            )
+            if ret != RET_OK:
+                raise RuntimeError(f"place_order failed: {data}")
+
+            records = data.to_dict("records")
+            return records[0] if records else {}
+
+    def _build_combo_legs(self, combo_legs: list[dict]) -> list[ComboLeg]:
+        """Validate leg dictionaries and convert them to SDK ComboLeg objects.
+
+        Validation happens before any gateway call so that a malformed strategy
+        fails fast with an actionable message rather than an opaque protocol error.
+
+        Args:
+            combo_legs: Leg dictionaries, each with 'code', 'trd_side', 'qty_ratio'.
+
+        Returns:
+            List of ComboLeg objects ready for the SDK.
+
+        Raises:
+            ValueError: If the leg list is malformed.
+        """
+        if len(combo_legs) < 2:
+            raise ValueError(
+                "A combo order requires at least two legs. "
+                "Use place_order for single-leg orders."
+            )
+
+        valid_sides = {"BUY", "SELL"}
+        legs: list[ComboLeg] = []
+        markets: set[str] = set()
+
+        for index, leg in enumerate(combo_legs):
+            code = str(leg.get("code") or "").strip()
+            if not code:
+                raise ValueError(f"Leg {index} is missing a non-empty 'code'.")
+
+            trd_side = str(leg.get("trd_side") or "").strip().upper()
+            if trd_side not in valid_sides:
+                raise ValueError(
+                    f"Invalid trd_side '{leg.get('trd_side')}' on leg {index}. "
+                    f"Valid options: {sorted(valid_sides)}"
+                )
+
+            # qty_ratio is a multiplier, not a convenience default: the actual
+            # quantity of a leg is (order qty x qty_ratio). Assuming 1 for an
+            # omitted ratio would silently submit a different strategy — a 1:2:1
+            # butterfly would become 1:1:1 — so an absent ratio is an error.
+            if "qty_ratio" not in leg:
+                raise ValueError(
+                    f"Leg {index} is missing 'qty_ratio'. It multiplies the order "
+                    "quantity for this leg, so it must be stated explicitly."
+                )
+            qty_ratio = leg["qty_ratio"]
+            if not isinstance(qty_ratio, int) or isinstance(qty_ratio, bool):
+                raise ValueError(
+                    f"Leg {index} has a non-integer 'qty_ratio': {qty_ratio!r}"
+                )
+            if qty_ratio <= 0:
+                raise ValueError(
+                    f"Leg {index} has a 'qty_ratio' of {qty_ratio}; it must be a "
+                    "positive integer."
+                )
+
+            market = self._get_market_from_code(code)
+            if market:
+                markets.add(market)
+
+            combo_leg = ComboLeg()
+            combo_leg.code = code
+            combo_leg.trd_side = trd_side
+            combo_leg.qty_ratio = qty_ratio
+
+            # Required by the gateway when the order closes an existing position.
+            # Obtained from get_positions(show_option_strategy_view=True).
+            # Accept an exact integer, or a decimal string. Strings matter because
+            # these identifiers exceed the range JSON consumers can represent
+            # exactly. Anything lossy is refused rather than coerced: int(True) is
+            # 1 and int(123.75) is 123, and silently trading on either would target
+            # the wrong position.
+            position_id = leg.get("position_id")
+            if position_id is not None:
+                if isinstance(position_id, bool):
+                    raise ValueError(
+                        f"Leg {index} has a boolean 'position_id': {position_id!r}"
+                    )
+                if isinstance(position_id, int):
+                    combo_leg.position_id = position_id
+                elif isinstance(position_id, str) and position_id.strip().isdigit():
+                    combo_leg.position_id = int(position_id.strip())
+                else:
+                    raise ValueError(
+                        f"Leg {index} has a non-integer 'position_id': "
+                        f"{position_id!r}. Provide an integer or a decimal string."
+                    )
+
+            legs.append(combo_leg)
+
+        if len(markets) > 1:
+            raise ValueError(
+                "All combo legs must belong to the same market, got: "
+                f"{sorted(markets)}"
+            )
+
+        return legs
+
+    def place_combo_order(
+        self,
+        combo_legs: list[dict],
+        price: float,
+        qty: int,
+        order_type: str = "NORMAL",
+        time_in_force: str = "DAY",
+        trd_env: str = "SIMULATE",
+        acc_id: int | str = "0",
+        remark: str = "",
+    ) -> dict:
+        """Place a multi-leg option strategy as a single atomic order.
+
+        The package fills as one unit or not at all, so a strategy can never be
+        left half-executed the way independent single-leg orders can.
+
+        Args:
+            combo_legs: Legs of the strategy. Each is a dict with 'code',
+                'trd_side' ('BUY' or 'SELL'), and 'qty_ratio' (positive int,
+                required — it multiplies the order qty for that leg). May also
+                carry 'position_id', which the gateway requires when the order
+                closes an existing position; obtain it from
+                get_positions(show_option_strategy_view=True).
+            price: Net price of the whole package, not a per-leg price.
+            qty: Number of packages to trade.
+            order_type: Order type ('NORMAL' for limit, 'MARKET', etc.).
+            time_in_force: Time in force ('DAY' or 'GTC'). Defaults to 'DAY'.
+            trd_env: Trading environment ('REAL' or 'SIMULATE').
+            acc_id: Account ID. Must be obtained from get_accounts().
+            remark: Order remark/note.
+
+        Returns:
+            Dictionary with order details including order_id.
+
+        Raises:
+            TradingPolicyError: If the configured mode does not permit a write
+                to trd_env.
+            ValueError: If the leg list is malformed.
+            RuntimeError: If not connected, or the gateway rejects the order.
+        """
+        self.policy.check_write("place_combo_order", trd_env)
+
+        if isinstance(acc_id, str):
+            acc_id = int(acc_id)
+
+        if not self.trade_ctx:
+            raise RuntimeError("Trade context not connected")
+
+        legs = self._build_combo_legs(combo_legs)
+
+        # Smart account selection mirrors place_order, keyed off the legs' market.
+        if acc_id == 0:
+            market = self._get_market_from_code(legs[0].code)
+            if market:
+                acc_id = self._find_best_account(trd_env, market)
+
+        with self._jit_trade_unlock(trd_env):
+            ret, data = self.trade_ctx.place_combo_order(
+                combo_leg_list=legs,
+                price=price,
+                qty=qty,
+                order_type=order_type,
+                time_in_force=time_in_force,
+                trd_env=trd_env,
+                acc_id=acc_id,
+                remark=remark,
+            )
+            if ret != RET_OK:
+                raise RuntimeError(f"place_combo_order failed: {data}")
+
+            records = _plain_combo_legs(data.to_dict("records"))
+            return records[0] if records else {}
+
+    # The account-impact fields comboorder_tradinginfo_query returns. Listed
+    # here rather than passed through wholesale so a caller sees a stable set of
+    # keys, with an explicit null for anything the gateway did not supply.
+    COMBO_PREVIEW_FIELDS = (
+        "nlv_change",
+        "initial_margin_change",
+        "maintenance_margin_change",
+        "option_bp",
+        "max_withdraw_change",
+        "bp_decrease",
+    )
+
+    def preview_combo_order(
+        self,
+        combo_legs: list[dict],
+        price: float,
+        qty: int,
+        order_type: str = "NORMAL",
+        trd_env: str = "SIMULATE",
+        acc_id: int | str = "0",
+    ) -> dict:
+        """Preview the account impact of a multi-leg package without submitting it.
+
+        This is a read: it asks the gateway what the package would do to margin
+        and buying power. Nothing is placed, modified, cancelled, unlocked, or
+        reserved, so it is permitted in every trading mode — though the broker
+        can still refuse the query itself.
+
+        Leg validation and account selection are shared with place_combo_order,
+        so a package that previews is the same package that would be submitted.
+
+        Args:
+            combo_legs: Legs of the strategy, in the same format as
+                place_combo_order: 'code', 'trd_side', 'qty_ratio' (required),
+                and 'position_id' when closing an existing position.
+            price: Net price of the whole package. The sign convention is passed
+                through untouched: moomoo does not document a debit/credit
+                convention, and normalizing it here would invent one.
+            qty: Number of packages.
+            order_type: Order type ('NORMAL' for limit, 'MARKET', etc.).
+            trd_env: Trading environment ('REAL' or 'SIMULATE').
+            acc_id: Account ID. Resolved from the legs' market when omitted.
+
+        Returns:
+            Dictionary with 'checked_at' (UTC observation time), the resolved
+            'acc_id' and 'trd_env', and the gateway's impact fields. A field the
+            gateway did not supply is None, never a substituted zero.
+
+            The values are a point-in-time calculation. They are not a quote, an
+            acceptance, or a guarantee that the package would fill.
+
+        Raises:
+            ValueError: If the leg list is malformed.
+            RuntimeError: If not connected, or the gateway rejects the query.
+        """
+        if isinstance(acc_id, str):
+            acc_id = int(acc_id)
+
+        if not self.trade_ctx:
+            raise RuntimeError("Trade context not connected")
+
+        legs = self._build_combo_legs(combo_legs)
+
+        # Same account selection as placement, so the preview describes the
+        # account the order would actually reach.
+        if acc_id == 0:
+            market = self._get_market_from_code(legs[0].code)
+            if market:
+                acc_id = self._find_best_account(trd_env, market)
+
+        ret, data = self.trade_ctx.comboorder_tradinginfo_query(
+            combo_leg_list=legs,
             price=price,
             qty=qty,
-            code=code,
-            trd_side=trd_side,
             order_type=order_type,
-            time_in_force=time_in_force,
-            adjust_limit=adjust_limit,
-            aux_price=aux_price,
-            trail_type=trail_type,
-            trail_value=trail_value,
-            trail_spread=trail_spread,
             trd_env=trd_env,
             acc_id=acc_id,
-            remark=remark,
         )
         if ret != RET_OK:
-            raise RuntimeError(f"place_order failed: {data}")
+            raise RuntimeError(f"comboorder_tradinginfo_query failed: {data}")
 
-        records = data.to_dict("records")
-        return records[0] if records else {}
+        records = data.to_dict("records") if data is not None else []
+        record = records[0] if records else {}
+
+        preview: dict[str, Any] = {
+            "checked_at": utc_now_iso(),
+            "acc_id": acc_id,
+            "trd_env": trd_env,
+        }
+        for field in self.COMBO_PREVIEW_FIELDS:
+            preview[field] = _null_if_missing(record.get(field))
+        return preview
 
     def modify_order(
         self,
@@ -481,7 +1010,8 @@ class TradeService:
 
         Args:
             order_id: Order ID to modify.
-            modify_order_op: Modification operation ('NORMAL', 'CANCEL', 'DISABLE', 'ENABLE', 'DELETE').
+            modify_order_op: Modification operation ('NORMAL', 'CANCEL',
+                'DISABLE', 'ENABLE', 'DELETE').
             qty: New quantity (optional).
             price: New price (optional).
             adjust_limit: Adjust limit percentage.
@@ -490,27 +1020,34 @@ class TradeService:
 
         Returns:
             Dictionary with modified order details.
+
+        Raises:
+            TradingPolicyError: If the configured mode does not permit a write
+                to trd_env.
         """
+        self.policy.check_write(f"modify_order ({modify_order_op})", trd_env)
+
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.modify_order(
-            modify_order_op=modify_order_op,
-            order_id=order_id,
-            qty=qty,
-            price=price,
-            adjust_limit=adjust_limit,
-            trd_env=trd_env,
-            acc_id=acc_id,
-        )
-        if ret != RET_OK:
-            raise RuntimeError(f"modify_order failed: {data}")
+        with self._jit_trade_unlock(trd_env):
+            ret, data = self.trade_ctx.modify_order(
+                modify_order_op=modify_order_op,
+                order_id=order_id,
+                qty=qty,
+                price=price,
+                adjust_limit=adjust_limit,
+                trd_env=trd_env,
+                acc_id=acc_id,
+            )
+            if ret != RET_OK:
+                raise RuntimeError(f"modify_order failed: {data}")
 
-        records = data.to_dict("records")
-        return records[0] if records else {}
+            records = data.to_dict("records")
+            return records[0] if records else {}
 
     def cancel_order(
         self,
@@ -529,27 +1066,35 @@ class TradeService:
 
         Returns:
             Dictionary with cancelled order details.
+
+        Raises:
+            TradingPolicyError: If the configured mode does not permit a write
+                to trd_env. Cancellation is a write like any other: a read-only
+                deployment cannot cancel an order it was never able to place.
         """
+        self.policy.check_write("cancel_order", trd_env)
+
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.modify_order(
-            modify_order_op="CANCEL",
-            order_id=order_id,
-            qty=0,
-            price=0,
-            adjust_limit=0,
-            trd_env=trd_env,
-            acc_id=acc_id,
-        )
-        if ret != RET_OK:
-            raise RuntimeError(f"cancel_order failed: {data}")
+        with self._jit_trade_unlock(trd_env):
+            ret, data = self.trade_ctx.modify_order(
+                modify_order_op="CANCEL",
+                order_id=order_id,
+                qty=0,
+                price=0,
+                adjust_limit=0,
+                trd_env=trd_env,
+                acc_id=acc_id,
+            )
+            if ret != RET_OK:
+                raise RuntimeError(f"cancel_order failed: {data}")
 
-        records = data.to_dict("records")
-        return records[0] if records else {}
+            records = data.to_dict("records")
+            return records[0] if records else {}
 
     def get_orders(
         self,
@@ -564,9 +1109,10 @@ class TradeService:
         Args:
             code: Filter by stock code.
             status_filter_list: Filter by order statuses (as strings).
-                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING, SUBMIT_FAILED,
-                SUBMITTED, FILLED_PART, FILLED_ALL, CANCELLING_PART, CANCELLING_ALL,
-                CANCELLED_PART, CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
+                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING,
+                SUBMIT_FAILED, SUBMITTED, FILLED_PART, FILLED_ALL,
+                CANCELLING_PART, CANCELLING_ALL, CANCELLED_PART,
+                CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
             trd_env: Trading environment.
             acc_id: Account ID.
             refresh_cache: Whether to refresh cache.
@@ -597,7 +1143,7 @@ class TradeService:
         if data is None or data.empty:
             return []
 
-        return data.to_dict("records")
+        return _plain_combo_legs(data.to_dict("records"))
 
     def get_deals(
         self,
@@ -648,16 +1194,18 @@ class TradeService:
         Args:
             code: Filter by stock code.
             status_filter_list: Filter by order statuses (as strings).
-                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING, SUBMIT_FAILED,
-                SUBMITTED, FILLED_PART, FILLED_ALL, CANCELLING_PART, CANCELLING_ALL,
-                CANCELLED_PART, CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
+                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING,
+                SUBMIT_FAILED, SUBMITTED, FILLED_PART, FILLED_ALL,
+                CANCELLING_PART, CANCELLING_ALL, CANCELLED_PART,
+                CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
             start: Start date (YYYY-MM-DD).
             end: End date (YYYY-MM-DD).
             trd_env: Trading environment.
             acc_id: Account ID.
 
         Returns:
-            List of historical order dictionaries. Returns empty list if no orders found.
+            List of historical order dictionaries.
+            Returns empty list if no orders found.
         """
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
@@ -683,7 +1231,7 @@ class TradeService:
         if data is None or data.empty:
             return []
 
-        return data.to_dict("records")
+        return _plain_combo_legs(data.to_dict("records"))
 
     def get_history_deals(
         self,

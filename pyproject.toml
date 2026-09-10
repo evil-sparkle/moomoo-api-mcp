@@ -32,8 +32,13 @@ classifiers = [
 urls.Repository = "https://github.com/Litash/moomoo-api-mcp"
 urls.Issues = "https://github.com/Litash/moomoo-api-mcp/issues"
 dependencies = [
-    "mcp>=1.0.0",
-    "moomoo-api>=3.3.0", 
+    "anyio>=4.0.0",
+    # <2 because the server is built on FastMCP: mcp 2.x renamed it to
+    # MCPServer and moved the request context, so 2.x fails at import.
+    # >=1.10.0 for structured tool output, which account and market-data
+    # tools rely on to return typed results alongside text.
+    "mcp>=1.10.0,<2",
+    "moomoo-api>=10.10.7008",  # place_combo_order / ComboLeg
     "pandas>=2.0.0",
 ]
 
@@ -70,3 +75,4 @@ known-first-party = ["moomoo_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]

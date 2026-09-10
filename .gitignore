@@ -96,3 +96,8 @@ debug.log
 
 # Skills
 .agent/skills/
+
+# Large binaries & archives
+*.tar.gz
+*.7z
+moomoo_OpenD*

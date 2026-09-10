@@ -12,15 +12,31 @@ This MCP server empowers developers to build custom trading skills and strategie
 
 - **Market Data**: Real-time quotes, historical K-lines, market snapshots, and order books.
 - **Account Management**: Comprehensive account summaries, assets, positions, and cash flow analysis.
-- **Trading**: Full order management including placing, modifying, and canceling orders.
-- **System Health**: Built-in health checks and connectivity verification.
+- **Trading**: Full order management including placing, modifying, and canceling
+  orders, gated by an explicitly configured trading mode.
+- **System Health**: Active, bounded health probes of the quote and trade connections to OpenD.
 - **Extensible Architecture**: Built on FastMCP for easy extension of trading capabilities.
 
 ## Tools
 
 ### System
 
-- `check_health`: Check connectivity to Moomoo OpenD gateway and server health.
+- `check_health`: Actively probe the Moomoo OpenD gateway with read-only quote and trade calls.
+
+  Returns `status` (`connected` when both probes succeed, `degraded` when exactly one does, `disconnected` when neither does), `host`, a UTC `checked_at` observation time, per-service `quote` and `trade` results, and `gateway_version` when OpenD reports one. The whole check is bounded to five seconds, and repeated calls during a stuck probe reuse the in-flight worker rather than starting another.
+
+  ```json
+  {
+    "status": "degraded",
+    "host": "127.0.0.1:11111",
+    "checked_at": "2026-09-10T12:00:00Z",
+    "quote": { "status": "ok", "logged_in": true },
+    "trade": { "status": "error", "reason": "gateway_error", "error": "trade svr not ready" },
+    "gateway_version": "9.2.5208"
+  }
+  ```
+
+  A `connected` result means OpenD answered. It does **not** mean trading is unlocked, that an order would be accepted, or that a given market is authorized for the account. The server also starts even when OpenD is unreachable, so `check_health` stays callable while you diagnose the gateway.
 
 ### Account
 
@@ -36,13 +52,24 @@ This MCP server empowers developers to build custom trading skills and strategie
 ### Market Data
 
 - `get_stock_quote`: Get real-time stock quotes.
-- `get_historical_klines`: Retrieve historical candlestick data (Day, Week, Min, etc.).
+- `get_historical_klines`: Retrieve historical candlestick data (Day, Week, Min, etc.). Returns a **single page** — the provider's continuation token is discarded, so for a wide date range the list can be a prefix of the range with no indication that more exists. Kept unchanged for existing callers.
+- `get_historical_klines_page`: The same query with explicit continuation, returning `{data, next_cursor, has_more}`. One call fetches one page; loop until `next_cursor` is null. The cursor is bound to the query that produced it, so replaying it with a different symbol, interval, or adjustment is rejected rather than silently mixing series. An empty `data` list with `has_more: true` is possible and does not mean the range is finished.
 - `get_market_snapshot`: Get efficient market snapshots for multiple stocks.
 - `get_order_book`: View real-time bid/ask order book depth.
+- `get_subscriptions`: List the market-data subscriptions held by this server's quote connection, with usage figures split into `connection` (this server) and `provider` (every client on the same OpenD gateway). Only fields the provider actually reports are present — an absent quota means "not reported", never "unlimited".
+- `unsubscribe_market_data`: Release specific codes and subscription types held by this connection. Never global, and never another client's subscriptions. A provider that enforces a minimum subscription duration can refuse an early release; that is returned as an error and is not retried. Reading the symbol again re-subscribes it.
+- `get_market_state`: Get each instrument's current session state (`MORNING`, `REST`, `CLOSED`, `PRE_MARKET_BEGIN`, …) as the provider reports it, with a UTC observation time. It is an observation, not a schedule.
+- `get_trading_days`: Get a market's trading calendar for a date range. Dates are **market-local** calendar dates, holidays are simply absent from the list, and half days are distinguished by `trade_date_type`. Session opening and closing times are not part of the response and are never inferred. A trading date does not imply that a given instrument, or your account, may trade that day.
+- `get_option_expiration_date`: List an underlying's available option expiry dates.
+- `get_user_security_group`: List the user's watchlist groups from the Moomoo app.
+- `get_user_security`: List the securities in one watchlist group.
+- `get_option_chain`: Get option contracts for an underlying within a range of expiry dates, filtered to calls, puts, or all. Returns the exact provider contract symbols to use in quotes, previews, and orders — never build an option symbol by hand. The provider accepts a range of at most 30 days; a wider range is rejected rather than truncated.
 
 ### Trading
 
 - `place_order`: Place a new order (Market, Limit, Stop, etc.).
+- `preview_combo_order`: Preview what a multi-leg package would do to an account — net liquidation value, initial and maintenance margin, option buying power, withdrawable amount, and buying-power decrease — using the broker's own calculation. Read-only: it places nothing, unlocks nothing, and reserves nothing, so it works in every trading mode. A field the broker did not report comes back as `null` rather than `0`. The values are point-in-time estimates, not a quote or an acceptance.
+- `place_combo_order`: Place a multi-leg option strategy (vertical spread, straddle, etc.) as a single atomic order. Use this rather than several `place_order` calls for any multi-leg strategy — the package fills as one unit, so a strategy can't be left half-executed. To **close** a strategy, first call `get_positions(show_option_strategy_view=True)` and pass each leg's `position_id`, which the API requires on closing orders.
 - `modify_order`: Modify price or quantity of an open order.
 - `cancel_order`: Cancel an open order.
 - `get_orders`: Get list of orders for the current day.
@@ -117,6 +144,9 @@ The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local ga
 1. **Download OpenD**:
    - Visit the [Moomoo Open API Download Page](https://www.moomoo.com/download/opend).
    - Download the version appropriate for your OS (Windows/Mac/Linux).
+   - **Version**: this server requires `moomoo-api>=10.10.7008` (for combo orders). The
+     SDK and the gateway share a version line, so run an OpenD of at least that version
+     to avoid protocol mismatches.
 
 2. **Install & Run**:
    - Install the application.
@@ -131,12 +161,39 @@ The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local ga
 
 To enable **REAL account** access, you must securely provide your credentials.
 
-| Variable                | Description                                | Example  |
-| ----------------------- | ------------------------------------------ | -------- |
-| `MOOMOO_TRADE_PASSWORD` | Your trading password (plain text)         | `123456` |
-| `MOOMOO_SECURITY_FIRM`  | Your broker region (e.g., FUTUSG, FUTUINC) | `FUTUSG` |
+| Variable                | Description                                                | Example     |
+| ----------------------- | ---------------------------------------------------------- | ----------- |
+| `MOOMOO_TRADING_MODE`   | Which writes this server may issue. Default `READ_ONLY`.     | `SIMULATE`  |
+| `MOOMOO_TRADE_PASSWORD` | Your trading password (plain text)                           | `123456`    |
+| `MOOMOO_SECURITY_FIRM`  | Your broker region (e.g., FUTUSG, FUTUINC)                   | `FUTUSG`    |
 
-> **Note**: Without these, the server runs in **SIMULATE-only mode** (paper trading).
+#### Trading mode
+
+`MOOMOO_TRADING_MODE` decides what this deployment is allowed to do, which is a
+separate question from what your broker permits. It is enforced in the service
+layer, before any request reaches OpenD.
+
+| Mode                  | Account reads and previews | `trd_env='SIMULATE'` writes | `trd_env='REAL'` writes | `unlock_trade` |
+| --------------------- | -------------------------- | --------------------------- | ----------------------- | -------------- |
+| `READ_ONLY` (default) | Allowed                    | Denied                      | Denied                  | Denied         |
+| `SIMULATE`            | Allowed                    | Allowed                     | Denied                  | Denied         |
+| `REAL`                | Allowed                    | Allowed                     | Allowed                 | Allowed        |
+
+- "Writes" means placing an order, placing a combo order, modifying an order,
+  and cancelling an order. `READ_ONLY` blocks all four — including cancelling an
+  order placed elsewhere.
+- A denied request returns an explicit policy error. It is never rerouted into a
+  different account environment.
+- Configuring `MOOMOO_TRADE_PASSWORD` does **not** change the mode. Only `REAL`
+  mode unlocks trading at startup, and a failed unlock leaves the mode as it was
+  without retrying or placing anything.
+- An unrecognized value fails startup rather than falling back to a permissive
+  mode.
+- Reads are still subject to your broker's own permissions and to `unlock_trade`
+  for REAL account data. The mode caps what the server will attempt; it does not
+  grant anything.
+
+`check_health` reports the configured mode as `trading_mode`.
 
 ### 3. Configure Claude Desktop
 
@@ -151,6 +208,7 @@ Add the server to your `claude_desktop_config.json`:
       "command": "uvx",
       "args": ["--refresh", "moomoo-api-mcp"],
       "env": {
+        "MOOMOO_TRADING_MODE": "REAL",
         "MOOMOO_TRADE_PASSWORD": "your_trading_password",
         "MOOMOO_SECURITY_FIRM": "FUTUSG"
       }
@@ -175,6 +233,7 @@ Add the server to your `claude_desktop_config.json`:
         "moomoo-api-mcp"
       ],
       "env": {
+        "MOOMOO_TRADING_MODE": "REAL",
         "MOOMOO_TRADE_PASSWORD": "your_trading_password",
         "MOOMOO_SECURITY_FIRM": "FUTUSG"
       }
@@ -187,17 +246,28 @@ Add the server to your `claude_desktop_config.json`:
 
 ## AI Agent Guidance
 
-> **IMPORTANT**: All account tools default to **REAL** trading accounts.
+> **IMPORTANT**: All account tools default to **REAL** trading accounts, and the
+> server refuses order writes unless `MOOMOO_TRADING_MODE` permits them.
 
 When using this MCP server, AI agents **MUST**:
+
+0. **Check the configured trading mode** with `check_health` before proposing an
+   order. In `READ_ONLY` — the default — placing, modifying, and cancelling
+   orders all fail with a policy error, so offer analysis rather than a trade.
 
 1. **Notify the user clearly** before accessing REAL account data. Example:
 
    > "I'm about to access your **REAL trading account**. This will show your actual portfolio and balances."
 
-2. **Follow the unlock workflow** for REAL accounts:
-   - First call `unlock_trade` (it handles env vars automatically, or pass password if needed).
-   - Then call account/trading tools (they default to `trd_env='REAL'`).
+2. **Read first, unlock only if the read says so.** Unlocking is the
+   *gateway's* trading lock and is separate from reading account data. Do not
+   call `unlock_trade` pre-emptively: it is denied unless
+   `MOOMOO_TRADING_MODE=REAL`, so an unnecessary unlock turns a read that would
+   have succeeded into a policy error.
+   - Call the read you want (`get_account_summary`, `get_positions`, …) with
+     `trd_env='REAL'`.
+   - Only if it fails asking for trading to be unlocked, call `unlock_trade`
+     (it uses the env vars automatically, or takes a password), then retry.
 
 3. **Only use SIMULATE accounts when explicitly requested** by the user. To use simulation:
    - Pass `trd_env='SIMULATE'` parameter explicitly.
@@ -212,8 +282,61 @@ Agent Response:
 "I'm accessing your REAL trading account to show your portfolio.
 If you prefer to use a simulation account instead, please let me know."
 
-[Proceeds to unlock_trade → get_account_summary]
+[Proceeds to get_account_summary; only if that reports trading is locked
+ does it call unlock_trade and retry]
 ```
+
+### Managing Subscriptions
+
+`get_stock_quote` and `get_order_book` subscribe automatically, so symbols
+accumulate on this server's quote connection as they are read. To release some:
+
+```text
+1. get_subscriptions()                                  → what this connection holds
+2. unsubscribe_market_data(codes=[...], sub_types=[...]) → release the ones you picked
+3. get_subscriptions()                                  → confirm what is still held
+```
+
+Step 2 reports `acknowledged`, meaning the provider accepted the request — step
+3 is how you confirm the state actually settled. The provider quota is shared
+across every client attached to the same OpenD gateway, so a small
+`connection` figure does not by itself mean there is headroom.
+
+### Paging Through Historical Candles
+
+```text
+page = get_historical_klines_page(code="US.AAPL", start="2025-01-01", end="2025-12-31")
+rows = page["data"]
+while page["has_more"]:
+    page = get_historical_klines_page(
+        code="US.AAPL", start="2025-01-01", end="2025-12-31",
+        cursor=page["next_cursor"],
+    )
+    rows += page["data"]
+```
+
+Pass every non-cursor argument through unchanged on each iteration, bound the
+loop, and treat a failed page as an error rather than as the end of the data.
+Omitted `start`/`end` are resolved once on the first page and carried in the
+cursor, so a traversal that crosses midnight keeps reading the same window.
+
+### Option Strategy Workflow
+
+Discovery comes before pricing, and pricing before submission:
+
+```text
+1. get_option_expiration_date("US.AAPL")   → pick an expiry
+2. get_option_chain("US.AAPL", start=expiry, end=expiry, option_type="CALL")
+                                           → exact contract symbols
+3. preview_combo_order(legs, price, qty)   → margin and buying-power impact
+4. [confirm with the user]
+5. place_combo_order(...)                  → requires MOOMOO_TRADING_MODE
+```
+
+Pass contract symbols through from step 2 to steps 3 and 5 exactly as
+received. To **close** an existing strategy, get each leg's `position_id` from
+`get_positions(show_option_strategy_view=True)` first and include it in the
+legs, again unchanged.
 
 ### Order Status Filter Usage
 
@@ -231,6 +354,50 @@ When using `get_orders` or `get_history_orders`, the `status_filter_list` parame
 - `REJECTED`, `DISABLED`, `DELETED`, `FAILED`, `NONE`
 
 > **Note**: The server automatically converts these strings to the required SDK enum format. If no orders match the filter, an empty list is returned.
+
+## Migration Notes
+
+### Trading mode must be configured before writing
+
+`MOOMOO_TRADING_MODE` defaults to `READ_ONLY`, which refuses every order write
+and every unlock. A deployment that submits orders must now set it explicitly:
+
+- paper trading → `MOOMOO_TRADING_MODE=SIMULATE`, and keep passing
+  `trd_env='SIMULATE'` on each call;
+- live trading → `MOOMOO_TRADING_MODE=REAL`.
+
+Previously the server relied on the presence of a trade password to imply
+simulation-only operation, but nothing enforced that: tool defaults were `REAL`
+and any caller could submit a live order. The mode now decides, and the password
+no longer implies anything about it.
+
+### Account, position, and combo identifiers are strings
+
+Account tools return `acc_id`, `position_id`, and `combo_id` as decimal
+**strings** in both the text and structured content of a response. This covers
+`get_accounts`, `get_assets`, `get_positions`, and `get_account_summary`,
+including the positions nested inside a summary.
+
+These are 64-bit values around 3e18. A client that parses JSON numbers as
+IEEE-754 doubles — which a JavaScript-based MCP client does — rounds anything
+above 2^53 into a different, still valid-looking integer. That corruption cannot
+be detected or repaired on the way back, which is why the value has to leave as
+a string.
+
+What to change in a client:
+
+- Pass identifiers back exactly as received. Do not call `Number()`, `parseInt`,
+  or `int()` on them.
+- Replace any numeric comparison or arithmetic on an id with a string
+  comparison.
+- Balances, quantities, prices, and every other field are unchanged and remain
+  numbers.
+
+Tool *inputs* already accepted string identifiers, so no call site needs a new
+argument type. An identifier that reaches the boundary as a float or a boolean
+is rejected with an explicit error rather than emitted as a plausible id: the
+precision was already lost upstream, and a silent replacement would send a
+request against the wrong account or position.
 
 ## License
 

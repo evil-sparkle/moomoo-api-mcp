@@ -4,12 +4,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-
 from mcp.server.fastmcp import FastMCP
 from moomoo.common import ft_logger
+
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import (
+    TradingMode,
+    TradingPolicy,
+    TradingPolicyError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +24,7 @@ if hasattr(ft_logger, "logger") and hasattr(ft_logger.logger, "console_logger"):
     # Clear existing handlers
     ft_logger.logger.console_logger.handlers = []
     # Replace the internal consoleHandler reference with a NullHandler.
-    # This ensures that when fontColor/info/error is called and it tries to re-add 
+    # This ensures that when fontColor/info/error is called and it tries to re-add
     # self.consoleHandler, it adds a harmless NullHandler instead of a StreamHandler.
     ft_logger.logger.consoleHandler = logging.NullHandler()
 
@@ -37,14 +42,28 @@ def _auto_unlock_trade(trade_service: TradeService) -> None:
 
     Reads MOOMOO_TRADE_PASSWORD (plain text, preferred) or MOOMOO_TRADE_PASSWORD_MD5.
     Logs status and handles failures gracefully without crashing.
+
+    Only a REAL-mode deployment unlocks. A configured password does not promote
+    the mode, and a failed unlock leaves the policy untouched — it never
+    triggers a retry or an order.
     """
     password = os.environ.get("MOOMOO_TRADE_PASSWORD")
     password_md5 = os.environ.get("MOOMOO_TRADE_PASSWORD_MD5")
 
+    mode = trade_service.policy.mode.value
     if not password and not password_md5:
         logger.info(
             "No trade password configured (MOOMOO_TRADE_PASSWORD or "
-            "MOOMOO_TRADE_PASSWORD_MD5 not set). Running in SIMULATE-only mode."
+            f"MOOMOO_TRADE_PASSWORD_MD5 not set). Trading mode: {mode}."
+        )
+        return
+
+    try:
+        trade_service.policy.check_unlock()
+    except TradingPolicyError as e:
+        logger.info(
+            f"A trade password is configured, but not unlocking: {e} "
+            "Trading mode is unchanged."
         )
         return
 
@@ -58,7 +77,10 @@ def _auto_unlock_trade(trade_service: TradeService) -> None:
             logger.info("Trade unlocked successfully. REAL account access enabled.")
         else:
             trade_service.unlock_trade(password_md5=password_md5)
-            logger.info("Trade unlocked successfully (via MD5). REAL account access enabled.")
+            logger.info(
+                "Trade unlocked successfully (via MD5). "
+                "REAL account access enabled."
+            )
     except RuntimeError as e:
         logger.warning(
             f"Failed to unlock trade: {e}. "
@@ -68,7 +90,7 @@ def _auto_unlock_trade(trade_service: TradeService) -> None:
 
 
 @asynccontextmanager
-async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
+async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage moomoo connections lifecycle."""
     # Read OpenD connection settings from environment
     opend_host = os.environ.get("MOOMOO_OPEND_HOST", "127.0.0.1")
@@ -76,24 +98,55 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     opend_port = int(opend_port_raw) if opend_port_raw.isdigit() else 11111
     logger.info(f"Connecting to OpenD at {opend_host}:{opend_port}")
 
-    moomoo_service = MoomooService(host=opend_host, port=opend_port)
-    moomoo_service.connect()
+    # Parsed before anything connects: an unknown mode is a configuration error,
+    # not something to recover from by picking a permissive default.
+    policy = TradingPolicy.from_env()
+    logger.info(f"Trading mode: {policy.mode.value}")
 
-    # Read security firm from environment (e.g., FUTUSG for Singapore, FUTUSECURITIES for HK)
+    # Read security firm from env (e.g. FUTUSG for SG, FUTUSECURITIES for HK)
     security_firm = os.environ.get("MOOMOO_SECURITY_FIRM")
     if security_firm:
         logger.info(f"Using security firm: {security_firm}")
 
-    trade_service = TradeService(host=opend_host, port=opend_port, security_firm=security_firm)
-    trade_service.connect()
-
-    # Auto-unlock trade if password is configured in environment
-    _auto_unlock_trade(trade_service)
-
-    # Create market data service using the shared quote context
-    market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
+    moomoo_service = MoomooService(host=opend_host, port=opend_port)
+    trade_service = TradeService(
+        host=opend_host,
+        port=opend_port,
+        security_firm=security_firm,
+        policy=policy,
+    )
 
     try:
+        # A downstream connection failure must not take the MCP server down with
+        # it: check_health is the tool an operator reaches for precisely when
+        # OpenD is unreachable, so it has to stay callable. Whatever did connect
+        # is still released by the finally block below.
+        for name, service in (("quote", moomoo_service), ("trade", trade_service)):
+            try:
+                service.connect()
+            except Exception as exc:  # noqa: BLE001 - startup must stay available
+                logger.error(
+                    f"Failed to initialize the {name} connection to OpenD at "
+                    f"{opend_host}:{opend_port}: {exc}. "
+                    "The server will start; use check_health to diagnose."
+                )
+
+        if trade_service.trade_ctx is not None:
+            if policy.mode is TradingMode.READ_ONLY:
+                try:
+                    trade_service.lock_trade()
+                    logger.info(
+                        "Proactively locked trade gateway on startup in READ_ONLY mode."
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Failed to proactively lock trade on OpenD: {exc}")
+            elif policy.mode is TradingMode.REAL:
+                # Auto-unlock trade if password is configured in environment
+                _auto_unlock_trade(trade_service)
+
+        # Create market data service using the shared quote context
+        market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
+
         yield AppContext(
             moomoo_service=moomoo_service,
             trade_service=trade_service,
@@ -106,18 +159,27 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 mcp = FastMCP(
     "Moomoo Trading",
     lifespan=app_lifespan,
-    dependencies=["moomoo-api", "pandas"] 
+    dependencies=["moomoo-api", "pandas"],
+    host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
+    port=int(os.environ.get("FASTMCP_PORT", "8000")),
 )
 
 # Import tools to register them
-import moomoo_mcp.tools.system
-import moomoo_mcp.tools.account
-import moomoo_mcp.tools.market_data
-import moomoo_mcp.tools.trading
+import moomoo_mcp.tools.account  # noqa: E402, F401
+import moomoo_mcp.tools.market_data  # noqa: E402, F401
+import moomoo_mcp.tools.system  # noqa: E402, F401
+import moomoo_mcp.tools.trading  # noqa: E402, F401
+
 
 def main():
     """Entry point for the MCP server."""
-    mcp.run()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()
+    if transport in ("sse", "streamable-http"):
+        mcp.run(transport=transport)
+    else:
+        mcp.run()
+
 
 if __name__ == "__main__":
     main()
+

@@ -1,10 +1,16 @@
 """Unit tests for TradeService."""
 
-import pytest
 from unittest.mock import MagicMock, patch
+
 import pandas as pd
+import pytest
 
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
+
+# These tests exercise order writes, so they state that intent explicitly:
+# a service constructed without a policy is read-only and refuses them.
+REAL_POLICY = TradingPolicy(TradingMode.REAL)
 
 
 @pytest.fixture
@@ -15,8 +21,8 @@ def mock_trade_ctx():
 
 @pytest.fixture
 def trade_service_with_mock(mock_trade_ctx):
-    """Create TradeService with mocked context."""
-    service = TradeService()
+    """Create a write-enabled TradeService with a mocked context."""
+    service = TradeService(policy=REAL_POLICY)
     service.trade_ctx = mock_trade_ctx
     return service
 
@@ -64,7 +70,7 @@ class TestGetAccounts:
 
     def test_get_accounts_no_context(self):
         """Test error when context not connected."""
-        service = TradeService()
+        service = TradeService()  # reads need no write policy
 
         with pytest.raises(RuntimeError, match="Trade context not connected"):
             service.get_accounts()
@@ -118,7 +124,7 @@ class TestGetPositions:
         df = pd.DataFrame([{"code": "US.AAPL", "qty": 100}])
         mock_trade_ctx.position_list_query.return_value = (0, df)
 
-        result = trade_service_with_mock.get_positions(code="US.AAPL")
+        trade_service_with_mock.get_positions(code="US.AAPL")
 
         mock_trade_ctx.position_list_query.assert_called_once()
         call_kwargs = mock_trade_ctx.position_list_query.call_args.kwargs
@@ -139,6 +145,22 @@ class TestGetMaxTradable:
 
         assert result["max_cash_buy"] == 100
         mock_trade_ctx.acctradinginfo_query.assert_called_once()
+        _, kwargs = mock_trade_ctx.acctradinginfo_query.call_args
+        assert kwargs["order_id"] is None
+
+    def test_get_max_tradable_custom_order_id(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test max tradable when order_id is provided."""
+        df = pd.DataFrame([{"max_cash_buy": 100}])
+        mock_trade_ctx.acctradinginfo_query.return_value = (0, df)
+
+        trade_service_with_mock.get_max_tradable(
+            order_type="NORMAL", code="US.AAPL", price=150.0, order_id="ORDER123"
+        )
+
+        _, kwargs = mock_trade_ctx.acctradinginfo_query.call_args
+        assert kwargs["order_id"] == "ORDER123"
 
 
 class TestGetMarginRatio:
@@ -200,6 +222,86 @@ class TestUnlockTrade:
             trade_service_with_mock.unlock_trade(password="wrongpass")
 
 
+class TestLockTrade:
+    """Tests for lock_trade."""
+
+    def test_lock_trade_success(self, trade_service_with_mock, mock_trade_ctx):
+        """Test successful trade lock."""
+        mock_trade_ctx.unlock_trade.return_value = (0, None)
+
+        trade_service_with_mock.lock_trade()
+
+        mock_trade_ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+
+    def test_lock_trade_error(self, trade_service_with_mock, mock_trade_ctx):
+        """Test trade lock error handling."""
+        mock_trade_ctx.unlock_trade.return_value = (-1, "Gateway busy")
+
+        with pytest.raises(RuntimeError, match="lock_trade failed"):
+            trade_service_with_mock.lock_trade()
+
+
+class TestJitTradeUnlock:
+    """Tests for _jit_trade_unlock context manager."""
+
+    def test_jit_unlock_real_with_md5(
+        self, trade_service_with_mock, mock_trade_ctx, monkeypatch
+    ):
+        """Test JIT unlock on REAL environment with password MD5."""
+        monkeypatch.setenv("MOOMOO_TRADE_PASSWORD_MD5", "hash123")
+        monkeypatch.delenv("MOOMOO_TRADE_PASSWORD", raising=False)
+        mock_trade_ctx.unlock_trade.return_value = (0, None)
+
+        with trade_service_with_mock._jit_trade_unlock(trd_env="REAL"):
+            mock_trade_ctx.unlock_trade.assert_called_once_with(
+                password=None, password_md5="hash123", is_unlock=True
+            )
+
+        # After exiting context, should have called lock (is_unlock=False)
+        assert mock_trade_ctx.unlock_trade.call_count == 2
+        mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
+
+    def test_jit_unlock_always_relocks_on_exception(
+        self, trade_service_with_mock, mock_trade_ctx, monkeypatch
+    ):
+        """Test JIT unlock guarantees relock even when order raises exception."""
+        monkeypatch.setenv("MOOMOO_TRADE_PASSWORD_MD5", "hash123")
+        mock_trade_ctx.unlock_trade.return_value = (0, None)
+
+        with (
+            pytest.raises(ValueError, match="Order exploded"),
+            trade_service_with_mock._jit_trade_unlock(trd_env="REAL"),
+        ):
+            raise ValueError("Order exploded")
+
+        # Must have re-locked
+        assert mock_trade_ctx.unlock_trade.call_count == 2
+        mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
+
+    def test_jit_unlock_skipped_for_simulate(
+        self, trade_service_with_mock, mock_trade_ctx, monkeypatch
+    ):
+        """Test JIT unlock is skipped for SIMULATE environment."""
+        monkeypatch.setenv("MOOMOO_TRADE_PASSWORD_MD5", "hash123")
+
+        with trade_service_with_mock._jit_trade_unlock(trd_env="SIMULATE"):
+            pass
+
+        mock_trade_ctx.unlock_trade.assert_not_called()
+
+    def test_jit_unlock_noop_when_no_credentials(
+        self, trade_service_with_mock, mock_trade_ctx, monkeypatch
+    ):
+        """Test JIT unlock is a no-op when credentials are not configured."""
+        monkeypatch.delenv("MOOMOO_TRADE_PASSWORD", raising=False)
+        monkeypatch.delenv("MOOMOO_TRADE_PASSWORD_MD5", raising=False)
+
+        with trade_service_with_mock._jit_trade_unlock(trd_env="REAL"):
+            pass
+
+        mock_trade_ctx.unlock_trade.assert_not_called()
+
+
 class TestPlaceOrder:
     """Tests for place_order."""
 
@@ -234,7 +336,9 @@ class TestPlaceOrder:
     def test_place_order_error(self, trade_service_with_mock, mock_trade_ctx):
         """Test order placement failure."""
         # Setup mock for smart account selection
-        acc_df = pd.DataFrame([{"acc_id": 123, "trd_env": "SIMULATE", "market_auth": ["US"]}])
+        acc_df = pd.DataFrame(
+            [{"acc_id": 123, "trd_env": "SIMULATE", "market_auth": ["US"]}]
+        )
         mock_trade_ctx.get_acc_list.return_value = (0, acc_df)
         mock_trade_ctx.place_order.return_value = (-1, "Order rejected")
 
@@ -248,7 +352,7 @@ class TestPlaceOrder:
 
     def test_place_order_no_context(self):
         """Test error when context not connected."""
-        service = TradeService()
+        service = TradeService(policy=REAL_POLICY)
 
         with pytest.raises(RuntimeError, match="Trade context not connected"):
             service.place_order(
@@ -677,3 +781,318 @@ class TestStatusFilterConversion:
 
         call_kwargs = mock_trade_ctx.order_list_query.call_args.kwargs
         assert call_kwargs["status_filter_list"] == []
+
+
+class TestPositionStrategyView:
+    """Tests for the option strategy view used to obtain closing position IDs."""
+
+    def test_strategy_view_forwarded_to_sdk(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test show_option_strategy_view reaches position_list_query."""
+        df = pd.DataFrame(
+            [
+                {
+                    "code": "US.XYZ260101C100000/105000",
+                    "position_id": 1111111111111111111,
+                    "combo_id": 1111111111111111111,
+                    "position_type": "COMBINED",
+                    "qty": 1,
+                }
+            ]
+        )
+        mock_trade_ctx.position_list_query.return_value = (0, df)
+
+        result = trade_service_with_mock.get_positions(
+            trd_env="SIMULATE", acc_id=123, show_option_strategy_view=True
+        )
+
+        kwargs = mock_trade_ctx.position_list_query.call_args.kwargs
+        assert kwargs["show_option_strategy_view"] is True
+        assert result[0]["position_id"] == 1111111111111111111
+
+    def test_strategy_view_defaults_off(self, trade_service_with_mock, mock_trade_ctx):
+        """Test the flat view remains the default."""
+        df = pd.DataFrame([{"code": "US.AAPL", "qty": 10}])
+        mock_trade_ctx.position_list_query.return_value = (0, df)
+
+        trade_service_with_mock.get_positions(trd_env="SIMULATE", acc_id=123)
+
+        kwargs = mock_trade_ctx.position_list_query.call_args.kwargs
+        assert kwargs["show_option_strategy_view"] is False
+
+
+class TestPlaceComboOrder:
+    """Tests for place_combo_order."""
+
+    @staticmethod
+    def _legs():
+        """Two legs of a vertical call spread, sold as a package."""
+        return [
+            {"code": "US.XYZ260101C100000", "trd_side": "SELL", "qty_ratio": 1},
+            {"code": "US.XYZ260101C105000", "trd_side": "BUY", "qty_ratio": 1},
+        ]
+
+    def test_rejects_missing_qty_ratio(self, trade_service_with_mock, mock_trade_ctx):
+        """Test an omitted qty_ratio is refused rather than defaulted to 1.
+
+        qty_ratio multiplies the order quantity, so assuming a value would
+        silently submit a different strategy.
+        """
+        legs = self._legs()
+        del legs[0]["qty_ratio"]
+
+        with pytest.raises(ValueError, match="missing 'qty_ratio'"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=legs, price=2.5, qty=1, acc_id=123
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_position_id_passed_through_when_closing(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test position_id reaches the gateway, as required for closing orders."""
+        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
+        mock_trade_ctx.place_combo_order.return_value = (0, df)
+        legs = self._legs()
+        legs[0]["position_id"] = 1111111111111111111
+        legs[1]["position_id"] = "2222222222222222222"
+
+        trade_service_with_mock.place_combo_order(
+            combo_legs=legs, price=2.5, qty=1, trd_env="SIMULATE", acc_id=123
+        )
+
+        sent = mock_trade_ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
+        assert [leg.position_id for leg in sent] == [
+            1111111111111111111,
+            2222222222222222222,
+        ]
+
+    def test_position_id_omitted_when_opening(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test legs without position_id leave it unset rather than inventing one."""
+        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
+        mock_trade_ctx.place_combo_order.return_value = (0, df)
+
+        trade_service_with_mock.place_combo_order(
+            combo_legs=self._legs(), price=2.5, qty=1, trd_env="SIMULATE", acc_id=123
+        )
+
+        sent = mock_trade_ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
+        assert all(leg.position_id is None for leg in sent)
+
+    def test_rejects_non_numeric_position_id(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test a malformed position_id is refused."""
+        legs = self._legs()
+        legs[0]["position_id"] = "not-an-id"
+
+        with pytest.raises(ValueError, match="non-integer 'position_id'"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=legs, price=2.5, qty=1, acc_id=123
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_rejects_boolean_position_id(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test a boolean position_id is refused rather than coerced to 1."""
+        legs = self._legs()
+        legs[0]["position_id"] = True
+
+        with pytest.raises(ValueError, match="boolean 'position_id'"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=legs, price=2.5, qty=1, acc_id=123
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_rejects_float_position_id(self, trade_service_with_mock, mock_trade_ctx):
+        """Test a float position_id is refused rather than truncated."""
+        legs = self._legs()
+        legs[0]["position_id"] = 123.75
+
+        with pytest.raises(ValueError, match="non-integer 'position_id'"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=legs, price=2.5, qty=1, acc_id=123
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_large_position_id_string_kept_exact(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test a decimal string ID survives transport without precision loss."""
+        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
+        mock_trade_ctx.place_combo_order.return_value = (0, df)
+        legs = self._legs()
+        legs[0]["position_id"] = "9007199254740993"  # beyond float64 exact range
+        legs[1]["position_id"] = 3333333333333333333
+
+        trade_service_with_mock.place_combo_order(
+            combo_legs=legs, price=2.5, qty=1, trd_env="SIMULATE", acc_id=123
+        )
+
+        sent = mock_trade_ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
+        assert [leg.position_id for leg in sent] == [
+            9007199254740993,
+            3333333333333333333,
+        ]
+
+    def test_place_combo_order_success(self, trade_service_with_mock, mock_trade_ctx):
+        """Test successful combo order placement."""
+        df = pd.DataFrame(
+            [
+                {
+                    "order_id": "998877",
+                    "order_status": "SUBMITTED",
+                    "qty": 1,
+                    "price": 2.5,
+                }
+            ]
+        )
+        mock_trade_ctx.place_combo_order.return_value = (0, df)
+
+        result = trade_service_with_mock.place_combo_order(
+            combo_legs=self._legs(),
+            price=2.5,
+            qty=1,
+            trd_env="SIMULATE",
+            acc_id=123,
+        )
+
+        assert result["order_id"] == "998877"
+        mock_trade_ctx.place_combo_order.assert_called_once()
+
+    def test_legs_mapped_to_combo_leg_objects(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test dict legs are converted to ComboLeg with the right attributes."""
+        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
+        mock_trade_ctx.place_combo_order.return_value = (0, df)
+
+        trade_service_with_mock.place_combo_order(
+            combo_legs=self._legs(),
+            price=2.5,
+            qty=1,
+            trd_env="SIMULATE",
+            acc_id=123,
+        )
+
+        sent = mock_trade_ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
+        assert [leg.code for leg in sent] == [
+            "US.XYZ260101C100000",
+            "US.XYZ260101C105000",
+        ]
+        assert [leg.trd_side for leg in sent] == ["SELL", "BUY"]
+        assert [leg.qty_ratio for leg in sent] == [1, 1]
+
+    def test_rejects_single_leg(self, trade_service_with_mock, mock_trade_ctx):
+        """Test a one-leg combo is refused and never reaches the gateway."""
+        with pytest.raises(ValueError, match="at least two legs"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=self._legs()[:1],
+                price=2.5,
+                qty=1,
+                acc_id=123,
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_rejects_invalid_trd_side(self, trade_service_with_mock, mock_trade_ctx):
+        """Test an unsupported trade side is refused."""
+        legs = self._legs()
+        legs[0]["trd_side"] = "SHORT"
+
+        with pytest.raises(ValueError, match="Invalid trd_side"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=legs, price=2.5, qty=1, acc_id=123
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_rejects_mixed_markets(self, trade_service_with_mock, mock_trade_ctx):
+        """Test legs from different markets are refused."""
+        legs = self._legs()
+        legs[1]["code"] = "HK.00700"
+
+        with pytest.raises(ValueError, match="same market"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=legs, price=2.5, qty=1, acc_id=123
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_rejects_non_positive_qty_ratio(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test a zero quantity ratio is refused."""
+        legs = self._legs()
+        legs[0]["qty_ratio"] = 0
+
+        with pytest.raises(ValueError, match="qty_ratio"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=legs, price=2.5, qty=1, acc_id=123
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_rejects_missing_code(self, trade_service_with_mock, mock_trade_ctx):
+        """Test a leg without a code is refused."""
+        legs = self._legs()
+        legs[0]["code"] = ""
+
+        with pytest.raises(ValueError, match="code"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=legs, price=2.5, qty=1, acc_id=123
+            )
+
+        mock_trade_ctx.place_combo_order.assert_not_called()
+
+    def test_place_combo_order_error(self, trade_service_with_mock, mock_trade_ctx):
+        """Test gateway rejection surfaces as RuntimeError."""
+        mock_trade_ctx.place_combo_order.return_value = (-1, "Combo rejected")
+
+        with pytest.raises(RuntimeError, match="place_combo_order failed"):
+            trade_service_with_mock.place_combo_order(
+                combo_legs=self._legs(),
+                price=2.5,
+                qty=1,
+                acc_id=123,
+            )
+
+    def test_place_combo_order_no_context(self):
+        """Test error when context not connected."""
+        service = TradeService(policy=REAL_POLICY)
+
+        with pytest.raises(RuntimeError, match="Trade context not connected"):
+            service.place_combo_order(
+                combo_legs=self._legs(),
+                price=2.5,
+                qty=1,
+                acc_id=123,
+            )
+
+    def test_resolves_account_from_leg_market(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test default acc_id is resolved using the market of the legs."""
+        acc_df = pd.DataFrame(
+            [{"acc_id": 456, "trd_env": "SIMULATE", "market_auth": ["US"]}]
+        )
+        mock_trade_ctx.get_acc_list.return_value = (0, acc_df)
+        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
+        mock_trade_ctx.place_combo_order.return_value = (0, df)
+
+        trade_service_with_mock.place_combo_order(
+            combo_legs=self._legs(),
+            price=2.5,
+            qty=1,
+            trd_env="SIMULATE",
+        )
+
+        assert mock_trade_ctx.place_combo_order.call_args.kwargs["acc_id"] == 456
