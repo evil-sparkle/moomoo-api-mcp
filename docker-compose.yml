@@ -10,6 +10,8 @@ services:
     platform: linux/amd64
     container_name: moomoo-opend
     restart: unless-stopped
+    stdin_open: true
+    tty: true
     volumes:
       # Persistent volume preserving device authorization and session tokens
       - ${OPEND_DATA_DIR:-opend-data}:/root/.com.moomoo.OpenD
@@ -24,12 +26,21 @@ services:
       - /bin/sh
       - -c
       - |
+        has_token=0
+        if [ -d "/root/.com.moomoo.OpenD/F3CNN" ] && [ -n "$$(find /root/.com.moomoo.OpenD/F3CNN -type f 2>/dev/null)" ]; then
+          has_token=1
+        fi
+
+        COMMON_ARGS="-api_ip=0.0.0.0 -no_monitor=1 -lang=en -login_region=$$MOOMOO_LOGIN_REGION"
+
         if [ -n "$$MOOMOO_LOGIN_PWD_MD5" ]; then
-          exec ./OpenD -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
-        elif [ "$$MOOMOO_LOGIN_BY_REMEMBER" = "1" ] && [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
-          exec ./OpenD -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_by_remember=1 -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+          exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5
+        elif [ "$$MOOMOO_LOGIN_BY_REMEMBER" = "1" ] && [ -n "$$MOOMOO_LOGIN_ACCOUNT" ] && [ "$$has_token" = "1" ]; then
+          exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_by_remember=1
+        elif [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
+          exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT
         else
-          exec ./OpenD -login_region=$$MOOMOO_LOGIN_REGION -lang=en
+          exec ./OpenD $$COMMON_ARGS
         fi
     ports:
       # Bind MCP SSE endpoint strictly to localhost on host machine
