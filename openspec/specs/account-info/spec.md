@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by archiving change add-account-tools. Update Purpose after archive.
+Defines MCP tools and services for querying broker account information, asset balances, positions, cash flows, margin ratios, and tradable quantities while preserving exact 64-bit identifier precision.
 
 ## Requirements
 

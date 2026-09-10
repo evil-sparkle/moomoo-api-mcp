@@ -1,7 +1,8 @@
 # system-health Specification
 
 ## Purpose
-TBD - created by archiving change init-mcp-server. Update Purpose after archive.
+
+Provides health diagnostics, liveness probes, and connection status monitoring between the MCP server and the downstream OpenD gateway.
 ## Requirements
 ### Requirement: Check Server Health
 
