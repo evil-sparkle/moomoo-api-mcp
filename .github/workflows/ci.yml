@@ -14,11 +14,11 @@ jobs:
     name: Run Tests and Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -50,7 +50,7 @@ jobs:
       moomoo-opend: ${{ steps.filter.outputs.moomoo-opend }}
       baseline: ${{ steps.filter.outputs.baseline }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # so full commit history is available for baseline comparison
 
@@ -189,17 +189,17 @@ jobs:
           - image: moomoo-opend
             dockerfile: ./Dockerfile.opend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Fetch git tags
         run: git fetch --tags --force
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Configure AWS credentials
         if: env.PUSH == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -329,10 +329,11 @@ jobs:
 
       - name: Build and push
         if: needs.changes.outputs[matrix.image] == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
           push: ${{ env.PUSH == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.image }}
