@@ -26,6 +26,7 @@ from moomoo_mcp.services.health import (
     failure,
     run_detached,
 )
+from moomoo_mcp.services.sdk_response import as_frame
 from moomoo_mcp.services.trading_policy import TradingPolicy
 
 logger = logging.getLogger(__name__)
@@ -177,9 +178,14 @@ class TradeService:
             converted.append(status_enum)
         return converted
 
-    def _get_market_from_code(self, code: str) -> str | None:
-        """Extract market from stock code (e.g., 'JP' from 'JP.8058')."""
-        if "." in code:
+    def _get_market_from_code(self, code: str | None) -> str | None:
+        """Extract market from stock code (e.g., 'JP' from 'JP.8058').
+
+        The SDK types ComboLeg.code as optional, so callers reading a leg's
+        code can arrive here with None. Treat that like a code carrying no
+        market prefix instead of raising on the membership test.
+        """
+        if code and "." in code:
             return code.split(".")[0].upper()
         return None
 
@@ -361,7 +367,7 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"get_acc_list failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_acc_list", data).to_dict("records")
 
     def get_assets(
         self,
@@ -401,7 +407,7 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"accinfo_query failed: {data}")
 
-        records = data.to_dict("records")
+        records = as_frame("accinfo_query", data).to_dict("records")
         return records[0] if records else {}
 
     def get_positions(
@@ -473,7 +479,7 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"position_list_query failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("position_list_query", data).to_dict("records")
 
     def get_max_tradable(
         self,
@@ -510,14 +516,16 @@ class TradeService:
             code=code,
             price=price,
             order_id=order_id if order_id else None,
-            adjust_limit=adjust_limit,
+            # The SDK defaults adjust_limit to 0, so it infers as int; the
+            # gateway takes a price-adjustment ratio, which is a float.
+            adjust_limit=adjust_limit,  # pyright: ignore[reportArgumentType]
             trd_env=trd_env,
             acc_id=acc_id,
         )
         if ret != RET_OK:
             raise RuntimeError(f"acctradinginfo_query failed: {data}")
 
-        records = data.to_dict("records")
+        records = as_frame("acctradinginfo_query", data).to_dict("records")
         return records[0] if records else {}
 
     def get_margin_ratio(self, code_list: list[str]) -> list[dict]:
@@ -536,7 +544,7 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"get_margin_ratio failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_margin_ratio", data).to_dict("records")
 
     def get_cash_flow(
         self,
@@ -568,7 +576,7 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"get_acc_cash_flow failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_acc_cash_flow", data).to_dict("records")
 
     def unlock_trade(
         self, password: str | None = None, password_md5: str | None = None
@@ -728,7 +736,9 @@ class TradeService:
                 trd_side=trd_side,
                 order_type=order_type,
                 time_in_force=time_in_force,
-                adjust_limit=adjust_limit,
+                # The SDK defaults adjust_limit to 0, so it infers as int; the
+                # gateway takes a price-adjustment ratio, which is a float.
+                adjust_limit=adjust_limit,  # pyright: ignore[reportArgumentType]
                 aux_price=aux_price,
                 trail_type=trail_type,
                 trail_value=trail_value,
@@ -740,7 +750,7 @@ class TradeService:
             if ret != RET_OK:
                 raise RuntimeError(f"place_order failed: {data}")
 
-            records = data.to_dict("records")
+            records = as_frame("place_order", data).to_dict("records")
             return records[0] if records else {}
 
     def _build_combo_legs(self, combo_legs: list[dict]) -> list[ComboLeg]:
@@ -804,10 +814,14 @@ class TradeService:
             if market:
                 markets.add(market)
 
+            # ComboLeg.__init__ assigns each field a bare None without an
+            # annotation, so the SDK declares every attribute's type as None
+            # and rejects the values the gateway actually requires. The
+            # ignores below cover that defect, not a problem with these values.
             combo_leg = ComboLeg()
-            combo_leg.code = code
-            combo_leg.trd_side = trd_side
-            combo_leg.qty_ratio = qty_ratio
+            combo_leg.code = code  # pyright: ignore[reportAttributeAccessIssue]
+            combo_leg.trd_side = trd_side  # pyright: ignore[reportAttributeAccessIssue]
+            combo_leg.qty_ratio = qty_ratio  # pyright: ignore[reportAttributeAccessIssue]
 
             # Required by the gateway when the order closes an existing position.
             # Obtained from get_positions(show_option_strategy_view=True).
@@ -823,9 +837,9 @@ class TradeService:
                         f"Leg {index} has a boolean 'position_id': {position_id!r}"
                     )
                 if isinstance(position_id, int):
-                    combo_leg.position_id = position_id
+                    combo_leg.position_id = position_id  # pyright: ignore[reportAttributeAccessIssue]
                 elif isinstance(position_id, str) and position_id.strip().isdigit():
-                    combo_leg.position_id = int(position_id.strip())
+                    combo_leg.position_id = int(position_id.strip())  # pyright: ignore[reportAttributeAccessIssue]
                 else:
                     raise ValueError(
                         f"Leg {index} has a non-integer 'position_id': "
@@ -912,7 +926,9 @@ class TradeService:
             if ret != RET_OK:
                 raise RuntimeError(f"place_combo_order failed: {data}")
 
-            records = _plain_combo_legs(data.to_dict("records"))
+            records = _plain_combo_legs(
+                as_frame("place_combo_order", data).to_dict("records")
+            )
             return records[0] if records else {}
 
     # The account-impact fields comboorder_tradinginfo_query returns. Listed
@@ -996,7 +1012,11 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"comboorder_tradinginfo_query failed: {data}")
 
-        records = data.to_dict("records") if data is not None else []
+        records = (
+            as_frame("comboorder_tradinginfo_query", data).to_dict("records")
+            if data is not None
+            else []
+        )
         record = records[0] if records else {}
 
         preview: dict[str, Any] = {
@@ -1051,14 +1071,16 @@ class TradeService:
                 order_id=order_id,
                 qty=qty,
                 price=price,
-                adjust_limit=adjust_limit,
+                # The SDK defaults adjust_limit to 0, so it infers as int; the
+                # gateway takes a price-adjustment ratio, which is a float.
+                adjust_limit=adjust_limit,  # pyright: ignore[reportArgumentType]
                 trd_env=trd_env,
                 acc_id=acc_id,
             )
             if ret != RET_OK:
                 raise RuntimeError(f"modify_order failed: {data}")
 
-            records = data.to_dict("records")
+            records = as_frame("modify_order", data).to_dict("records")
             return records[0] if records else {}
 
     def cancel_order(
@@ -1105,7 +1127,7 @@ class TradeService:
             if ret != RET_OK:
                 raise RuntimeError(f"cancel_order failed: {data}")
 
-            records = data.to_dict("records")
+            records = as_frame("cancel_order", data).to_dict("records")
             return records[0] if records else {}
 
     def get_orders(
@@ -1152,10 +1174,14 @@ class TradeService:
             raise RuntimeError(f"order_list_query failed: {data}")
 
         # Handle None or empty DataFrame gracefully
-        if data is None or data.empty:
+        if data is None:
             return []
 
-        return _plain_combo_legs(data.to_dict("records"))
+        frame = as_frame("order_list_query", data)
+        if frame.empty:
+            return []
+
+        return _plain_combo_legs(frame.to_dict("records"))
 
     def get_deals(
         self,
@@ -1190,7 +1216,7 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"deal_list_query failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("deal_list_query", data).to_dict("records")
 
     def get_history_orders(
         self,
@@ -1240,10 +1266,14 @@ class TradeService:
             raise RuntimeError(f"history_order_list_query failed: {data}")
 
         # Handle None or empty DataFrame gracefully
-        if data is None or data.empty:
+        if data is None:
             return []
 
-        return _plain_combo_legs(data.to_dict("records"))
+        frame = as_frame("history_order_list_query", data)
+        if frame.empty:
+            return []
+
+        return _plain_combo_legs(frame.to_dict("records"))
 
     def get_history_deals(
         self,
@@ -1281,4 +1311,4 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"history_deal_list_query failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("history_deal_list_query", data).to_dict("records")

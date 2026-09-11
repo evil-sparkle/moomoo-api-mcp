@@ -10,6 +10,7 @@ from moomoo import (
     TradeDateMarket,
 )
 
+from moomoo_mcp.services.sdk_response import as_dict, as_frame, as_list
 from moomoo_mcp.services.validation import validate_choice, validate_date_range
 
 # get_option_chain accepts at most a 30-day expiry window (the SDK's own default
@@ -73,15 +74,19 @@ class MarketDataService:
     MoomooService.
     """
 
-    def __init__(self, quote_ctx: OpenQuoteContext):
+    def __init__(self, quote_ctx: OpenQuoteContext | None):
         """Initialize MarketDataService with an existing quote context.
 
         Args:
-            quote_ctx: An already-connected OpenQuoteContext instance.
+            quote_ctx: An already-connected OpenQuoteContext, or None when the
+                gateway never connected. None is accepted because the server
+                builds this service from MoomooService.quote_ctx, which is
+                None until a connection succeeds; every method here guards on
+                it and raises rather than dereferencing it.
         """
         self.quote_ctx = quote_ctx
 
-    def subscribe(self, codes: list[str], sub_types: list[SubType]) -> None:
+    def subscribe(self, codes: list[str], sub_types: list[str]) -> None:
         """Subscribe to real-time data for specified stocks and data types.
 
         Args:
@@ -191,7 +196,7 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"get_stock_quote failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_stock_quote", data).to_dict("records")
 
     def get_historical_klines(
         self,
@@ -238,7 +243,7 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"request_history_kline failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("request_history_kline", data).to_dict("records")
 
     def get_historical_klines_page(
         self,
@@ -290,7 +295,11 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"request_history_kline failed: {data}")
 
-        rows = data.to_dict("records") if data is not None else []
+        rows = (
+            as_frame("request_history_kline", data).to_dict("records")
+            if data is not None
+            else []
+        )
         return rows, next_page_req_key
 
     def get_option_expiration_date(self, code: str) -> list[dict]:
@@ -321,7 +330,7 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"get_option_expiration_date failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_option_expiration_date", data).to_dict("records")
 
     def get_option_chain(
         self,
@@ -377,7 +386,7 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"get_option_chain failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_option_chain", data).to_dict("records")
 
     def get_market_snapshot(self, codes: list[str]) -> list[dict]:
         """Get market snapshot for multiple stocks.
@@ -405,7 +414,7 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"get_market_snapshot failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_market_snapshot", data).to_dict("records")
 
     def get_order_book(self, code: str, num: int = 10) -> dict:
         """Get order book (market depth) for a stock.
@@ -434,7 +443,7 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"get_order_book failed: {data}")
 
-        return data
+        return as_dict("get_order_book", data)
 
     def get_market_state(self, codes: list[str]) -> list[dict]:
         """Get the provider's reported session state for each instrument.
@@ -466,7 +475,7 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"get_market_state failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_market_state", data).to_dict("records")
 
     def get_trading_days(
         self,
@@ -512,7 +521,9 @@ class MarketDataService:
             raise RuntimeError(f"request_trading_days failed: {data}")
 
         # request_trading_days returns a list of dicts, not a DataFrame.
-        return list(data or [])
+        if not data:
+            return []
+        return list(as_list("request_trading_days", data))
 
     def get_user_security_group(self, group_type: int = 0) -> list[dict]:
         """Get list of user-defined security groups (watchlists).
@@ -544,7 +555,7 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"get_user_security_group failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_user_security_group", data).to_dict("records")
 
     def get_user_security(self, group_name: str) -> list[dict]:
         """Get list of securities in a specific user-defined group (watchlist).
@@ -565,4 +576,4 @@ class MarketDataService:
         if ret != RET_OK:
             raise RuntimeError(f"get_user_security failed: {data}")
 
-        return data.to_dict("records")
+        return as_frame("get_user_security", data).to_dict("records")

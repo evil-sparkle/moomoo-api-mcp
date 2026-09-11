@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from moomoo_mcp.services.trade_service import TradeService
@@ -85,8 +86,13 @@ def test_place_order_auto_select_account(trade_service):
         {"acc_id": 999, "trd_env": "SIMULATE", "trdmarket_auth": ["JP"]},
     ]
 
-    # Mock place_order return
-    trade_service.trade_ctx.place_order.return_value = (0, MagicMock())
+    # Mock place_order return. The SDK hands back a one-row frame describing
+    # the accepted order, so stub that rather than a bare mock: place_order
+    # reads .to_dict("records") off it.
+    trade_service.trade_ctx.place_order.return_value = (
+        0,
+        pd.DataFrame([{"order_id": "1", "code": "JP.8058"}]),
+    )
 
     with patch.object(trade_service, "get_accounts", return_value=mock_accounts):
         # Call place_order with default acc_id=0

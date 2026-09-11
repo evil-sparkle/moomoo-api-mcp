@@ -268,14 +268,16 @@ class TestPolicyThroughMcpDispatch:
 class TestComboPreviewThroughMcp:
     """The preview tool must forward the package and never write (R4)."""
 
-    IMPACT_COLUMNS = [
-        "nlv_change",
-        "initial_margin_change",
-        "maintenance_margin_change",
-        "option_bp",
-        "max_withdraw_change",
-        "bp_decrease",
-    ]
+    IMPACT_COLUMNS = pd.Index(
+        [
+            "nlv_change",
+            "initial_margin_change",
+            "maintenance_margin_change",
+            "option_bp",
+            "max_withdraw_change",
+            "bp_decrease",
+        ]
+    )
 
     @pytest.fixture
     def preview_ctx(self):

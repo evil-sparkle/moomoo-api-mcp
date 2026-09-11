@@ -28,13 +28,20 @@ ACCOUNT_ID = "987654321098765432"
 LEG_POSITION_ID = 9111222333444555666
 
 
-def _leg(code, trd_side, qty_ratio=1.0, position_id="N/A"):
+def _leg(
+    code: str,
+    trd_side: str,
+    qty_ratio: float = 1.0,
+    position_id: str | int = "N/A",
+):
     """Build a ComboLeg exactly as the SDK's ParseComboLegs does."""
     leg = ComboLeg()
-    leg.code = code
-    leg.trd_side = trd_side
-    leg.qty_ratio = qty_ratio
-    leg.position_id = position_id
+    leg.code = code  # pyright: ignore[reportAttributeAccessIssue]
+    leg.trd_side = trd_side  # pyright: ignore[reportAttributeAccessIssue]
+    # ComboLeg's fields are declared as bare None by the SDK, so every real
+    # value is rejected; see _build_combo_legs for the same suppression.
+    leg.qty_ratio = qty_ratio  # pyright: ignore[reportAttributeAccessIssue]
+    leg.position_id = position_id  # pyright: ignore[reportAttributeAccessIssue]
     return leg
 
 

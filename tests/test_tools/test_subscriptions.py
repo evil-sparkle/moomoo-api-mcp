@@ -1,9 +1,11 @@
 """Subscription tools through actual MCP dispatch (R8)."""
 
+from typing import cast
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from moomoo import OpenQuoteContext
 
 from moomoo_mcp.services.market_data_service import MarketDataService
 from tests.conftest import call_mcp_tool
@@ -196,7 +198,9 @@ class TestWorkflowAgainstTwoConnections:
     @pytest.fixture
     def gateway_context(self, mcp_app_context):
         gateway = FakeGateway()
-        mcp_app_context.market_data_service = MarketDataService(quote_ctx=gateway)
+        mcp_app_context.market_data_service = MarketDataService(
+            quote_ctx=cast(OpenQuoteContext, gateway)
+        )
         return mcp_app_context, gateway
 
     @pytest.mark.asyncio

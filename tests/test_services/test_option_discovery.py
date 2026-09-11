@@ -75,7 +75,7 @@ class TestExpirationLookup:
     def test_empty_result_is_an_empty_list(self, service, quote_ctx):
         quote_ctx.get_option_expiration_date.return_value = (
             0,
-            pd.DataFrame([], columns=["strike_time"]),
+            pd.DataFrame([], columns=pd.Index(["strike_time"])),
         )
 
         assert service.get_option_expiration_date("US.XYZ") == []
@@ -147,7 +147,7 @@ class TestChainLookup:
     def test_empty_chain_is_an_empty_list(self, service, quote_ctx):
         quote_ctx.get_option_chain.return_value = (
             0,
-            pd.DataFrame([], columns=["code"]),
+            pd.DataFrame([], columns=pd.Index(["code"])),
         )
 
         assert service.get_option_chain("US.XYZ") == []

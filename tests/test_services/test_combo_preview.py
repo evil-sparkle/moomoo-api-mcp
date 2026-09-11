@@ -16,14 +16,16 @@ from moomoo_mcp.services.trading_policy import (
 STRATEGY_LEG_ID = 3333333333333333333
 OTHER_LEG_ID = 4444444444444444444
 
-IMPACT_COLUMNS = [
-    "nlv_change",
-    "initial_margin_change",
-    "maintenance_margin_change",
-    "option_bp",
-    "max_withdraw_change",
-    "bp_decrease",
-]
+IMPACT_COLUMNS = pd.Index(
+    [
+        "nlv_change",
+        "initial_margin_change",
+        "maintenance_margin_change",
+        "option_bp",
+        "max_withdraw_change",
+        "bp_decrease",
+    ]
+)
 
 # Every method that must never be reached during a preview.
 WRITE_METHODS = ("place_order", "place_combo_order", "modify_order", "unlock_trade")
@@ -353,11 +355,13 @@ class TestAgainstTheRealDecoder:
     """
 
     @staticmethod
-    def _decode_response_with_unset_impact_fields():
+    def _decode_response_with_unset_impact_fields() -> list[dict]:
         from moomoo.common.pb import Trd_GetComboMaxTrdQtys_pb2 as pb
         from moomoo.trade.trade_query import ComboOrderTradingInfoQuery
 
-        rsp = pb.Response()
+        # The generated protobuf modules ship no type information, so the
+        # message classes are invisible to the checker.
+        rsp = pb.Response()  # pyright: ignore[reportAttributeAccessIssue]
         rsp.retType = 0
         rsp.s2c.header.trdEnv = 0
         rsp.s2c.header.accID = 123
@@ -366,6 +370,7 @@ class TestAgainstTheRealDecoder:
 
         ret, _, data = ComboOrderTradingInfoQuery.unpack_rsp(rsp)
         assert ret == 0
+        assert data is not None
         return data
 
     def test_sdk_reports_missing_fields_as_a_string_not_nan(self):

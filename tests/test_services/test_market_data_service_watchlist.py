@@ -91,7 +91,7 @@ class TestGetUserSecurity:
 
     def test_get_user_security_empty_group(self, market_data_service, mock_quote_ctx):
         """Test retrieval of an empty group."""
-        df = pd.DataFrame(columns=["code", "name", "lot_size"])
+        df = pd.DataFrame(columns=pd.Index(["code", "name", "lot_size"]))
         mock_quote_ctx.get_user_security.return_value = (0, df)
 
         result = market_data_service.get_user_security("EmptyGroup")

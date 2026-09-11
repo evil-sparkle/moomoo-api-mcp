@@ -246,7 +246,7 @@ class TestPaginationThroughMcp:
     ):
         quote_ctx.request_history_kline.return_value = (
             0,
-            pd.DataFrame([], columns=["code", "time_key"]),
+            pd.DataFrame([], columns=pd.Index(["code", "time_key"])),
             b"tok-9",
         )
 

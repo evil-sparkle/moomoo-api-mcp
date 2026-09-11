@@ -51,7 +51,9 @@ if hasattr(ft_logger, "logger") and hasattr(ft_logger.logger, "console_logger"):
     # Replace the internal consoleHandler reference with a NullHandler.
     # This ensures that when fontColor/info/error is called and it tries to re-add
     # self.consoleHandler, it adds a harmless NullHandler instead of a StreamHandler.
-    ft_logger.logger.consoleHandler = logging.NullHandler()
+    # FTLog declares consoleHandler as a StreamHandler, so the SDK's own
+    # type rejects the NullHandler that silences it.
+    ft_logger.logger.consoleHandler = logging.NullHandler()  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @dataclass

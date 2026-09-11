@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -557,8 +558,12 @@ class TestShutdownWithAStuckConnection:
         ):
             service.connect(timeout=0.2)
 
+        def _never_returns() -> dict[str, Any]:
+            threading.Event().wait()
+            return {}  # pragma: no cover - the wait above never returns
+
         probe = BoundedProbe("stuck")
-        probe.submit(lambda: threading.Event().wait())
+        probe.submit(_never_returns)
 
         alive = threading.enumerate()
         # Other tests in this module also leave stuck workers behind, so this

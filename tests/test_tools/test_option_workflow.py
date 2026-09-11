@@ -16,14 +16,16 @@ from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from tests.conftest import call_mcp_tool
 
-IMPACT_COLUMNS = [
-    "nlv_change",
-    "initial_margin_change",
-    "maintenance_margin_change",
-    "option_bp",
-    "max_withdraw_change",
-    "bp_decrease",
-]
+IMPACT_COLUMNS = pd.Index(
+    [
+        "nlv_change",
+        "initial_margin_change",
+        "maintenance_margin_change",
+        "option_bp",
+        "max_withdraw_change",
+        "bp_decrease",
+    ]
+)
 
 
 @pytest.fixture
@@ -176,7 +178,10 @@ async def test_selected_contract_symbol_reaches_a_quote_unchanged(
 async def test_empty_chain_returns_an_empty_list_not_an_error(
     workflow_context, quote_ctx
 ):
-    quote_ctx.get_option_chain.return_value = (0, pd.DataFrame([], columns=["code"]))
+    quote_ctx.get_option_chain.return_value = (
+        0,
+        pd.DataFrame([], columns=pd.Index(["code"])),
+    )
 
     result = await call_mcp_tool(
         workflow_context, "get_option_chain", {"code": "US.XYZ"}
