@@ -84,22 +84,24 @@ async def place_order(
         time_in_force, etc.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return await run_blocking(
-        trade_service.place_order,
-        code=code,
-        price=price,
-        qty=qty,
-        trd_side=trd_side,
-        order_type=order_type,
-        time_in_force=time_in_force,
-        adjust_limit=adjust_limit,
-        aux_price=aux_price,
-        trail_type=trail_type,
-        trail_value=trail_value,
-        trail_spread=trail_spread,
-        trd_env=trd_env,
-        acc_id=acc_id,
-        remark=remark,
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.place_order,
+            code=code,
+            price=price,
+            qty=qty,
+            trd_side=trd_side,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            adjust_limit=adjust_limit,
+            aux_price=aux_price,
+            trail_type=trail_type,
+            trail_value=trail_value,
+            trail_spread=trail_spread,
+            trd_env=trd_env,
+            acc_id=acc_id,
+            remark=remark,
+        )
     )
 
 
@@ -308,15 +310,17 @@ async def modify_order(
         Dictionary with modified order details.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return await run_blocking(
-        trade_service.modify_order,
-        order_id=order_id,
-        modify_order_op=modify_order_op,
-        qty=qty,
-        price=price,
-        adjust_limit=adjust_limit,
-        trd_env=trd_env,
-        acc_id=acc_id,
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.modify_order,
+            order_id=order_id,
+            modify_order_op=modify_order_op,
+            qty=qty,
+            price=price,
+            adjust_limit=adjust_limit,
+            trd_env=trd_env,
+            acc_id=acc_id,
+        )
     )
 
 
@@ -352,11 +356,13 @@ async def cancel_order(
         Dictionary with cancelled order details.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    return await run_blocking(
-        trade_service.cancel_order,
-        order_id=order_id,
-        trd_env=trd_env,
-        acc_id=acc_id,
+    return serialize_identifiers(
+        await run_blocking(
+            trade_service.cancel_order,
+            order_id=order_id,
+            trd_env=trd_env,
+            acc_id=acc_id,
+        )
     )
 
 

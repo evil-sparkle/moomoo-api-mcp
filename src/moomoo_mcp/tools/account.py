@@ -252,7 +252,7 @@ async def get_max_tradable(
         acc_id=acc_id,
     )
     await ctx.info(f"Retrieved max tradable for {code} in {trd_env} account")
-    return max_qty
+    return serialize_identifiers(max_qty)
 
 
 @mcp.tool()

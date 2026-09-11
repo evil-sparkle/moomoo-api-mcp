@@ -280,6 +280,61 @@ class TestAccountToolsThroughMcp:
         assert result.json_blocks[0]["deal_id"] == str(UNSAFE_ID)
         assert result.structured["result"][0]["deal_id"] == str(UNSAFE_ID)
 
+    @pytest.mark.asyncio
+    async def test_place_order_emits_string_ids(self, call_tool, mock_trade_service):
+        mock_trade_service.place_order.return_value = {
+            "order_id": "1",
+            "acc_id": ACCOUNT_ID,
+        }
+
+        result = await call_tool(
+            "place_order",
+            {"code": "US.AAPL", "price": 100.0, "qty": 1, "trd_side": "BUY"},
+        )
+
+        assert result.json["acc_id"] == str(ACCOUNT_ID)
+
+    @pytest.mark.asyncio
+    async def test_modify_order_emits_string_ids(self, call_tool, mock_trade_service):
+        mock_trade_service.modify_order.return_value = {
+            "order_id": "1",
+            "acc_id": ACCOUNT_ID,
+        }
+
+        result = await call_tool(
+            "modify_order",
+            {"order_id": "1", "modify_order_op": "NORMAL", "qty": 10},
+        )
+
+        assert result.json["acc_id"] == str(ACCOUNT_ID)
+
+    @pytest.mark.asyncio
+    async def test_cancel_order_emits_string_ids(self, call_tool, mock_trade_service):
+        mock_trade_service.cancel_order.return_value = {
+            "order_id": "1",
+            "acc_id": ACCOUNT_ID,
+        }
+
+        result = await call_tool("cancel_order", {"order_id": "1"})
+
+        assert result.json["acc_id"] == str(ACCOUNT_ID)
+
+    @pytest.mark.asyncio
+    async def test_get_max_tradable_emits_string_ids(
+        self, call_tool, mock_trade_service
+    ):
+        mock_trade_service.get_max_tradable.return_value = {
+            "acc_id": ACCOUNT_ID,
+            "max_cash_buy": 100,
+        }
+
+        result = await call_tool(
+            "get_max_tradable",
+            {"order_type": "NORMAL", "code": "US.AAPL", "price": 100.0},
+        )
+
+        assert result.json["acc_id"] == str(ACCOUNT_ID)
+
 
 class TestRetrievalToRequestRoundtrip:
     """End to end: what the tools emit must be usable unchanged."""
