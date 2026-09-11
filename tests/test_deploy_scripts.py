@@ -134,7 +134,7 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
         self.assertEqual(result.returncode, 0, result.stderr)
         docker = [args for name, args, _ in self.calls() if name == "docker"]
         self.assertEqual(len(docker), 3)
-        self.assertEqual(docker[1][-2:], ["up", "-d"])
+        self.assertEqual(docker[1][-3:], ["up", "-d", "--remove-orphans"])
 
     def test_missing_second_image_does_not_checkout_or_write_settings(self):
         self.env["AWS_TEST_MODE"] = "missing"
