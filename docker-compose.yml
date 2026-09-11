@@ -33,7 +33,7 @@ services:
           has_token=1
         fi
 
-        COMMON_ARGS="-api_ip=0.0.0.0 -no_monitor=1 -lang=en -login_region=$$MOOMOO_LOGIN_REGION"
+        COMMON_ARGS="-api_ip=127.0.0.1 -no_monitor=1 -lang=en -login_region=$$MOOMOO_LOGIN_REGION"
 
         if [ -n "$$MOOMOO_LOGIN_PWD_MD5" ]; then
           exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5
