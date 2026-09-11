@@ -63,9 +63,10 @@ ecr_has_tag() {
 version="$(git show "${commit}:pyproject.toml" \
   | awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }')"
 
+release_tag="${version:+v${version}}"
+
 resolve_image_tag() {
   if [ -n "${version}" ]; then
-    local release_tag="v${version}"
     if git tag --points-at "${commit}" "${release_tag}" >/dev/null 2>&1; then
       if ecr_has_tag moomoo-api-mcp "${release_tag}" && ecr_has_tag moomoo-opend "${release_tag}"; then
         printf '%s' "${release_tag}"
