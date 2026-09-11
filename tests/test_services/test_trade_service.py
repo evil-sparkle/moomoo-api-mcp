@@ -763,9 +763,7 @@ class TestStatusFilterConversion:
 
     def test_get_orders_invalid_status_raises_error(self, trade_service_with_mock):
         """Test that invalid status string raises ValueError with helpful message."""
-        with pytest.raises(
-            ValueError, match="Invalid order status: 'INVALID_STATUS'"
-        ):
+        with pytest.raises(ValueError, match="Invalid order status: 'INVALID_STATUS'"):
             trade_service_with_mock.get_orders(
                 status_filter_list=["INVALID_STATUS"],
             )
@@ -897,9 +895,7 @@ class TestPlaceComboOrder:
 
         mock_trade_ctx.place_combo_order.assert_not_called()
 
-    def test_rejects_boolean_position_id(
-        self, trade_service_with_mock, mock_trade_ctx
-    ):
+    def test_rejects_boolean_position_id(self, trade_service_with_mock, mock_trade_ctx):
         """Test a boolean position_id is refused rather than coerced to 1."""
         legs = self._legs()
         legs[0]["position_id"] = True

@@ -10,9 +10,7 @@ from moomoo_mcp.tools.offload import await_futures
 
 
 @mcp.tool()
-async def check_health(
-    ctx: Context[ServerSession, AppContext]
-) -> dict[str, Any]:
+async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any]:
     """Check connectivity to the Moomoo OpenD gateway and MCP server health.
 
     Actively probes the quote and trade connections with read-only calls rather

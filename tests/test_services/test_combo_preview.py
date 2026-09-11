@@ -275,9 +275,7 @@ class TestValidationFailures:
         self, service, ctx, legs, message
     ):
         with pytest.raises(ValueError, match=message):
-            service.preview_combo_order(
-                combo_legs=legs, price=2.5, qty=1, acc_id=456
-            )
+            service.preview_combo_order(combo_legs=legs, price=2.5, qty=1, acc_id=456)
 
         ctx.comboorder_tradinginfo_query.assert_not_called()
         assert_no_writes(ctx)
@@ -391,9 +389,7 @@ class TestAgainstTheRealDecoder:
         for field in IMPACT_COLUMNS:
             assert preview[field] is None, f"{field} leaked the SDK sentinel"
 
-    def test_preview_keeps_supplied_values_and_nulls_only_the_gaps(
-        self, service, ctx
-    ):
+    def test_preview_keeps_supplied_values_and_nulls_only_the_gaps(self, service, ctx):
         decoded = self._decode_response_with_unset_impact_fields()
         decoded[0]["nlv_change"] = -12.5
         ctx.comboorder_tradinginfo_query.return_value = (

@@ -225,8 +225,9 @@ class TestDeadlineAndBoundedWorkers:
         moomoo_service.quote_ctx.get_global_state.side_effect = (
             lambda: blocked.wait() or (0, dict(GLOBAL_STATE))
         )
-        trade_service.trade_ctx.get_acc_list.side_effect = (
-            lambda: blocked.wait() or (0, [])
+        trade_service.trade_ctx.get_acc_list.side_effect = lambda: blocked.wait() or (
+            0,
+            [],
         )
 
         try:
@@ -345,9 +346,7 @@ class TestConnectDoesNotBlockStartup:
         before it yields and check_health never becomes reachable.
         """
         service = MoomooService(host="10.0.0.5", port=22222)
-        with patch(
-            "moomoo_mcp.services.base_service.OpenQuoteContext"
-        ) as ctx_class:
+        with patch("moomoo_mcp.services.base_service.OpenQuoteContext") as ctx_class:
             service.connect()
 
         assert ctx_class.call_args.kwargs["is_async_connect"] is True
@@ -356,9 +355,7 @@ class TestConnectDoesNotBlockStartup:
     def test_quote_connect_bounds_sync_queries(self):
         """A query against a not-yet-ready context must not wait forever."""
         service = MoomooService()
-        with patch(
-            "moomoo_mcp.services.base_service.OpenQuoteContext"
-        ) as ctx_class:
+        with patch("moomoo_mcp.services.base_service.OpenQuoteContext") as ctx_class:
             service.connect()
 
         timeout = ctx_class.return_value.set_sync_query_connect_timeout.call_args

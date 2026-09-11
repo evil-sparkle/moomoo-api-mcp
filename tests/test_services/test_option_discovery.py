@@ -101,8 +101,9 @@ class TestChainLookup:
     """Filters are forwarded exactly and symbols are preserved."""
 
     def test_returns_exact_contract_symbols(self, service):
-        contracts = service.get_option_chain("US.XYZ", start="2026-01-16",
-                                             end="2026-01-16")
+        contracts = service.get_option_chain(
+            "US.XYZ", start="2026-01-16", end="2026-01-16"
+        )
 
         assert [row["code"] for row in contracts] == [
             "US.XYZ260116C100000",

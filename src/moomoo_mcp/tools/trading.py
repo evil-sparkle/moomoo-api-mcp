@@ -447,7 +447,6 @@ async def get_deals(
     )
 
 
-
 @mcp.tool()
 async def get_history_orders(
     ctx: Context[ServerSession, AppContext],
@@ -530,4 +529,3 @@ async def get_history_deals(
             acc_id=acc_id,
         )
     )
-

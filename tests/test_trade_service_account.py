@@ -62,9 +62,7 @@ def test_find_best_account_api_failure(trade_service):
         patch.object(
             trade_service, "get_accounts", side_effect=RuntimeError("API error")
         ),
-        pytest.raises(
-            ValueError, match="Failed to retrieve account list from the API"
-        ),
+        pytest.raises(ValueError, match="Failed to retrieve account list from the API"),
     ):
         trade_service._find_best_account("SIMULATE", "JP")
 

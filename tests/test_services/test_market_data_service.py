@@ -28,6 +28,7 @@ class TestSubscribe:
         mock_quote_ctx.subscribe.return_value = (0, None)  # RET_OK = 0
 
         from moomoo import SubType
+
         market_data_service.subscribe(["US.AAPL"], [SubType.QUOTE])
 
         mock_quote_ctx.subscribe.assert_called_once()
@@ -37,6 +38,7 @@ class TestSubscribe:
         mock_quote_ctx.subscribe.return_value = (-1, "Subscription failed")
 
         from moomoo import SubType
+
         with pytest.raises(RuntimeError, match="subscribe failed"):
             market_data_service.subscribe(["US.AAPL"], [SubType.QUOTE])
 
@@ -45,6 +47,7 @@ class TestSubscribe:
         service = MarketDataService(quote_ctx=None)
 
         from moomoo import SubType
+
         with pytest.raises(RuntimeError, match="Quote context not connected"):
             service.subscribe(["US.AAPL"], [SubType.QUOTE])
 
@@ -55,14 +58,18 @@ class TestGetStockQuote:
     def test_get_stock_quote_success(self, market_data_service, mock_quote_ctx):
         """Test successful quote retrieval."""
         mock_quote_ctx.subscribe.return_value = (0, None)
-        df = pd.DataFrame([{
-            "code": "US.AAPL",
-            "last_price": 150.0,
-            "open_price": 149.0,
-            "high_price": 151.0,
-            "low_price": 148.0,
-            "volume": 1000000,
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "code": "US.AAPL",
+                    "last_price": 150.0,
+                    "open_price": 149.0,
+                    "high_price": 151.0,
+                    "low_price": 148.0,
+                    "volume": 1000000,
+                }
+            ]
+        )
         mock_quote_ctx.get_stock_quote.return_value = (0, df)
 
         result = market_data_service.get_stock_quote(["US.AAPL"])
@@ -76,10 +83,12 @@ class TestGetStockQuote:
     def test_get_stock_quote_multiple_codes(self, market_data_service, mock_quote_ctx):
         """Test quote retrieval for multiple stocks."""
         mock_quote_ctx.subscribe.return_value = (0, None)
-        df = pd.DataFrame([
-            {"code": "US.AAPL", "last_price": 150.0},
-            {"code": "US.TSLA", "last_price": 250.0},
-        ])
+        df = pd.DataFrame(
+            [
+                {"code": "US.AAPL", "last_price": 150.0},
+                {"code": "US.TSLA", "last_price": 250.0},
+            ]
+        )
         mock_quote_ctx.get_stock_quote.return_value = (0, df)
 
         result = market_data_service.get_stock_quote(["US.AAPL", "US.TSLA"])
@@ -173,6 +182,7 @@ class TestGetHistoricalKlines:
         assert len(result) == 1
         # Verify ktype enum was used correctly
         from moomoo import KLType
+
         call_kwargs = mock_quote_ctx.request_history_kline.call_args.kwargs
         assert call_kwargs["ktype"] == KLType.K_1M
 
@@ -356,9 +366,7 @@ class TestCandleFilterValidation:
 
         kline_ctx.request_history_kline.assert_not_called()
 
-    def test_the_placeholder_interval_is_rejected(
-        self, market_data_service, kline_ctx
-    ):
+    def test_the_placeholder_interval_is_rejected(self, market_data_service, kline_ctx):
         with pytest.raises(ValueError, match="ktype must be one of"):
             market_data_service.get_historical_klines(code="US.AAPL", ktype="NONE")
 

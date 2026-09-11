@@ -152,11 +152,7 @@ def decode_cursor(cursor: str, query: dict[str, Any]) -> tuple[bytes, tuple[str,
     if not isinstance(token, str):
         raise CursorError("cursor is missing its continuation token.")
 
-    mismatched = [
-        name
-        for name in BOUND_FILTERS
-        if bound.get(name) != query.get(name)
-    ]
+    mismatched = [name for name in BOUND_FILTERS if bound.get(name) != query.get(name)]
     if mismatched:
         details = ", ".join(
             f"{name}={query.get(name)!r} (cursor: {bound.get(name)!r})"

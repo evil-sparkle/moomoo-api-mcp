@@ -57,6 +57,7 @@ if hasattr(ft_logger, "logger") and hasattr(ft_logger.logger, "console_logger"):
 @dataclass
 class AppContext:
     """Application context with typed dependencies."""
+
     moomoo_service: MoomooService
     trade_service: TradeService
     market_data_service: MarketDataService
@@ -103,8 +104,7 @@ def _auto_unlock_trade(trade_service: TradeService) -> None:
         else:
             trade_service.unlock_trade(password_md5=password_md5)
             logger.info(
-                "Trade unlocked successfully (via MD5). "
-                "REAL account access enabled."
+                "Trade unlocked successfully (via MD5). REAL account access enabled."
             )
     except RuntimeError as e:
         logger.warning(
@@ -181,6 +181,7 @@ async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
         trade_service.close()
         moomoo_service.close()
 
+
 mcp = FastMCP(
     "Moomoo Trading",
     lifespan=app_lifespan,
@@ -240,4 +241,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -11,9 +11,7 @@ from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
 @mcp.tool()
-async def get_accounts(
-    ctx: Context[ServerSession, AppContext]
-) -> list[dict]:
+async def get_accounts(ctx: Context[ServerSession, AppContext]) -> list[dict]:
     """Get list of trading accounts.
 
     Returns list of account dictionaries with acc_id, trd_env (REAL/SIMULATE), etc.
@@ -318,7 +316,6 @@ async def get_cash_flow(
     return cash_flows
 
 
-
 @mcp.tool()
 async def unlock_trade(
     ctx: Context[ServerSession, AppContext],
@@ -425,4 +422,3 @@ async def lock_trade(
     await run_blocking(trade_service.lock_trade)
     await ctx.info("Trade locked successfully on OpenD gateway")
     return {"status": "locked", "message": "Trading on OpenD is now locked"}
-

@@ -1,4 +1,3 @@
-
 """Market data tools for retrieving stock quotes, K-lines, snapshots, and order book."""
 
 from typing import Any
@@ -375,9 +374,7 @@ async def get_order_book(
         - Ask: List of ask levels, each as (price, volume, order_count, details)
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    order_book = await run_blocking(
-        market_data_service.get_order_book, code, num=num
-    )
+    order_book = await run_blocking(market_data_service.get_order_book, code, num=num)
     await ctx.info(f"Retrieved order book for {code} with {num} levels")
     return order_book
 
@@ -642,8 +639,6 @@ async def get_user_security(
         - stock_type: Type of security
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    securities = await run_blocking(
-        market_data_service.get_user_security, group_name
-    )
+    securities = await run_blocking(market_data_service.get_user_security, group_name)
     await ctx.info(f"Retrieved {len(securities)} securities from group '{group_name}'")
     return securities

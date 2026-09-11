@@ -41,13 +41,15 @@ class DeployScriptsTest(unittest.TestCase):
         # deploy script's release-tag path is exercised on every test
         # (and so "v<version>" queries against ECR land on the real digest).
         # Tests that need different ECR responses override AWS_TEST_MODE.
-        fixture_version = (
-            subprocess.check_output(
-                ["awk", "-F\"", '/^version[[:space:]]*=/ { print $2; exit }',
-                 str(self.repo / "pyproject.toml")],
-                text=True,
-            ).strip()
-        )
+        fixture_version = subprocess.check_output(
+            [
+                "awk",
+                '-F"',
+                "/^version[[:space:]]*=/ { print $2; exit }",
+                str(self.repo / "pyproject.toml"),
+            ],
+            text=True,
+        ).strip()
         self.release_tag = f"v{fixture_version}"
         self.git("tag", "-a", self.release_tag, "-m", "test fixture release")
         self.git("remote", "add", "origin", str(self.repo))

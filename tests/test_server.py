@@ -32,7 +32,9 @@ class TestAutoUnlockTrade:
 
         # get_accounts must be called first to initialize account context
         mock_trade_service.get_accounts.assert_called_once()
-        mock_trade_service.unlock_trade.assert_called_once_with(password="test_password")
+        mock_trade_service.unlock_trade.assert_called_once_with(
+            password="test_password"
+        )
 
     def test_auto_unlock_with_md5_password(self) -> None:
         """Test auto-unlock when only MOOMOO_TRADE_PASSWORD_MD5 is set."""
@@ -46,7 +48,9 @@ class TestAutoUnlockTrade:
                 del os.environ["MOOMOO_TRADE_PASSWORD"]
             _auto_unlock_trade(mock_trade_service)
 
-        mock_trade_service.unlock_trade.assert_called_once_with(password_md5="md5_hash_value")
+        mock_trade_service.unlock_trade.assert_called_once_with(
+            password_md5="md5_hash_value"
+        )
 
     def test_plain_password_takes_precedence(self) -> None:
         """Test that plain password takes precedence over MD5."""
@@ -61,7 +65,9 @@ class TestAutoUnlockTrade:
             _auto_unlock_trade(mock_trade_service)
 
         # Should use plain password, not MD5
-        mock_trade_service.unlock_trade.assert_called_once_with(password="plain_password")
+        mock_trade_service.unlock_trade.assert_called_once_with(
+            password="plain_password"
+        )
 
     def test_skip_unlock_when_no_env_vars(self) -> None:
         """Test that unlock is skipped when no env vars are set."""
@@ -69,8 +75,11 @@ class TestAutoUnlockTrade:
         mock_trade_service.policy = REAL_POLICY
 
         # Create a clean environment without the password vars
-        clean_env = {k: v for k, v in os.environ.items()
-                     if k not in ("MOOMOO_TRADE_PASSWORD", "MOOMOO_TRADE_PASSWORD_MD5")}
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("MOOMOO_TRADE_PASSWORD", "MOOMOO_TRADE_PASSWORD_MD5")
+        }
 
         with patch.dict(os.environ, clean_env, clear=True):
             _auto_unlock_trade(mock_trade_service)
@@ -212,9 +221,7 @@ class TestStartupTradingMode:
 
     @pytest.mark.asyncio
     async def test_password_does_not_unlock_in_read_only(self) -> None:
-        _, trade_service = await self._start(
-            {"MOOMOO_TRADE_PASSWORD": "hunter2"}
-        )
+        _, trade_service = await self._start({"MOOMOO_TRADE_PASSWORD": "hunter2"})
 
         trade_service.unlock_trade.assert_not_called()
         assert trade_service.policy.mode is TradingMode.READ_ONLY
@@ -333,4 +340,3 @@ class TestFastMCPSecurity:
             headers={"Authorization": "Bearer wrong_token"},
         )
         assert response.status_code == 401
-

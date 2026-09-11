@@ -37,7 +37,7 @@ def _is_logged_in(value: Any) -> bool:
 class MoomooService:
     """Service to manage Moomoo API connections."""
 
-    def __init__(self, host: str = '127.0.0.1', port: int = 11111):
+    def __init__(self, host: str = "127.0.0.1", port: int = 11111):
         self.host = host
         self.port = port
         self.quote_ctx: OpenQuoteContext | None = None
@@ -203,9 +203,7 @@ class HealthCheck:
         of a finished probe returns immediately, and an unfinished one is
         reported as a timeout rather than waited on again.
         """
-        quote_result = self.service.collect_probe(
-            self.quote_future, self.remaining()
-        )
+        quote_result = self.service.collect_probe(self.quote_future, self.remaining())
         if self.trade_future is None or self.trade_service is None:
             trade_result = failure(
                 "unavailable", "Trade service not configured", reason="not_initialized"

@@ -112,9 +112,7 @@ class TestOrderListWithACombo:
         assert [leg["qty_ratio"] for leg in legs] == [1.0, 1.0]
 
     @pytest.mark.asyncio
-    async def test_ordinary_orders_are_not_hidden_by_one_combo(
-        self, trade_ctx_context
-    ):
+    async def test_ordinary_orders_are_not_hidden_by_one_combo(self, trade_ctx_context):
         """The whole tool failed before, so every other order vanished with it."""
         context, trade_ctx = trade_ctx_context
         trade_ctx.order_list_query.return_value = (

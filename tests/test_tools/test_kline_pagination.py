@@ -98,9 +98,7 @@ class TestCursorCodec:
         with pytest.raises(CursorError, match="different query"):
             decode_cursor(cursor, {**BASE_QUERY, field: changed})
 
-    @pytest.mark.parametrize(
-        "bad", ["", "   ", "not-base64!!", "YWJj", "x" * 9000]
-    )
+    @pytest.mark.parametrize("bad", ["", "   ", "not-base64!!", "YWJj", "x" * 9000])
     def test_malformed_cursor_is_rejected(self, bad):
         with pytest.raises(CursorError):
             decode_cursor(bad, BASE_QUERY)

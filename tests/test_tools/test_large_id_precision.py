@@ -203,9 +203,7 @@ class TestAccountToolsThroughMcp:
             }
         ]
 
-        result = await call_tool(
-            "get_positions", {"show_option_strategy_view": True}
-        )
+        result = await call_tool("get_positions", {"show_option_strategy_view": True})
 
         row = result.structured["result"][0]
         assert row["position_id"] == str(UNSAFE_ID)

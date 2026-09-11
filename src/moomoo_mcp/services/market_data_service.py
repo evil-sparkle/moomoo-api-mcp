@@ -28,12 +28,8 @@ SUBSCRIPTION_TYPES = tuple(
 # from the SDK's own attributes so the accepted set cannot drift from what
 # the SDK supports. AuType's wire values are lowercase ('qfq'), so the
 # uppercase name is what a caller passes and the value is what is forwarded.
-KLINE_TYPES = tuple(
-    name for name in vars(KLType) if name.isupper() and name != "NONE"
-)
-ADJUSTMENT_TYPES = tuple(
-    name for name in vars(AuType) if name.isupper()
-)
+KLINE_TYPES = tuple(name for name in vars(KLType) if name.isupper() and name != "NONE")
+ADJUSTMENT_TYPES = tuple(name for name in vars(AuType) if name.isupper())
 
 
 def validate_candle_filters(ktype: str, autype: str) -> tuple[str, str]:
@@ -60,6 +56,7 @@ def validate_candle_filters(ktype: str, autype: str) -> tuple[str, str]:
     interval = validate_choice("ktype", ktype, KLINE_TYPES)
     adjustment = validate_choice("autype", autype, ADJUSTMENT_TYPES)
     return getattr(KLType, interval), getattr(AuType, adjustment)
+
 
 # Markets the provider will return a trading calendar for. NONE is excluded:
 # it is the SDK's 'unspecified' placeholder, not a market a caller can mean.

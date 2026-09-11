@@ -316,4 +316,3 @@ class TestTradingGuardrails:
                 trd_env="SIMULATE",
             )
         ctx.place_order.assert_not_called()
-

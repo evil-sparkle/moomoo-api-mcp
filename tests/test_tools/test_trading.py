@@ -244,9 +244,7 @@ class TestPolicyThroughMcpDispatch:
         )
 
         with pytest.raises(Exception, match="only REAL mode may unlock"):
-            await call_mcp_tool(
-                mcp_app_context, "unlock_trade", {"password": "pw"}
-            )
+            await call_mcp_tool(mcp_app_context, "unlock_trade", {"password": "pw"})
 
         trade_ctx.unlock_trade.assert_not_called()
 

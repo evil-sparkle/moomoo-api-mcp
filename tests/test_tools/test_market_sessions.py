@@ -103,9 +103,7 @@ class TestTradingDaysTool:
         assert payload["data"] == TRADING_DAYS
 
     @pytest.mark.asyncio
-    async def test_dates_do_not_shift_with_the_server_timezone(
-        self, sessions_context
-    ):
+    async def test_dates_do_not_shift_with_the_server_timezone(self, sessions_context):
         """The provider's market-local dates must survive a server in Auckland."""
         result_utc = await call_mcp_tool(
             sessions_context, "get_trading_days", {"market": "US"}

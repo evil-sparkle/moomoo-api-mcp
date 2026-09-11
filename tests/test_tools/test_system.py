@@ -50,15 +50,18 @@ class TestCheckHealthTool:
     async def test_degraded_status_identifies_failing_service(
         self, call_tool, mock_moomoo_service
     ):
-        stub_health(mock_moomoo_service, {
-            **HEALTHY,
-            "status": "degraded",
-            "trade": {
-                "status": "error",
-                "reason": "gateway_error",
-                "error": "trade svr not ready",
+        stub_health(
+            mock_moomoo_service,
+            {
+                **HEALTHY,
+                "status": "degraded",
+                "trade": {
+                    "status": "error",
+                    "reason": "gateway_error",
+                    "error": "trade svr not ready",
+                },
             },
-        })
+        )
 
         result = await call_tool("check_health")
 
@@ -70,13 +73,24 @@ class TestCheckHealthTool:
     async def test_disconnected_status_is_reported(
         self, call_tool, mock_moomoo_service
     ):
-        stub_health(mock_moomoo_service, {
-            **HEALTHY,
-            "status": "disconnected",
-            "quote": {"status": "error", "reason": "gateway_error", "error": "boom"},
-            "trade": {"status": "error", "reason": "gateway_error", "error": "boom"},
-            "gateway_version": None,
-        })
+        stub_health(
+            mock_moomoo_service,
+            {
+                **HEALTHY,
+                "status": "disconnected",
+                "quote": {
+                    "status": "error",
+                    "reason": "gateway_error",
+                    "error": "boom",
+                },
+                "trade": {
+                    "status": "error",
+                    "reason": "gateway_error",
+                    "error": "boom",
+                },
+                "gateway_version": None,
+            },
+        )
 
         result = await call_tool("check_health")
 

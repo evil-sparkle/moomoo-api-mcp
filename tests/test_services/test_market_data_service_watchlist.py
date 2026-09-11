@@ -25,10 +25,12 @@ class TestGetUserSecurityGroup:
 
     def test_get_user_security_group_success(self, market_data_service, mock_quote_ctx):
         """Test successful retrieval of security groups."""
-        df = pd.DataFrame([
-            {"group_name": "Favorites", "group_id": 1},
-            {"group_name": "Tech", "group_id": 2},
-        ])
+        df = pd.DataFrame(
+            [
+                {"group_name": "Favorites", "group_id": 1},
+                {"group_name": "Tech", "group_id": 2},
+            ]
+        )
         mock_quote_ctx.get_user_security_group.return_value = (0, df)
 
         result = market_data_service.get_user_security_group()
@@ -48,6 +50,7 @@ class TestGetUserSecurityGroup:
 
         assert len(result) == 1
         from moomoo import UserSecurityGroupType
+
         call_kwargs = mock_quote_ctx.get_user_security_group.call_args.kwargs
         assert call_kwargs["group_type"] == UserSecurityGroupType.CUSTOM
 
@@ -71,10 +74,12 @@ class TestGetUserSecurity:
 
     def test_get_user_security_success(self, market_data_service, mock_quote_ctx):
         """Test successful retrieval of securities in a group."""
-        df = pd.DataFrame([
-            {"code": "US.AAPL", "name": "Apple Inc", "lot_size": 1},
-            {"code": "US.NVDA", "name": "NVIDIA Corp", "lot_size": 1},
-        ])
+        df = pd.DataFrame(
+            [
+                {"code": "US.AAPL", "name": "Apple Inc", "lot_size": 1},
+                {"code": "US.NVDA", "name": "NVIDIA Corp", "lot_size": 1},
+            ]
+        )
         mock_quote_ctx.get_user_security.return_value = (0, df)
 
         result = market_data_service.get_user_security("Favorites")

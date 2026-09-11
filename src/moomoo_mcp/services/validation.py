@@ -94,7 +94,5 @@ def validate_choice(field: str, value: str, allowed: tuple[str, ...]) -> str:
         )
     candidate = value.strip().upper()
     if candidate not in allowed:
-        raise ValueError(
-            f"{field} must be one of {list(allowed)}, got {value!r}."
-        )
+        raise ValueError(f"{field} must be one of {list(allowed)}, got {value!r}.")
     return candidate

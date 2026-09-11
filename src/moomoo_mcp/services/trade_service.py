@@ -153,11 +153,22 @@ class TradeService:
             status_enum = getattr(OrderStatus, status_str.upper(), None)
             if status_enum is None:
                 valid_statuses = [
-                    "UNSUBMITTED", "WAITING_SUBMIT", "SUBMITTING",
-                    "SUBMIT_FAILED", "SUBMITTED", "FILLED_PART", "FILLED_ALL",
-                    "CANCELLING_PART", "CANCELLING_ALL", "CANCELLED_PART",
-                    "CANCELLED_ALL", "REJECTED", "DISABLED", "DELETED",
-                    "FAILED", "NONE",
+                    "UNSUBMITTED",
+                    "WAITING_SUBMIT",
+                    "SUBMITTING",
+                    "SUBMIT_FAILED",
+                    "SUBMITTED",
+                    "FILLED_PART",
+                    "FILLED_ALL",
+                    "CANCELLING_PART",
+                    "CANCELLING_ALL",
+                    "CANCELLED_PART",
+                    "CANCELLED_ALL",
+                    "REJECTED",
+                    "DISABLED",
+                    "DELETED",
+                    "FAILED",
+                    "NONE",
                 ]
                 raise ValueError(
                     f"Invalid order status: '{status_str}'. "
@@ -825,8 +836,7 @@ class TradeService:
 
         if len(markets) > 1:
             raise ValueError(
-                "All combo legs must belong to the same market, got: "
-                f"{sorted(markets)}"
+                f"All combo legs must belong to the same market, got: {sorted(markets)}"
             )
 
         return legs
