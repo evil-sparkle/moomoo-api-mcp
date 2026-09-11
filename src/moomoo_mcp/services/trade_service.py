@@ -125,6 +125,7 @@ class TradeService:
         self.trade_ctx: OpenSecTradeContext | None = None
         self._trade_probe = BoundedProbe("trade")
         self._connect_lock = threading.Lock()
+        self._jit_lock = threading.RLock()
         self._connect_future: Future | None = None
         self._closed = False
 
@@ -639,16 +640,17 @@ class TradeService:
             yield
             return
 
-        self.unlock_trade(password=password, password_md5=password_md5)
-        try:
-            yield
-        finally:
+        with self._jit_lock:
+            self.unlock_trade(password=password, password_md5=password_md5)
             try:
-                self.lock_trade()
-            except Exception as exc:
-                logger.error(
-                    f"Failed to re-lock trade gateway in JIT finally block: {exc}"
-                )
+                yield
+            finally:
+                try:
+                    self.lock_trade()
+                except Exception as exc:
+                    logger.error(
+                        f"Failed to re-lock trade gateway in JIT finally block: {exc}"
+                    )
 
     def place_order(
         self,
