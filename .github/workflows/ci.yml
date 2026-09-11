@@ -24,9 +24,16 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --all-extras --dev
+      # Keep these steps in sync with the local hooks in .pre-commit-config.yaml.
       - name: Run Ruff Lint
         run: |
           uv run ruff check .
+      - name: Run Ruff Format Check
+        run: |
+          uv run ruff format --check .
+      - name: Run basedpyright
+        run: |
+          uv run basedpyright
       - name: Run Tests
         run: |
           uv run pytest

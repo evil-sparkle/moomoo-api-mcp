@@ -131,11 +131,23 @@ moomoo-api-mcp
    uv run moomoo-api-mcp
    ```
 
-4. **Run tests and linter**:
+4. **Run tests, linter and type checker**:
    ```bash
+   uv sync --extra dev
    uv run ruff check .
-   uv run --extra dev pytest
+   uv run basedpyright
+   uv run pytest
    ```
+
+   Install the git pre-commit hook so gitleaks, ruff, basedpyright and pytest
+   run on every commit:
+   ```bash
+   uv run pre-commit install
+   ```
+
+   basedpyright compares against `.basedpyright/baseline.json`, which records
+   type errors that predate the checker, so only new errors fail. After fixing
+   baselined errors, shrink the file with `uv run basedpyright --writebaseline`.
 
 5. **Release Tagging & Versioning**:
    This project follows [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`). To publish a new version:

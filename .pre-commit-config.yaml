@@ -1,14 +1,46 @@
-# Pre-commit configuration for secret detection and linting
-# Install pre-commit hooks via: uv run pre-commit install
+# Pre-commit configuration for secret detection, linting, type checking, tests
+# Install the git hook via: uv run pre-commit install
+# Run every hook against the whole repo: uv run pre-commit run --all-files
+#
+# ruff, basedpyright and pytest run as local hooks through `uv run`, so they
+# use the exact versions pinned in uv.lock (same as CI) instead of a second
+# copy pinned here.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.24.0
     hooks:
       - id: gitleaks
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.9
+  - repo: local
     hooks:
-      - id: ruff
-        args: [--fix]
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
       - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      # Type checks the whole project (not just staged files) because a change
+      # in one module can break callers elsewhere.
+      - id: basedpyright
+        name: basedpyright
+        entry: uv run basedpyright
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+
+      # tests/test_deploy_scripts.py exercises the shell scripts, so script
+      # changes trigger the suite too.
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        types_or: [python, pyi, shell]
+        pass_filenames: false

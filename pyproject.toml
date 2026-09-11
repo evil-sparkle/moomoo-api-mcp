@@ -47,6 +47,8 @@ moomoo-api-mcp = "moomoo_mcp.server:main"
 
 [project.optional-dependencies]
 dev = [
+    "basedpyright>=1.40.1",
+    "pre-commit>=4.6.2",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff>=0.4.0",
@@ -71,6 +73,17 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["moomoo_mcp"]
+
+[tool.basedpyright]
+include = ["src", "tests"]
+pythonVersion = "3.10"
+venvPath = "."
+venv = ".venv"
+# "standard" rather than basedpyright's default "recommended": the moomoo SDK
+# is loosely typed (ret/data tuples typed as str | DataFrame), so stricter
+# modes bury real findings under thousands of warnings. Pre-existing errors
+# are recorded in .basedpyright/baseline.json; only new ones fail the check.
+typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
