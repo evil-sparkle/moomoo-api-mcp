@@ -42,7 +42,10 @@ services:
         elif [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
           exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT
         else
-          exec ./OpenD $$COMMON_ARGS
+          # Without an account OpenD prompts on stdin forever, which under `up -d`
+          # looks "Up" while never logging in. Fail loudly instead of hanging.
+          echo "ERROR: MOOMOO_LOGIN_ACCOUNT is empty. Set it in .env; headless start also needs a remembered token from the interactive login." >&2
+          exit 1
         fi
     ports:
       # Bind MCP SSE endpoint strictly to localhost on host machine

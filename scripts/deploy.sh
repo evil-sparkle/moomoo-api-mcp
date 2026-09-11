@@ -100,7 +100,9 @@ finish_deploy() {
   printf 'ECR_REGISTRY=%s\nIMAGE_TAG=%s\n' "$registry" "${image_tag}" > .deploy.env
   ./scripts/compose-prod.sh pull
   if [ "$prepare" = false ]; then
-    ./scripts/compose-prod.sh up -d
+    # --remove-orphans clears containers left behind by manual troubleshooting,
+    # which otherwise fail the start with "container name is already in use".
+    ./scripts/compose-prod.sh up -d --remove-orphans
     ./scripts/compose-prod.sh logs --tail=200 opend moomoo-mcp
   fi
 }

@@ -42,7 +42,21 @@ user's credentials. No manual `docker login` is needed. The deploy wrapper uses
 
 ### 3. Write AWS credentials for the helper
 
-Apply the `ecr-pull-iam-user` Terraform module first (`cd ~/Develop/infra/aws/ecr-pull-iam-user && terraform apply …`). Then create the credentials file mode 0600:
+Apply the `ecr-pull-iam-user` Terraform module first (`cd ~/Develop/infra/aws/ecr-pull-iam-user && terraform apply …`). Read the values on the workstation with `terraform output -raw aws_access_key_id` / `aws_secret_access_key`; Terraform retains the secret in its state — do not paste it into chat.
+
+Then on the VPS, write the credentials file with the helper, which prompts for
+both values (the secret is not echoed), writes them unquoted at mode 0600, and
+verifies with `aws sts get-caller-identity`. It ships with the repo, so run it
+after the clone in step 5 — or use the manual form below to stay in order:
+
+```sh
+cd "$HOME/moomoo"
+./scripts/write-aws-credentials.sh
+```
+
+To write the file by hand instead, paste the values **bare — no surrounding
+quotes**. The AWS INI parser treats quotes as part of the value and fails every
+later `aws` call with `Unable to parse config file`:
 
 ```sh
 install -d -m 0700 "$HOME/.aws"
@@ -50,13 +64,11 @@ umask 077
 
 cat > "$HOME/.aws/credentials" <<'EOF'
 [default]
-aws_access_key_id     = AKIA...
+aws_access_key_id = AKIA...
 aws_secret_access_key = ...
 EOF
 chmod 0600 "$HOME/.aws/credentials"
 ```
-
-The key comes from `terraform output -raw aws_access_key_id` / `aws_secret_access_key`. Terraform retains the secret in its state — do not paste it into chat.
 
 ### 4. Point Docker at the helper
 
@@ -109,6 +121,11 @@ MOOMOO_MAX_ORDER_NOTIONAL=10000
 MCP_TRANSPORT=sse
 MCP_AUTH_TOKEN=                                # generate: openssl rand -hex 32
 ```
+
+`MOOMOO_LOGIN_ACCOUNT` is required even with `MOOMOO_LOGIN_BY_REMEMBER=1`: the
+remembered-token path passes `-login_account` alongside `-login_by_remember=1`.
+Leaving it blank now exits the container with an explicit error rather than
+leaving OpenD waiting on a console prompt that never arrives under `up -d`.
 
 ### 7. Prepare images, then perform interactive OpenD login
 
@@ -171,6 +188,11 @@ Use a user unit alongside the rootless Docker user service. Both units belong
 to the same systemd manager, so `Requires=docker.service` resolves correctly.
 The Compose wrapper reads the current `.env` and `.deploy.env` on every start.
 
+**Every `systemctl` command for this stack takes `--user` and no `sudo`.** The
+unit lives in the deploy user's manager, so `sudo systemctl restart moomoo`
+searches the system scope and reports the misleading `Unit moomoo.service not
+found`. Use `systemctl --user restart moomoo.service`.
+
 ```sh
 mkdir -p "$HOME/.config/systemd/user"
 cat > "$HOME/.config/systemd/user/moomoo.service" <<'EOF'
@@ -211,6 +233,10 @@ cd "$HOME/moomoo"
 ./scripts/deploy.sh <commit>        # explicit full or abbreviated commit
 ```
 
+The start uses `--remove-orphans`, so containers stranded by earlier manual
+troubleshooting no longer block it with `container name is already in use`.
+When running Compose by hand rather than through the script, pass the same flag.
+
 The script fetches `main`, resolves a full commit, derives exactly seven tag
 characters, and checks both repositories using `aws ecr batch-get-image`.
 AWS errors remain visible; missing images stop deployment before checkout.
@@ -233,6 +259,32 @@ successful authenticated session.
 `/home/opend/.com.moomoo.OpenD`. It is not `$HOME/moomoo/opend-data`.
 The inspection command above also works if `OPEND_DATA_DIR` selects a bind mount.
 Do not remove this volume during ordinary deployments: it holds device tokens.
+
+## Everyday: rotate `MCP_AUTH_TOKEN`
+
+Rotate whenever the token has been displayed, shared, or copied into a client
+you no longer control. Only the MCP server reads it, so OpenD keeps its session
+and no interactive login is needed.
+
+```sh
+cd "$HOME/moomoo"
+NEW_TOKEN="$(openssl rand -hex 32)"
+sed -i "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=${NEW_TOKEN}|" .env
+systemctl --user restart moomoo.service
+echo "$NEW_TOKEN"
+```
+
+Paste the printed value into every client config's `Authorization: Bearer …`
+header, then confirm the old token is refused and the new one is accepted:
+
+```sh
+curl -si -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/sse \
+  -H "Authorization: Bearer ${NEW_TOKEN}"
+```
+
+Existing SSE sessions do not survive the restart. Clients holding a session from
+before it must reconnect; a stale session can surface as request-parameter
+errors rather than an authentication failure.
 
 ## Stop the deployment
 
