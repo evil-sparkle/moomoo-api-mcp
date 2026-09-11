@@ -340,3 +340,87 @@ class TestFastMCPSecurity:
             headers={"Authorization": "Bearer wrong_token"},
         )
         assert response.status_code == 401
+
+    def test_streamable_http_app_rejects_missing_auth_token(self) -> None:
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_streamable_http_app
+
+        app = create_streamable_http_app(auth_token="test_secure_token_123")
+        client = TestClient(app)
+
+        response = client.get("/")
+        assert response.status_code == 401
+        assert "Unauthorized" in response.text
+
+    def test_streamable_http_app_rejects_invalid_bearer_token(self) -> None:
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_streamable_http_app
+
+        app = create_streamable_http_app(auth_token="test_secure_token_123")
+        client = TestClient(app)
+
+        response = client.get(
+            "/",
+            headers={"Authorization": "Bearer wrong_token_abc"},
+        )
+        assert response.status_code == 401
+        assert "Unauthorized" in response.text
+
+    def test_main_rejects_invalid_transport(self) -> None:
+        from moomoo_mcp.server import main
+
+        with (
+            patch.dict(os.environ, {"MCP_TRANSPORT": "unsupported-mode"}),
+            pytest.raises(ValueError, match="Invalid MCP_TRANSPORT"),
+        ):
+            main()
+
+    def test_main_starts_streamable_http_with_auth(self) -> None:
+        from moomoo_mcp.server import main
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MCP_TRANSPORT": "streamable-http",
+                    "MCP_AUTH_TOKEN": "my-secret-token",
+                },
+            ),
+            patch("moomoo_mcp.server.create_streamable_http_app") as mock_create,
+            patch("uvicorn.run") as mock_uvicorn_run,
+        ):
+            mock_app = MagicMock()
+            mock_create.return_value = mock_app
+
+            main()
+
+            mock_create.assert_called_once_with(auth_token="my-secret-token")
+            mock_uvicorn_run.assert_called_once_with(
+                mock_app, host="127.0.0.1", port=8000
+            )
+
+    def test_main_starts_sse_with_auth(self) -> None:
+        from moomoo_mcp.server import main
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MCP_TRANSPORT": "sse",
+                    "MCP_AUTH_TOKEN": "my-secret-token",
+                },
+            ),
+            patch("moomoo_mcp.server.create_sse_app") as mock_create,
+            patch("uvicorn.run") as mock_uvicorn_run,
+        ):
+            mock_app = MagicMock()
+            mock_create.return_value = mock_app
+
+            main()
+
+            mock_create.assert_called_once_with(auth_token="my-secret-token")
+            mock_uvicorn_run.assert_called_once_with(
+                mock_app, host="127.0.0.1", port=8000
+            )

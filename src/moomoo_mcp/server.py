@@ -221,17 +221,40 @@ def create_sse_app(auth_token: str | None = None):
     return app
 
 
+def create_streamable_http_app(auth_token: str | None = None):
+    """Build the Starlette Streamable HTTP application with optional bearer auth."""
+    app = mcp.streamable_http_app()
+    raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
+    token = raw.strip()
+    if token:
+        app.add_middleware(BearerAuthMiddleware, auth_token=token)
+    return app
+
+
 def main():
     """Entry point for the MCP server."""
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()
     auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
 
+    valid_transports = ("stdio", "sse", "streamable-http")
+    if transport not in valid_transports:
+        raise ValueError(
+            f"Invalid MCP_TRANSPORT={transport!r}. "
+            f"Valid options: {list(valid_transports)}."
+        )
+
     if transport in ("sse", "streamable-http"):
         if auth_token:
-            logger.info("Enabling bearer token authentication for SSE.")
+            logger.info(
+                f"Enabling bearer token authentication for {transport} transport."
+            )
             import uvicorn
 
-            app = create_sse_app(auth_token=auth_token)
+            if transport == "streamable-http":
+                app = create_streamable_http_app(auth_token=auth_token)
+            else:
+                app = create_sse_app(auth_token=auth_token)
+
             host = os.environ.get("FASTMCP_HOST", "127.0.0.1")
             port = int(os.environ.get("FASTMCP_PORT", "8000"))
             uvicorn.run(app, host=host, port=port)
