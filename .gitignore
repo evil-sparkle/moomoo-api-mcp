@@ -112,3 +112,5 @@ docker-compose.*.yml
 docs/deploy-*.md
 !docs/deploy-vps.md
 .deploy.env
+.codex/
+.claude/
