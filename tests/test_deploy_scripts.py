@@ -7,9 +7,26 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = "123456789012.dkr.ecr.ap-southeast-1.amazonaws.com"
+
+
+def _env_without_git_vars():
+    """Copy the environment with Git's per-invocation variables removed.
+
+    Git exports GIT_DIR, GIT_INDEX_FILE and friends to every process it starts,
+    hooks included. These tests shell out to git, and to deploy.sh which runs
+    git itself, so inheriting those variables aims both at whatever repository
+    git is currently working on instead of the disposable fixture. Running the
+    suite from a pre-commit hook then rewrote the developer's own checkout:
+    `git init` re-initialised it, `git config user.name` replaced their
+    identity, and deploy.sh's `git checkout --detach` moved their HEAD.
+    """
+    return {
+        name: value for name, value in os.environ.items() if not name.startswith("GIT_")
+    }
 
 
 class DeployScriptsTest(unittest.TestCase):
@@ -78,7 +95,7 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
             path.write_text(stub)
             path.chmod(0o755)
         self.log = self.root / "calls.jsonl"
-        self.env = os.environ.copy()
+        self.env = _env_without_git_vars()
         self.env.update(
             PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
             ECR_REGISTRY=REGISTRY,
@@ -88,7 +105,11 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
 
     def git(self, *args):
         return subprocess.check_output(
-            ["git", *args], cwd=self.repo, text=True, stderr=subprocess.PIPE
+            ["git", *args],
+            cwd=self.repo,
+            text=True,
+            stderr=subprocess.PIPE,
+            env=_env_without_git_vars(),
         )
 
     def deploy(self, *args):
@@ -101,6 +122,59 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def test_git_helper_ignores_inherited_git_environment(self):
+        """Inherited GIT_* variables must not redirect the fixture's git calls.
+
+        Run from a pre-commit hook, these tests used to operate on the
+        repository being committed: setUp's `git config user.name` overwrote
+        the developer's identity and `git add` rewrote their index.
+        """
+        hijacked = self.root / "hijacked"
+        hijacked.mkdir()
+        subprocess.check_output(
+            ["git", "init", "-b", "main"],
+            cwd=hijacked,
+            text=True,
+            stderr=subprocess.PIPE,
+            env=_env_without_git_vars(),
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GIT_DIR": str(hijacked / ".git"),
+                "GIT_WORK_TREE": str(hijacked),
+            },
+        ):
+            self.git("config", "user.name", "Leak Check")
+
+        self.assertEqual(
+            self.git("config", "--local", "user.name").strip(), "Leak Check"
+        )
+        untouched = subprocess.run(
+            ["git", "config", "--local", "user.name"],
+            cwd=hijacked,
+            capture_output=True,
+            text=True,
+            env=_env_without_git_vars(),
+        )
+        self.assertEqual(untouched.stdout.strip(), "")
+
+    def test_deploy_environment_carries_no_git_variables(self):
+        """deploy.sh runs git itself, including `git checkout --detach`.
+
+        setUp is driven directly under a hijacked environment: asserting on
+        this instance's env would only catch the leak when the developer
+        running the suite happens to have GIT_* set, which is precisely the
+        case that used to slip through.
+        """
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(self.root / "nope")}):
+            case = DeployScriptsTest("test_deploy_environment_carries_no_git_variables")
+            case.setUp()
+            self.addCleanup(case.temp.cleanup)
+
+        self.assertNotIn("GIT_DIR", case.env)
 
     def test_prepare_checks_both_images_and_pulls_without_starting(self):
         result = self.deploy("--prepare")
