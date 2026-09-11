@@ -340,17 +340,8 @@ When running the server via Docker Compose (`MCP_TRANSPORT=sse`), the server lis
 
 If `MCP_AUTH_TOKEN` is configured, client requests must provide the bearer token in the `Authorization` header:
 
-```json
-{
-  "mcpServers": {
-    "moomoo": {
-      "url": "http://127.0.0.1:8000/sse",
-      "headers": {
-        "Authorization": "Bearer your_generated_auth_token"
-      }
-    }
-  }
-}
+```bash
+claude mcp add --transport sse -s user moomoo http://127.0.0.1:8000/sse --header "Authorization: Bearer <token>"
 ```
 
 > **Generating `MCP_AUTH_TOKEN`**: Generate a secure random token with `openssl rand -hex 32` and set it in your `.env` file (`MCP_AUTH_TOKEN=...`). If left unset, authentication is disabled (suitable for local-only STDIO).
