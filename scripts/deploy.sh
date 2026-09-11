@@ -44,11 +44,13 @@ short="${commit:0:7}"
 # the *target* commit so local edits don't lie. The local git tag `v<X.Y.Z>`
 # must point at the same commit (validate); the ECR `:v<X.Y.Z>` tag must
 # exist on both images (the lifecycle policy keeps every 'v*' image). If
-# any link is broken, fall through to ':latest'.
+# any link is broken, fall through to the commit's own tag, which CI writes
+# on every main push, and only then to ':latest'.
 #
-# Two-stage validation, both proven:
+# Three stages, each proven:
 #   git tag --points-at   — release tag really sits at this commit
 #   aws ecr batch-get-image — the build matching the release is in ECR
+#   :<short commit>       — an image built from exactly this source
 ecr_has_tag() {
   local image="$1" tag="$2"
   local got
@@ -67,16 +69,28 @@ release_tag="${version:+v${version}}"
 
 resolve_image_tag() {
   if [ -n "${version}" ]; then
-    if git tag --points-at "${commit}" "${release_tag}" >/dev/null 2>&1; then
+    # `git tag --points-at` lists what matches and exits 0 either way, so the
+    # answer is its output. Testing its status instead accepted every commit
+    # as tagged and deployed the previous release's images under a new commit.
+    if [ -n "$(git tag --points-at "${commit}" "${release_tag}")" ]; then
       if ecr_has_tag moomoo-api-mcp "${release_tag}" && ecr_has_tag moomoo-opend "${release_tag}"; then
         printf '%s' "${release_tag}"
         return 0
       fi
-      echo "Release tag ${release_tag} exists at ${short} but ECR is missing one or both images; falling back to :latest." >&2
+      echo "Release tag ${release_tag} exists at ${short} but ECR is missing one or both images; trying :${short}." >&2
     else
-      echo "pyproject.toml at ${short} declares version=${version} but no ${release_tag} git tag is at this commit; falling back to :latest." >&2
+      echo "pyproject.toml at ${short} declares version=${version} but no ${release_tag} git tag is at this commit; trying :${short}." >&2
     fi
   fi
+  # CI tags every main build with its short commit, so this pins the image to
+  # the source about to be checked out instead of trusting a moving :latest.
+  if ecr_has_tag moomoo-api-mcp "${short}" && ecr_has_tag moomoo-opend "${short}"; then
+    printf '%s' "${short}"
+    return 0
+  fi
+  # Not "no such tag": a denied or failed probe lands here too, and reporting
+  # that as a missing image sends you looking for the wrong problem.
+  echo "Could not confirm :${short} on both images; falling back to :latest, which may not match ${short}." >&2
   if ecr_has_tag moomoo-api-mcp latest && ecr_has_tag moomoo-opend latest; then
     printf '%s' latest
     return 0
@@ -86,7 +100,7 @@ resolve_image_tag() {
 
 image_tag="$(resolve_image_tag || true)"
 if [ -z "${image_tag}" ]; then
-  echo "Aborting deploy of ${short}: ECR is missing :${release_tag:-v${version:-<none>}} and/or :latest on one or both images. Check that CI's main push landed for both moomoo-api-mcp and moomoo-opend." >&2
+  echo "Aborting deploy of ${short}: ECR is missing :${release_tag:-v${version:-<none>}}, :${short} and :latest on one or both images. Check that CI's main push landed for both moomoo-api-mcp and moomoo-opend." >&2
   exit 1
 fi
 echo "Deploying ${short} as ${image_tag}" >&2

@@ -212,6 +212,25 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
         self.assertEqual(len(docker), 3)
         self.assertEqual(docker[1][-3:], ["up", "-d", "--remove-orphans"])
 
+    def test_untagged_commit_does_not_deploy_the_release_tag(self):
+        """A commit past the release must not inherit the release's images.
+
+        `git tag --points-at` lists matches and exits 0 whether or not any
+        exist, so testing its status accepted every commit as carrying
+        v<version>. Deploys then pulled the previous release's images while
+        checking out newer source, with nothing in the output saying so.
+        """
+        (self.repo / "extra.txt").write_text("work after the release\n")
+        self.git("add", "extra.txt")
+        self.git("commit", "-m", "past the release")
+        commit = self.git("rev-parse", "HEAD").strip()
+
+        result = self.deploy(commit)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"as {commit[:7]}", result.stderr)
+        self.assertNotIn(f"as {self.release_tag}", result.stderr)
+
     def test_missing_second_image_does_not_checkout_or_write_settings(self):
         self.env["AWS_TEST_MODE"] = "missing"
         result = self.deploy()
