@@ -316,3 +316,32 @@ class TestTradingGuardrails:
                 trd_env="SIMULATE",
             )
         ctx.place_order.assert_not_called()
+
+    def test_service_modify_order_blocked_by_guardrails(self, ctx):
+        policy = TradingPolicy(
+            TradingMode.SIMULATE, max_order_qty=50, max_order_notional=1000.0
+        )
+        service = _service(TradingMode.SIMULATE, ctx)
+        service.policy = policy
+
+        # Exceeds max_order_qty
+        with pytest.raises(TradingPolicyError, match="order quantity 100 exceeds"):
+            service.modify_order(
+                order_id="123",
+                modify_order_op="NORMAL",
+                qty=100,
+                price=10.0,
+                trd_env="SIMULATE",
+            )
+        ctx.modify_order.assert_not_called()
+
+        # Exceeds max_order_notional
+        with pytest.raises(TradingPolicyError, match="estimated order notional"):
+            service.modify_order(
+                order_id="123",
+                modify_order_op="NORMAL",
+                qty=20,
+                price=100.0,
+                trd_env="SIMULATE",
+            )
+        ctx.modify_order.assert_not_called()

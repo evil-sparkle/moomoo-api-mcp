@@ -1060,6 +1060,12 @@ class TradeService:
                 to trd_env.
         """
         self.policy.check_write(f"modify_order ({modify_order_op})", trd_env)
+        if qty is not None or price is not None:
+            self.policy.check_order_limits(
+                f"modify_order ({modify_order_op})",
+                qty=qty if qty is not None else 0,
+                price=price,
+            )
 
         if isinstance(acc_id, str):
             acc_id = int(acc_id)
