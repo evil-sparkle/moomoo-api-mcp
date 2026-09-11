@@ -244,9 +244,16 @@ def main():
         )
 
     if transport in ("sse", "streamable-http"):
+        host = os.environ.get("FASTMCP_HOST", "127.0.0.1")
+        port = int(os.environ.get("FASTMCP_PORT", "8000"))
+        endpoint = "/mcp" if transport == "streamable-http" else "/sse"
+
         if auth_token:
             logger.info(
                 f"Enabling bearer token authentication for {transport} transport."
+            )
+            logger.info(
+                f"Serving MCP {transport} endpoint at http://{host}:{port}{endpoint}"
             )
             import uvicorn
 
@@ -255,10 +262,11 @@ def main():
             else:
                 app = create_sse_app(auth_token=auth_token)
 
-            host = os.environ.get("FASTMCP_HOST", "127.0.0.1")
-            port = int(os.environ.get("FASTMCP_PORT", "8000"))
             uvicorn.run(app, host=host, port=port)
         else:
+            logger.info(
+                f"Serving MCP {transport} endpoint without authentication at http://{host}:{port}{endpoint}"
+            )
             mcp.run(transport=transport)
     else:
         mcp.run()

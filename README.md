@@ -267,7 +267,8 @@ To enable **REAL account** access, you must securely provide your credentials.
 | `MOOMOO_TRADE_PASSWORD`     | Your trading password (plain text)                                    | `123456`      |
 | `MOOMOO_TRADE_PASSWORD_MD5` | MD5 hash of 6-digit trade PIN (alternative to plain text)             | `e10adc...`   |
 | `MOOMOO_SECURITY_FIRM`      | Your broker region (e.g., FUTUSG, FUTUINC)                            | `FUTUSG`      |
-| `MCP_AUTH_TOKEN`            | Optional: Bearer token secret required for MCP SSE/HTTP clients       | `secret-token`|
+| `MCP_TRANSPORT`             | Optional: Transport mode (`streamable-http`, `sse`, `stdio`)          | `streamable-http` |
+| `MCP_AUTH_TOKEN`            | Optional: Bearer token secret required for MCP HTTP/SSE clients       | `secret-token`|
 | `MOOMOO_MAX_ORDER_QTY`      | Optional: Safety cap on maximum quantity/shares per order             | `500`         |
 | `MOOMOO_MAX_ORDER_NOTIONAL` | Optional: Safety cap on maximum estimated notional ($) per order      | `25000`       |
 
@@ -346,15 +347,32 @@ Add the server to your `claude_desktop_config.json`:
 }
 ```
 
-#### Option C: Containerized Deployment (Docker SSE)
+#### Option C: Containerized Deployment (Docker Streamable HTTP)
 
-When running the server via Docker Compose (`MCP_TRANSPORT=sse`), the server listens on `http://127.0.0.1:8000/sse`.
+When running the server via Docker Compose (`MCP_TRANSPORT=streamable-http`), the server listens on `http://127.0.0.1:8000/mcp`.
 
 If `MCP_AUTH_TOKEN` is configured, client requests must provide the bearer token in the `Authorization` header:
 
 ```bash
-claude mcp add --transport sse -s user moomoo http://127.0.0.1:8000/sse --header "Authorization: Bearer <token>"
+claude mcp add --transport http -s user moomoo http://127.0.0.1:8000/mcp --header "Authorization: Bearer <token>"
 ```
+
+Or configure it in your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "moomoo": {
+      "url": "http://127.0.0.1:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+> **SSE Alternative**: Server-Sent Events (SSE) remains supported via `MCP_TRANSPORT=sse` at `http://127.0.0.1:8000/sse` (`claude mcp add --transport sse -s user moomoo http://127.0.0.1:8000/sse --header "Authorization: Bearer <token>"`).
 
 > **Generating `MCP_AUTH_TOKEN`**: Generate a secure random token with `openssl rand -hex 32` and set it in your `.env` file (`MCP_AUTH_TOKEN=...`). If left unset, authentication is disabled (suitable for local-only STDIO).
 

@@ -48,7 +48,7 @@ services:
           exit 1
         fi
     ports:
-      # Bind MCP SSE endpoint strictly to localhost on host machine
+      # Bind MCP HTTP endpoint strictly to localhost on host machine
       # (Published via opend because moomoo-mcp shares its network namespace)
       - "127.0.0.1:8000:8000"
     # Port 11111 is NOT mapped to the host; only accessible to moomoo-mcp via localhost.
@@ -72,7 +72,7 @@ services:
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       - FASTMCP_HOST=0.0.0.0
       - FASTMCP_PORT=8000
-      - MCP_TRANSPORT=${MCP_TRANSPORT:-sse}
+      - MCP_TRANSPORT=${MCP_TRANSPORT:-streamable-http}
     depends_on:
       - opend
 

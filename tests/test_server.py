@@ -269,7 +269,7 @@ class TestStartupTradingMode:
 
 
 class TestFastMCPSecurity:
-    """Tests for FastMCP SSE authentication and transport security."""
+    """Tests for FastMCP HTTP/SSE authentication and transport security."""
 
     def test_sse_app_rejects_missing_auth_token(self) -> None:
         from starlette.testclient import TestClient
@@ -423,4 +423,54 @@ class TestFastMCPSecurity:
             mock_create.assert_called_once_with(auth_token="my-secret-token")
             mock_uvicorn_run.assert_called_once_with(
                 mock_app, host="127.0.0.1", port=8000
+            )
+
+    def test_main_logs_streamable_http_endpoint_with_auth(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from moomoo_mcp.server import main
+
+        with (
+            caplog.at_level(logging.INFO),
+            patch.dict(
+                os.environ,
+                {
+                    "MCP_TRANSPORT": "streamable-http",
+                    "MCP_AUTH_TOKEN": "my-secret-token",
+                },
+            ),
+            patch("moomoo_mcp.server.create_streamable_http_app"),
+            patch("uvicorn.run"),
+        ):
+            main()
+            assert (
+                "Serving MCP streamable-http endpoint at http://127.0.0.1:8000/mcp"
+                in caplog.text
+            )
+
+    def test_main_logs_streamable_http_endpoint_without_auth(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from moomoo_mcp.server import main
+
+        with (
+            caplog.at_level(logging.INFO),
+            patch.dict(
+                os.environ,
+                {
+                    "MCP_TRANSPORT": "streamable-http",
+                    "MCP_AUTH_TOKEN": "",
+                },
+            ),
+            patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
+        ):
+            main()
+            mock_mcp_run.assert_called_once_with(transport="streamable-http")
+            assert (
+                "Serving MCP streamable-http endpoint without authentication at http://127.0.0.1:8000/mcp"
+                in caplog.text
             )

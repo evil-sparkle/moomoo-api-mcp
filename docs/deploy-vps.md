@@ -118,7 +118,7 @@ MOOMOO_MAX_ORDER_QTY=1000
 MOOMOO_MAX_ORDER_NOTIONAL=10000
 
 # MCP transport
-MCP_TRANSPORT=sse
+MCP_TRANSPORT=streamable-http
 MCP_AUTH_TOKEN=                                # generate: openssl rand -hex 32
 ```
 
@@ -180,7 +180,7 @@ cd "$HOME/moomoo"
 ./scripts/compose-prod.sh logs -f --tail=200
 ```
 
-`opend` should reach "TRC login OK" within ~30s. `moomoo-mcp` reports `MCP server listening on 0.0.0.0:8000`. Hit `http://localhost:8000/sse` from the host (the port is bound to `127.0.0.1` only) with the `Authorization: Bearer $MCP_AUTH_TOKEN` header.
+`opend` should reach "TRC login OK" within ~30s. `moomoo-mcp` reports `MCP server listening on 0.0.0.0:8000`. Hit `http://localhost:8000/mcp` from the host (the port is bound to `127.0.0.1` only) with the `Authorization: Bearer $MCP_AUTH_TOKEN` header.
 
 ### 9. systemd unit, so the stack survives reboots
 
@@ -278,11 +278,11 @@ Paste the printed value into every client config's `Authorization: Bearer …`
 header, then confirm the old token is refused and the new one is accepted:
 
 ```sh
-curl -si -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/sse \
+curl -si -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/mcp \
   -H "Authorization: Bearer ${NEW_TOKEN}"
 ```
 
-Existing SSE sessions do not survive the restart. Clients holding a session from
+Existing client sessions do not survive the restart. Clients holding a session from
 before it must reconnect; a stale session can surface as request-parameter
 errors rather than an authentication failure.
 
