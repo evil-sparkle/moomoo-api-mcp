@@ -58,15 +58,17 @@ class DeployScriptsTest(unittest.TestCase):
         # deploy script's release-tag path is exercised on every test
         # (and so "v<version>" queries against ECR land on the real digest).
         # Tests that need different ECR responses override AWS_TEST_MODE.
-        fixture_version = subprocess.check_output(
-            [
-                "awk",
-                '-F"',
-                "/^version[[:space:]]*=/ { print $2; exit }",
-                str(self.repo / "pyproject.toml"),
-            ],
-            text=True,
-        ).strip()
+        fixture_version = ""
+        with open(self.repo / "pyproject.toml") as f:
+            for line in f:
+                if (
+                    line.startswith("version")
+                    and line.split("=")[0].strip() == "version"
+                ):
+                    fixture_version = line.split('"')[1]
+                    break
+        if not fixture_version:
+            self.fail("pyproject.toml has no version line")
         self.release_tag = f"v{fixture_version}"
         self.git("tag", "-a", self.release_tag, "-m", "test fixture release")
         self.git("remote", "add", "origin", str(self.repo))
@@ -85,12 +87,38 @@ if name == "aws":
         sys.exit(254)
     if mode == "missing" and "moomoo-opend" in sys.argv:
         print("None")
+    elif mode == "only_latest":
+        if "imageTag=latest" in sys.argv:
+            print("sha256:latest-digest")
+        else:
+            print("None")
     else:
         print("sha256:test-digest")
-if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
-    sys.exit(1)
+if name == "docker":
+    if os.environ.get("DOCKER_TEST_FAIL") == "1":
+        sys.exit(1)
+    if os.environ.get("DOCKER_TEST_FAIL_UP_ALWAYS") == "1" and "up" in sys.argv:
+        sys.exit(1)
+    if os.environ.get("DOCKER_TEST_FAIL_UP") == "1" and "up" in sys.argv:
+        marker = pathlib.Path(os.environ["CALL_LOG"]).with_name("up_marker")
+        if not marker.exists():
+            marker.write_text("")
+            sys.exit(1)
+    if os.environ.get("DOCKER_TEST_FAIL_PULL") == "1" and "pull" in sys.argv:
+        sys.exit(1)
+    if "ps" in sys.argv:
+        if os.environ.get("DOCKER_PS_MISSING") == "1":
+            print("opend\\n")
+        else:
+            print("opend\\nmoomoo-mcp\\n")
+if name == "curl":
+    if os.environ.get("CURL_TEST_FAIL") == "1":
+        print("000")
+        sys.exit(7)
+    else:
+        print("200")
 """
-        for name in ("aws", "docker"):
+        for name in ("aws", "docker", "curl"):
             path = self.bin / name
             path.write_text(stub)
             path.chmod(0o755)
@@ -101,6 +129,7 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
             ECR_REGISTRY=REGISTRY,
             IMAGE_TAG="stale-shell-tag",
             CALL_LOG=str(self.log),
+            DEPLOY_VERIFY_TIMEOUT="0",
         )
 
     def git(self, *args):
@@ -121,6 +150,8 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
         )
 
     def calls(self):
+        if not self.log.exists():
+            return []
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
     def test_git_helper_ignores_inherited_git_environment(self):
@@ -181,25 +212,30 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             (self.repo / ".deploy.env").read_text(),
-            f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={self.release_tag}\n",
+            f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={self.commit[:7]}\n",
         )
         calls = self.calls()
         aws = [args for name, args, _ in calls if name == "aws"]
-        # Two release-tag checks (one per image) at most. After they pass,
+        # Two short commit checks (one per image). After they pass,
         # we never query :latest, so there are no extra fallback probes.
         self.assertEqual(len(aws), 2)
         for args in aws:
             self.assertEqual(args[:2], ["ecr", "batch-get-image"])
-            self.assertIn("imageTag=" + self.release_tag, args)
-        docker = [(args, tag) for name, args, tag in calls if name == "docker"]
+            self.assertIn("imageTag=" + self.commit[:7], args)
+        docker = [args for name, args, _ in calls if name == "docker"]
         self.assertEqual(len(docker), 1)
-        args, tag = docker[0]
+        args = docker[0]
         self.assertEqual(args[:3], ["--context", "rootless", "compose"])
         self.assertIn(".env", args)
         self.assertIn(".deploy.env", args)
         self.assertEqual(args[-1], "pull")
-        self.assertIsNone(tag)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertFalse(
+            any(
+                name == "curl" or (name == "docker" and "ps" in args)
+                for name, args, _ in calls
+            )
+        )
 
     def test_explicit_commit_reuses_saved_registry_and_starts(self):
         (self.repo / ".deploy.env").write_text(
@@ -208,39 +244,50 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
         self.env.pop("ECR_REGISTRY")
         result = self.deploy(self.commit)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Deploy verified", result.stderr)
         docker = [args for name, args, _ in self.calls() if name == "docker"]
-        self.assertEqual(len(docker), 3)
+        self.assertEqual(len(docker), 4)
+        self.assertEqual(docker[0][-1], "pull")
         self.assertEqual(docker[1][-3:], ["up", "-d", "--remove-orphans"])
+        self.assertIn("ps", docker[2])
+        self.assertIn("--status", docker[2])
+        self.assertIn("running", docker[2])
+        self.assertIn("--services", docker[2])
+        self.assertIn("logs", docker[3])
 
-    def test_untagged_commit_does_not_deploy_the_release_tag(self):
-        """A commit past the release must not inherit the release's images.
+    def test_release_tagged_commit_still_deploys_commit_tag(self):
+        """A commit carrying a v* git tag still deploys under its short commit."""
+        result = self.deploy(self.commit)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"as {self.commit[:7]}", result.stderr)
+        calls = self.calls()
+        for name, args, _ in calls:
+            if name == "aws":
+                for arg in args:
+                    self.assertFalse(
+                        arg.startswith("imageTag=v"),
+                        f"Unexpected AWS call with release tag: {args}",
+                    )
 
-        `git tag --points-at` lists matches and exits 0 whether or not any
-        exist, so testing its status accepted every commit as carrying
-        v<version>. Deploys then pulled the previous release's images while
-        checking out newer source, with nothing in the output saying so.
-        """
+        # An untagged commit past the release deploys as its own short commit too.
         (self.repo / "extra.txt").write_text("work after the release\n")
         self.git("add", "extra.txt")
         self.git("commit", "-m", "past the release")
-        commit = self.git("rev-parse", "HEAD").strip()
+        newer_commit = self.git("rev-parse", "HEAD").strip()
 
-        result = self.deploy(commit)
+        # Reset deploy log so we can cleanly check again
+        self.log.unlink()
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"as {commit[:7]}", result.stderr)
-        self.assertNotIn(f"as {self.release_tag}", result.stderr)
+        result_newer = self.deploy(newer_commit)
+        self.assertEqual(result_newer.returncode, 0, result_newer.stderr)
+        self.assertIn(f"as {newer_commit[:7]}", result_newer.stderr)
 
     def test_missing_second_image_does_not_checkout_or_write_settings(self):
         self.env["AWS_TEST_MODE"] = "missing"
         result = self.deploy()
         self.assertNotEqual(result.returncode, 0)
-        # The release path is tried first (:v<version>), then falls through
-        # to :latest before declaring failure; the script therefore makes
-        # 2 probes per image (release + latest), all returning 'None' for
-        # moomoo-opend. The error message names moomoo-opend via the ECR
-        # REGISTRY's host, not the image label, so check for a substring
-        # unique to this failure mode.
+        # The script checks the short commit tag before declaring failure;
+        # it does not fall through to :latest. The error message names moomoo-opend.
         self.assertIn("moomoo-opend", result.stderr)
         self.assertTrue(
             "Aborting" in result.stderr or "aborting" in result.stderr,
@@ -248,7 +295,10 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
         )
         self.assertEqual(self.git("symbolic-ref", "--short", "HEAD").strip(), "main")
         self.assertFalse((self.repo / ".deploy.env").exists())
-        self.assertTrue(all(name == "aws" for name, _, _ in self.calls()))
+        calls = self.calls()
+        self.assertTrue(all(name == "aws" for name, _, _ in calls))
+        for _, args, _ in calls:
+            self.assertNotIn("imageTag=latest", args)
 
     def test_permission_failure_remains_visible(self):
         self.env["AWS_TEST_MODE"] = "denied"
@@ -258,13 +308,123 @@ if name == "docker" and os.environ.get("DOCKER_TEST_FAIL") == "1":
         self.assertNotIn("ECR has no", result.stderr)
         self.assertFalse((self.repo / ".deploy.env").exists())
 
-    def test_failed_pull_does_not_start_services(self):
-        self.env["DOCKER_TEST_FAIL"] = "1"
+    def test_missing_commit_tag_aborts_without_latest_probe(self):
+        self.env["AWS_TEST_MODE"] = "only_latest"
         result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.git("symbolic-ref", "--short", "HEAD").strip(), "main")
+        self.assertFalse((self.repo / ".deploy.env").exists())
+        calls = self.calls()
+        self.assertTrue(all(name == "aws" for name, _, _ in calls))
+        for _, args, _ in calls:
+            self.assertNotIn("imageTag=latest", args)
+
+    def test_failed_pull_does_not_start_services(self):
+        prev_env = f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG=previous-tag\n"
+        (self.repo / ".deploy.env").write_text(prev_env)
+        self.env.pop("ECR_REGISTRY")
+
+        (self.repo / "extra.txt").write_text("newer commit\n")
+        self.git("add", "extra.txt")
+        self.git("commit", "-m", "newer commit")
+        newer_commit = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", self.commit)
+
+        self.env["DOCKER_TEST_FAIL_PULL"] = "1"
+        result = self.deploy(newer_commit)
+
         self.assertNotEqual(result.returncode, 0)
         docker = [args for name, args, _ in self.calls() if name == "docker"]
         self.assertEqual(len(docker), 1)
         self.assertEqual(docker[0][-1], "pull")
+
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
+
+    def test_failed_up_rolls_back_to_previous_state(self):
+        prev_env = f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG=previous-tag\n"
+        (self.repo / ".deploy.env").write_text(prev_env)
+        self.env.pop("ECR_REGISTRY")
+
+        (self.repo / "extra.txt").write_text("newer commit\n")
+        self.git("add", "extra.txt")
+        self.git("commit", "-m", "newer commit")
+        newer_commit = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", self.commit)
+
+        self.env["DOCKER_TEST_FAIL_UP"] = "1"
+        result = self.deploy(newer_commit)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"Rolled back to {self.commit[:7]}", result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
+
+        docker = [args for name, args, _ in self.calls() if name == "docker"]
+        up_calls = [
+            args for args in docker if args[-3:] == ["up", "-d", "--remove-orphans"]
+        ]
+        self.assertEqual(len(up_calls), 2)
+
+    def test_failed_up_always_exits_and_tells_user(self):
+        prev_env = f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG=previous-tag\n"
+        (self.repo / ".deploy.env").write_text(prev_env)
+        self.env.pop("ECR_REGISTRY")
+
+        (self.repo / "extra.txt").write_text("newer commit\n")
+        self.git("add", "extra.txt")
+        self.git("commit", "-m", "newer commit")
+        newer_commit = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", self.commit)
+
+        self.env["DOCKER_TEST_FAIL_UP_ALWAYS"] = "1"
+        result = self.deploy(newer_commit)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Stack needs manual attention", result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
+
+    def test_deploy_timeout_validation(self):
+        self.env["DEPLOY_VERIFY_TIMEOUT"] = "abc"
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be a numeric value", result.stderr)
+        self.assertEqual(self.git("symbolic-ref", "--short", "HEAD").strip(), "main")
+        self.assertFalse((self.repo / ".deploy.env").exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_failed_verification_rolls_back_to_previous_state(self):
+        prev_env = f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG=previous-tag\n"
+        (self.repo / ".deploy.env").write_text(prev_env)
+        self.env.pop("ECR_REGISTRY")
+
+        (self.repo / "extra.txt").write_text("newer commit\n")
+        self.git("add", "extra.txt")
+        self.git("commit", "-m", "newer commit")
+        newer_commit = self.git("rev-parse", "HEAD").strip()
+
+        self.git("checkout", self.commit)
+
+        self.env["CURL_TEST_FAIL"] = "1"
+        result = self.deploy(newer_commit)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"Rolled back to {self.commit[:7]}", result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
+
+        docker = [args for name, args, _ in self.calls() if name == "docker"]
+        up_calls = [
+            args for args in docker if args[-3:] == ["up", "-d", "--remove-orphans"]
+        ]
+        self.assertEqual(len(up_calls), 2)
+
+    def test_failed_verification_without_previous_state(self):
+        self.env["CURL_TEST_FAIL"] = "1"
+        result = self.deploy(self.commit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Deploy verified", result.stderr)
 
 
 if __name__ == "__main__":

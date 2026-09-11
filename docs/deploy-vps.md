@@ -147,11 +147,11 @@ an older published commit: `./scripts/deploy.sh --prepare <commit>`.
 Every Compose command below uses `compose-prod.sh`, which loads `.env` and
 `.deploy.env` explicitly. The same wrapper is used by systemd.
 
-This is the one non-mechanical step. The Linux OpenD build has no password flag, so unattended `-login_pwd_md5` does not work. The only headless path is `login_by_remember`, which needs a token written by a previous **interactive** session that also cleared the device-verification code.
+This is the one non-mechanical step. The Linux OpenD build has no password flag, so unattended `-login_pwd_md5` does not work. The only headless path is `login_by_remember`, which needs a token written by a previous **interactive** session that also cleared the device-verification code. Without `OPEND_INTERACTIVE=1`, a headless start without a remembered token now exits with an error instead of hanging.
 
 ```sh
 cd "$HOME/moomoo"
-./scripts/compose-prod.sh run --rm -it opend
+./scripts/compose-prod.sh run --rm -it -e OPEND_INTERACTIVE=1 opend
 ```
 
 OpenD prints its banner, then asks for the device-verification code. Check the Moomoo app on your phone, enter the 6-digit code. It then prompts:
@@ -237,23 +237,32 @@ The start uses `--remove-orphans`, so containers stranded by earlier manual
 troubleshooting no longer block it with `container name is already in use`.
 When running Compose by hand rather than through the script, pass the same flag.
 
-The script fetches `main`, resolves a full commit, derives exactly seven tag
-characters, and checks both repositories using `aws ecr batch-get-image`.
-AWS errors remain visible; missing images stop deployment before checkout.
-It then checks out the commit, writes `.deploy.env`, pulls, and starts services.
-If `main` has not finished publishing both images, wait for CI or select an
-already-published commit. It does not search for the newest green build.
+The script fetches `main`, resolves the full commit, derives the seven-character
+tag CI writes on every main build, and confirms it on both repositories with
+`aws ecr batch-get-image`. AWS errors remain visible; a missing image stops the
+deployment before checkout. It never uses `:latest` and ignores git `v*` tags,
+which are release bookmarks only. If `main` has not finished publishing both
+images, wait for CI or select an already-published commit. It does not search
+for the newest green build.
+
+How far back you can roll back is bounded by the ECR lifecycle policy, which
+keeps every `v*`-tagged image and the 30 most recent commit builds per
+repository.
+
+After start, it verifies both containers are running and the MCP endpoint
+answers (any non-5xx HTTP status, token not sent) within `DEPLOY_VERIFY_TIMEOUT`
+seconds (default 90; must be a whole number of seconds). On failure, or if
+`pull` or `up` fails, it restores the previous `.deploy.env` and commit
+(restarting previous images if something had been started) and exits non-zero.
+If the rollback's own restart fails, the script says so and the stack needs a
+manual `scripts/compose-prod.sh up -d`. Verification does not prove OpenD login.
+Confirm login and MCP availability after each deployment; container startup
+alone is not a successful authenticated session.
 
 Keep the tracked working tree clean. Runtime secrets belong in `.env`; the two
 saved deployment settings belong in `.deploy.env`. Both are ignored by Git.
 Tags are mutable in ECR, so a commit tag records source identity but is not a
 cryptographic guarantee of immutable image content.
-
-If a pull or start fails after checkout, the saved target may differ from the
-currently running containers. Fix the reported error and rerun the deploy, or
-run the wrapper with the previous published commit to roll back. Confirm login
-and MCP availability after each deployment; container startup alone is not a
-successful authenticated session.
 
 `opend-data` is a named volume by default, mounted at
 `/home/opend/.com.moomoo.OpenD`. It is not `$HOME/moomoo/opend-data`.

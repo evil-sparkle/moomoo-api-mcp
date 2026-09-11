@@ -8,6 +8,10 @@ An MCP (Model Context Protocol) server for the Moomoo trading platform. This ser
 
 This MCP server empowers developers to build custom trading skills and strategies. By integrating this tool, you can enable any compatible AI agent to interact directly with the Moomoo platform on your behalf. Whether you want an AI assistant that monitors the market, analyzes your portfolio, or automatically executes complex trading strategies, this server provides the seamless bridge between your custom AI logic and Moomoo's powerful trading infrastructure.
 
+## About this fork
+
+This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp). The PyPI package `moomoo-api-mcp` (what `uvx moomoo-api-mcp` and `uv tool install moomoo-api-mcp` install) is published by upstream, not by this fork; this fork does not publish to PyPI, and `.github/workflows/python-publish.yml` and `manual-release.yml` are inherited from upstream and not maintained here. What this fork builds and maintains is the container deployment — CI (`.github/workflows/ci.yml`) builds the `moomoo-api-mcp` and `moomoo-opend` images, and `docs/deploy-vps.md` deploys them. A PyPI install therefore runs upstream's release, which can differ from this fork's code — use the Docker deployment or a local checkout (`uv run moomoo-api-mcp`) to run this fork.
+
 ## Features
 
 - **Market Data**: Real-time quotes, historical K-lines, market snapshots, and order books.
@@ -82,7 +86,7 @@ This MCP server empowers developers to build custom trading skills and strategie
 ### Quick Start (Recommended)
 
 You can run the server directly using `uvx` (part of the [uv](https://github.com/astral-sh/uv) toolkit).
-Using `--refresh` ensures you are always running the latest version:
+Using `--refresh` ensures you are always running the latest version. Note that this installs upstream's PyPI release (see [About this fork](#about-this-fork)):
 
 ```bash
 # Optional: Set these environment variables for REAL trading access.
@@ -95,7 +99,7 @@ uvx --refresh moomoo-api-mcp
 
 ### Permanent Installation
 
-To install it as a persistent tool available in your shell:
+To install it as a persistent tool available in your shell (this installs upstream's PyPI release — see [About this fork](#about-this-fork)):
 
 ```bash
 uv tool install moomoo-api-mcp
@@ -183,8 +187,9 @@ docker compose build
 OpenD requires an interactive verification code (SMS/2FA) on initial device registration:
 
 ```bash
-docker compose run --rm opend
+docker compose run --rm -it -e OPEND_INTERACTIVE=1 opend
 ```
+Without `OPEND_INTERACTIVE=1`, a headless start without a remembered token exits with an error instead of hanging.
 
 Follow the prompts in your terminal:
 1. **Account**: Enter your Moomoo ID, email, or phone number.

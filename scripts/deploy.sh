@@ -28,7 +28,17 @@ if [ "$dkr.$ecr.$domain.$suffix" != 'dkr.ecr.amazonaws.com' ] || [ -n "${extra:-
   echo 'ECR_REGISTRY must be a private ECR registry hostname.' >&2
   exit 1
 fi
-for tool in git aws docker; do
+tools=(git aws docker)
+if [ "$prepare" = false ]; then
+  tools+=(curl)
+  case "${DEPLOY_VERIFY_TIMEOUT:-90}" in
+    ""|*[!0-9]*)
+      echo "Error: DEPLOY_VERIFY_TIMEOUT must be a numeric value." >&2
+      exit 1
+      ;;
+  esac
+fi
+for tool in "${tools[@]}"; do
   command -v "$tool" >/dev/null || { echo "Missing required command: $tool" >&2; exit 1; }
 done
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -39,18 +49,8 @@ git fetch --quiet origin main
 commit="$(git rev-parse --verify --end-of-options "${1:-origin/main}^{commit}")"
 short="${commit:0:7}"
 
-# Resolve which ECR tag to deploy under. The project's source of truth for
-# release identity is `pyproject.toml`'s `version = "X.Y.Z"` — read it from
-# the *target* commit so local edits don't lie. The local git tag `v<X.Y.Z>`
-# must point at the same commit (validate); the ECR `:v<X.Y.Z>` tag must
-# exist on both images (the lifecycle policy keeps every 'v*' image). If
-# any link is broken, fall through to the commit's own tag, which CI writes
-# on every main push, and only then to ':latest'.
-#
-# Three stages, each proven:
-#   git tag --points-at   — release tag really sits at this commit
-#   aws ecr batch-get-image — the build matching the release is in ECR
-#   :<short commit>       — an image built from exactly this source
+# CI tags every main build with its short commit, so the image matches the source
+# about to be checked out; git v* tags are bookmarks and are deliberately ignored here.
 ecr_has_tag() {
   local image="$1" tag="$2"
   local got
@@ -60,65 +60,100 @@ ecr_has_tag() {
   [ -n "$got" ] && [ "$got" != None ]
 }
 
-# Read pyproject.toml into a tempdir holding the target commit; this lets us
-# access it even before we checkout onto that commit. `git show` is cheap.
-version="$(git show "${commit}:pyproject.toml" \
-  | awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }')"
-
-release_tag="${version:+v${version}}"
-
-resolve_image_tag() {
-  if [ -n "${version}" ]; then
-    # `git tag --points-at` lists what matches and exits 0 either way, so the
-    # answer is its output. Testing its status instead accepted every commit
-    # as tagged and deployed the previous release's images under a new commit.
-    if [ -n "$(git tag --points-at "${commit}" "${release_tag}")" ]; then
-      if ecr_has_tag moomoo-api-mcp "${release_tag}" && ecr_has_tag moomoo-opend "${release_tag}"; then
-        printf '%s' "${release_tag}"
-        return 0
-      fi
-      echo "Release tag ${release_tag} exists at ${short} but ECR is missing one or both images; trying :${short}." >&2
-    else
-      echo "pyproject.toml at ${short} declares version=${version} but no ${release_tag} git tag is at this commit; trying :${short}." >&2
-    fi
-  fi
-  # CI tags every main build with its short commit, so this pins the image to
-  # the source about to be checked out instead of trusting a moving :latest.
-  if ecr_has_tag moomoo-api-mcp "${short}" && ecr_has_tag moomoo-opend "${short}"; then
-    printf '%s' "${short}"
-    return 0
-  fi
-  # Not "no such tag": a denied or failed probe lands here too, and reporting
-  # that as a missing image sends you looking for the wrong problem.
-  echo "Could not confirm :${short} on both images; falling back to :latest, which may not match ${short}." >&2
-  if ecr_has_tag moomoo-api-mcp latest && ecr_has_tag moomoo-opend latest; then
-    printf '%s' latest
-    return 0
-  fi
-  return 1
-}
-
-image_tag="$(resolve_image_tag || true)"
-if [ -z "${image_tag}" ]; then
-  echo "Aborting deploy of ${short}: ECR is missing :${release_tag:-v${version:-<none>}}, :${short} and :latest on one or both images. Check that CI's main push landed for both moomoo-api-mcp and moomoo-opend." >&2
+if ecr_has_tag moomoo-api-mcp "${short}" && ecr_has_tag moomoo-opend "${short}"; then
+  image_tag="${short}"
+else
+  # Not necessarily "no such tag": a denied or failed probe lands here too, and
+  # its AWS error is printed above. Saying "missing" would hide that.
+  echo "Aborting deploy of ${short}: could not confirm :${short} on both images (missing, or the AWS check failed — see any error above). Check that CI's main push landed for both moomoo-api-mcp and moomoo-opend." >&2
   exit 1
 fi
 echo "Deploying ${short} as ${image_tag}" >&2
 
 # Read the whole function before checkout can replace this script on disk.
 finish_deploy() {
+  local previous_commit=""
+  local previous_env=""
+  local has_previous_env=false
+
+  rollback() {
+    local started_services="${1:-true}"
+    if [ "$has_previous_env" = true ]; then
+      printf '%s\n' "$previous_env" > .deploy.env
+      git checkout --quiet --detach "$previous_commit"
+      local prev_short="${previous_commit:0:7}"
+      if [ "$started_services" = true ]; then
+        if ! ./scripts/compose-prod.sh up -d --remove-orphans; then
+          echo "Rolled back .deploy.env and the checkout to ${prev_short} but restarting the previous images FAILED. Stack needs manual attention: scripts/compose-prod.sh up -d" >&2
+          exit 1
+        fi
+      fi
+      echo "Rolled back to ${prev_short}" >&2
+    else
+      echo "No previous deploy state to roll back to." >&2
+    fi
+    exit 1
+  }
+
+  if [ "$prepare" = false ]; then
+    previous_commit="$(git rev-parse HEAD)"
+    if [ -f .deploy.env ]; then
+      previous_env="$(cat .deploy.env)"
+      has_previous_env=true
+    fi
+  fi
+
   git checkout --quiet --detach "$commit"
   if [ ! -f docker-compose.prod.yml ] || [ ! -x scripts/compose-prod.sh ]; then
     echo 'Target commit lacks production deployment files; choose a newer commit.' >&2
     return 1
   fi
   printf 'ECR_REGISTRY=%s\nIMAGE_TAG=%s\n' "$registry" "${image_tag}" > .deploy.env
-  ./scripts/compose-prod.sh pull
+
   if [ "$prepare" = false ]; then
+    ./scripts/compose-prod.sh pull || rollback false
     # --remove-orphans clears containers left behind by manual troubleshooting,
     # which otherwise fail the start with "container name is already in use".
-    ./scripts/compose-prod.sh up -d --remove-orphans
-    ./scripts/compose-prod.sh logs --tail=200 opend moomoo-mcp
+    ./scripts/compose-prod.sh up -d --remove-orphans || rollback true
+    local timeout="${DEPLOY_VERIFY_TIMEOUT:-90}"
+    local verify_url="${DEPLOY_VERIFY_URL:-http://127.0.0.1:8000/mcp}"
+    local elapsed=0
+    local verified=false
+    # Note: Verification proves containers + MCP listening only, not OpenD login.
+    while :; do
+      local ps_out=""
+      ps_out="$(./scripts/compose-prod.sh ps --status running --services 2>/dev/null || true)"
+      local opend_running=false
+      local mcp_running=false
+      while IFS= read -r sline; do
+        if [ "$sline" = "opend" ]; then opend_running=true; fi
+        if [ "$sline" = "moomoo-mcp" ]; then mcp_running=true; fi
+      done <<< "$ps_out"
+      if [ "$opend_running" = true ] && [ "$mcp_running" = true ]; then
+        local code
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$verify_url" 2>/dev/null || true)"
+        [ -z "$code" ] && code="000"
+        case "$code" in
+          000 | 5?? | ? | ?? | ????* ) ;;
+          *) verified=true; break ;;
+        esac
+      fi
+      if [ "$timeout" = "0" ] || [ "$elapsed" -ge "$timeout" ]; then
+        break
+      fi
+      sleep 3
+      elapsed=$((elapsed + 3))
+    done
+    if [ "$verified" = true ]; then
+      echo "Deploy verified: ${short} as ${image_tag}" >&2
+      ./scripts/compose-prod.sh logs --tail=200 opend moomoo-mcp
+    else
+      echo "Deploy verification failed." >&2
+      ./scripts/compose-prod.sh logs --tail=200 opend moomoo-mcp
+      rollback true
+    fi
+  else
+    ./scripts/compose-prod.sh pull
   fi
 }
 finish_deploy

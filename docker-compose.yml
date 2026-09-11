@@ -3,11 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.opend
-      args:
-        OPEND_VERSION: ${OPEND_VERSION:-10.10.7008}
-        OPEND_TAG: ${OPEND_TAG:-v10.10.7008-opend}
-        OPEND_URL: ${OPEND_URL:-https://github.com/evil-sparkle/moomoo-api-mcp/releases/download/v10.10.7008-opend/moomoo_OpenD_10.10.7008_Ubuntu18.04.tar.gz}
-        OPEND_SHA256: ${OPEND_SHA256:-d38aad772b296f922e3b270119ca1abbadadc61cd3a45826e1b087a5b79069a5}
     platform: linux/amd64
     container_name: moomoo-opend
     restart: unless-stopped
@@ -23,6 +18,7 @@ services:
       - MOOMOO_LOGIN_PWD_MD5=${MOOMOO_LOGIN_PWD_MD5:-}
       - MOOMOO_LOGIN_BY_REMEMBER=${MOOMOO_LOGIN_BY_REMEMBER:-1}
       - MOOMOO_LOGIN_REGION=${MOOMOO_LOGIN_REGION:-sg}
+      - OPEND_INTERACTIVE=${OPEND_INTERACTIVE:-0}
     entrypoint:
       - /bin/sh
       - -c
@@ -35,16 +31,23 @@ services:
 
         COMMON_ARGS="-api_ip=127.0.0.1 -no_monitor=1 -lang=en -login_region=$$MOOMOO_LOGIN_REGION"
 
-        if [ -n "$$MOOMOO_LOGIN_PWD_MD5" ]; then
+        if [ "$$OPEND_INTERACTIVE" = "1" ]; then
+          if [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
+            exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT
+          else
+            exec ./OpenD $$COMMON_ARGS
+          fi
+        elif [ -n "$$MOOMOO_LOGIN_PWD_MD5" ]; then
           exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5
         elif [ "$$MOOMOO_LOGIN_BY_REMEMBER" = "1" ] && [ -n "$$MOOMOO_LOGIN_ACCOUNT" ] && [ "$$has_token" = "1" ]; then
           exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_by_remember=1
         elif [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
-          exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT
+          echo "ERROR: No usable headless login for $$MOOMOO_LOGIN_ACCOUNT: need MOOMOO_LOGIN_BY_REMEMBER=1 with a remembered token from the one-time interactive login. To perform one-time login: scripts/compose-prod.sh run --rm -it -e OPEND_INTERACTIVE=1 opend (or docker compose run --rm -it -e OPEND_INTERACTIVE=1 opend locally)" >&2
+          exit 1
         else
           # Without an account OpenD prompts on stdin forever, which under `up -d`
           # looks "Up" while never logging in. Fail loudly instead of hanging.
-          echo "ERROR: MOOMOO_LOGIN_ACCOUNT is empty. Set it in .env; headless start also needs a remembered token from the interactive login." >&2
+          echo "ERROR: MOOMOO_LOGIN_ACCOUNT is empty. Set it in .env; headless start also needs a remembered token from the interactive login (OPEND_INTERACTIVE=1)." >&2
           exit 1
         fi
     ports:
@@ -66,6 +69,7 @@ services:
       - MOOMOO_OPEND_PORT=11111
       - MOOMOO_SECURITY_FIRM=${MOOMOO_SECURITY_FIRM:-FUTUSG}
       - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
+      - MOOMOO_TRADE_PASSWORD=${MOOMOO_TRADE_PASSWORD:-}
       - MOOMOO_TRADE_PASSWORD_MD5=${MOOMOO_TRADE_PASSWORD_MD5:-}
       - MOOMOO_MAX_ORDER_QTY=${MOOMOO_MAX_ORDER_QTY:-}
       - MOOMOO_MAX_ORDER_NOTIONAL=${MOOMOO_MAX_ORDER_NOTIONAL:-}

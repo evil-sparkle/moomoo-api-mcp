@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /opt/moomooOpenD
 
+# These pins are the single source of truth for OpenD version/tag/URL/checksum.
+# They can be overridden with docker compose build --build-arg NAME=value.
 ARG OPEND_VERSION=10.10.7008
 ARG OPEND_TAG=v10.10.7008-opend
 ARG OPEND_URL=https://github.com/evil-sparkle/moomoo-api-mcp/releases/download/${OPEND_TAG}/moomoo_OpenD_${OPEND_VERSION}_Ubuntu18.04.tar.gz

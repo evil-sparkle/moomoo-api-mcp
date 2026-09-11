@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# main runs queue (never cancel a publishing run), other refs cancel superseded runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     name: Run Tests and Lint
@@ -105,6 +110,7 @@ jobs:
           needed_mcp=(
             "Dockerfile"
             "pyproject.toml"
+            "uv.lock"
             "README.md"
             "LICENSE"
             "src/"
