@@ -48,6 +48,13 @@ class DeployScriptsTest(unittest.TestCase):
             shutil.copy2(ROOT / name, self.repo / name)
         (self.repo / ".env").write_text("MCP_AUTH_TOKEN=test-only\n")
         self.git("init", "-b", "main")
+        # A developer's global core.hooksPath applies to every repository on the
+        # machine, this disposable fixture included. A commit-msg hook enforcing
+        # Conventional Commits then rejects "test fixture" and every test here
+        # fails in setUp; a post-checkout hook would fire on deploy.sh's
+        # `git checkout --detach`. CI has no global hooks, so this only ever
+        # breaks locally. Point the fixture at a directory that holds no hooks.
+        self.git("config", "core.hooksPath", str(self.root / "no-hooks"))
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "Deployment Test")
         self.git("config", "core.abbrev", "12")
