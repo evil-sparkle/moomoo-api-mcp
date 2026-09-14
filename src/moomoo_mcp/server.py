@@ -158,18 +158,13 @@ async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
                     "The server will start; use check_health to diagnose."
                 )
 
-        if trade_service.trade_ctx is not None:
-            if policy.mode is TradingMode.READ_ONLY:
-                try:
-                    trade_service.lock_trade()
-                    logger.info(
-                        "Proactively locked trade gateway on startup in READ_ONLY mode."
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(f"Failed to proactively lock trade on OpenD: {exc}")
-            elif policy.mode is TradingMode.REAL:
-                # Auto-unlock trade if password is configured in environment
-                _auto_unlock_trade(trade_service)
+        # READ_ONLY locking is not done here: the trade service asserts the lock
+        # itself on every connection and every SDK reconnect, which also covers
+        # a connection that only arrives after startup has moved on, and a
+        # gateway that restarts later.
+        if policy.mode is TradingMode.REAL and trade_service.trade_ctx is not None:
+            # Auto-unlock trade if password is configured in environment
+            _auto_unlock_trade(trade_service)
 
         # Create market data service using the shared quote context
         market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)

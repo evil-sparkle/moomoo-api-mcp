@@ -1,9 +1,12 @@
 """Unit tests for TradeService."""
 
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+from moomoo import RET_ERROR, RET_OK, OpenSecTradeContext
 
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
@@ -45,6 +48,131 @@ class TestTradeServiceConnection:
 
         mock_trade_ctx.close.assert_called_once()
         assert trade_service_with_mock.trade_ctx is None
+
+
+class TestReadOnlyGatewayLock:
+    """A READ_ONLY deployment keeps the gateway locked across reconnects.
+
+    The SDK reconnects by itself and keeps the same context object, so a lock
+    asserted only once at startup is gone as soon as OpenD restarts. Nothing
+    below re-reads the gateway's unlock state, so the lock has to be re-issued
+    on every connection the SDK establishes.
+    """
+
+    @staticmethod
+    def _connected(policy, lock_result=(RET_OK, "")):
+        """Connect a service against a mock context that answers the lock.
+
+        Returns the SDK's original reconnect callback alongside the context:
+        connecting replaces that attribute with the service's wrapper, so a
+        test that wants the inner one has to hold it from before.
+        """
+        ctx = MagicMock()
+        ctx.unlock_trade.return_value = lock_result
+        # Stands in for the SDK's own post-reconnect work (replaying a cached
+        # unlock, re-subscribing), so a test can show it still runs.
+        sdk_reconnect = ctx.on_api_socket_reconnected
+        sdk_reconnect.return_value = (RET_OK, "")
+
+        service = TradeService(policy=policy)
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            return_value=ctx,
+        ):
+            service.connect(timeout=5)
+        return service, ctx, sdk_reconnect
+
+    def test_connecting_locks_the_gateway(self):
+        service, ctx, _ = self._connected(TradingPolicy(TradingMode.READ_ONLY))
+
+        ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+        assert service.trade_ctx is ctx
+
+    def test_reconnecting_locks_the_gateway_again(self):
+        """OpenD restarting must not leave a READ_ONLY server unlocked."""
+        service, ctx, _ = self._connected(TradingPolicy(TradingMode.READ_ONLY))
+        ctx.unlock_trade.reset_mock()
+
+        # What the SDK calls on the reconnect thread once the socket is ready.
+        ctx.on_api_socket_reconnected()
+
+        ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+        assert service.trade_ctx is ctx
+
+    def test_the_sdk_reconnect_work_still_runs_and_is_reported(self):
+        """The hook wraps the SDK's own callback; it does not replace it."""
+        _, ctx, sdk_reconnect = self._connected(TradingPolicy(TradingMode.READ_ONLY))
+        sdk_reconnect.return_value = (RET_ERROR, "init connect failed")
+
+        result = ctx.on_api_socket_reconnected()
+
+        sdk_reconnect.assert_called_once_with()
+        assert result == (RET_ERROR, "init connect failed")
+
+    def test_a_refused_lock_does_not_break_the_reconnect(self):
+        """Raising here would cost the SDK the connection it just made."""
+        _, ctx, _sdk = self._connected(
+            TradingPolicy(TradingMode.READ_ONLY),
+            lock_result=(RET_ERROR, "trade svr not ready"),
+        )
+        ctx.unlock_trade.reset_mock()
+
+        assert ctx.on_api_socket_reconnected() == (RET_OK, "")
+        ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+
+    @pytest.mark.parametrize("mode", [TradingMode.SIMULATE, TradingMode.REAL])
+    def test_other_modes_are_left_alone(self, mode):
+        """Only READ_ONLY asserts a lock; REAL relies on just-in-time unlock."""
+        _, ctx, _sdk = self._connected(TradingPolicy(mode))
+        ctx.unlock_trade.assert_not_called()
+
+        ctx.on_api_socket_reconnected()
+
+        ctx.unlock_trade.assert_not_called()
+
+    def test_the_real_sdk_class_allows_the_hook(self):
+        """The SDK resolves the callback on the instance, and permits shadowing.
+
+        Wrapping an attribute holds only while the vendored class defines no
+        ``__slots__`` and does not expose the callback as a read-only property.
+        Those are facts about the SDK rather than about this server, so they are
+        asserted against the real class, not a mock that would accept anything.
+        """
+        ctx = object.__new__(OpenSecTradeContext)
+        service = TradeService(policy=TradingPolicy(TradingMode.READ_ONLY))
+
+        service._watch_reconnects(ctx)
+
+        assert ctx.__dict__["on_api_socket_reconnected"] is (
+            ctx.on_api_socket_reconnected
+        )
+        assert (
+            ctx.on_api_socket_reconnected
+            is not OpenSecTradeContext.on_api_socket_reconnected
+        )
+
+    def test_a_context_abandoned_by_shutdown_is_not_locked(self):
+        """close() won the race: the context is closed, not talked to."""
+        release = threading.Event()
+        ctx = MagicMock()
+        ctx.unlock_trade.return_value = (RET_OK, "")
+
+        def slow_connect(**_):
+            release.wait(30)
+            return ctx
+
+        service = TradeService(policy=TradingPolicy(TradingMode.READ_ONLY))
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            side_effect=slow_connect,
+        ):
+            service.connect(timeout=0.1)
+            service.close()
+            release.set()
+            time.sleep(0.3)
+
+        ctx.close.assert_called_once()
+        ctx.unlock_trade.assert_not_called()
 
 
 class TestGetAccounts:
