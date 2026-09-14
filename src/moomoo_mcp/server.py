@@ -1,6 +1,8 @@
+import atexit
 import hmac
 import logging
 import os
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -116,9 +118,18 @@ def _auto_unlock_trade(trade_service: TradeService) -> None:
         )
 
 
-@asynccontextmanager
-async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
-    """Manage moomoo connections lifecycle."""
+# The gateway connections belong to the process, not to a session. Built once,
+# under a lock, and handed to every session that follows.
+_services: AppContext | None = None
+_services_lock = threading.Lock()
+
+
+def _build_services() -> AppContext:
+    """Open this process's connections to OpenD.
+
+    Read the note on ``app_lifespan`` before moving anything back inline: this
+    runs once per process, not once per session.
+    """
     # Read OpenD connection settings from environment
     opend_host = os.environ.get("MOOMOO_OPEND_HOST", "127.0.0.1")
     opend_port_raw = os.environ.get("MOOMOO_OPEND_PORT", "11111")
@@ -169,20 +180,86 @@ async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
         # Create market data service using the shared quote context
         market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
 
-        yield AppContext(
+        return AppContext(
             moomoo_service=moomoo_service,
             trade_service=trade_service,
             market_data_service=market_data_service,
         )
-    finally:
+    except BaseException:
+        # Nothing above is expected to raise — connection failures are caught
+        # and logged individually — but a half-built set of services must not
+        # be left holding sockets that no one can reach to close.
         trade_service.close()
         moomoo_service.close()
+        raise
+
+
+def get_services() -> AppContext:
+    """Return this process's services, opening them on first use."""
+    global _services
+
+    with _services_lock:
+        if _services is None:
+            _services = _build_services()
+            # Sessions come and go; the connections outlive them and are
+            # released when the process is.
+            atexit.register(close_services)
+        return _services
+
+
+def close_services() -> None:
+    """Release the process's connections. Idempotent."""
+    global _services
+
+    with _services_lock:
+        services = _services
+        _services = None
+
+    if services is not None:
+        services.trade_service.close()
+        services.moomoo_service.close()
+
+
+@asynccontextmanager
+async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
+    """Hand the session this process's gateway connections.
+
+    This looks like a process-level startup hook and is not one. The MCP
+    lifespan runs inside ``Server.run()``, which the streamable-HTTP session
+    manager calls once per session — and, when the server is stateless, once
+    per request. Building the services here therefore opened a fresh pair of
+    OpenD connections for every client that connected, waited the trade
+    connect timeout each time, and closed them again when that client went
+    away. Under stateless HTTP it would do all of that per tool call.
+
+    So the services are built once for the process and shared. Sharing is also
+    the more honest model: there is one gateway behind them, one unlock state
+    on it, and this server's just-in-time unlock serializes against a single
+    trade context rather than racing several.
+    """
+    yield get_services()
 
 
 mcp = FastMCP(
     "Moomoo Trading",
     lifespan=app_lifespan,
     dependencies=["moomoo-api", "pandas"],
+    # Sessions are held in this process's memory, so a restart invalidates
+    # every one of them: the client's next call is answered with 404 and it has
+    # to initialize again. Clients are required to handle that, but the ones
+    # that do not leave a person reconnecting a remote endpoint by hand.
+    #
+    # Stateless mode issues no session id, ignores any the client still holds,
+    # and treats each request as initialized, so a restart costs a client one
+    # failed call rather than its session. What it gives up is state this
+    # server does not keep: no resumable event stream and no server-initiated
+    # notifications outside a request (the logging notifications tools emit
+    # during a call still ride that call's own response).
+    #
+    # Viable only because the gateway connections are no longer built per
+    # lifespan — see app_lifespan. Reverting that would open a pair of OpenD
+    # connections per tool call.
+    stateless_http=True,
     host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("FASTMCP_PORT", "8000")),
     transport_security=TransportSecuritySettings(

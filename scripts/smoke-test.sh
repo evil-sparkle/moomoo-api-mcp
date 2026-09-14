@@ -17,9 +17,13 @@
 # Note the order of the checks below. Under streamable HTTP the MCP lifespan
 # runs per session, inside Server.run() — not once at process start. A freshly
 # started container has therefore not dialled the gateway, and never will until
-# a client initializes a session. This opens a real MCP session to provoke that
-# connection, which also means the restart assertions below are made against a
-# live client session rather than an idle server.
+# a client sends its first request. This opens a real MCP session to provoke
+# that connection, which also means the restart assertions are made against a
+# live client rather than an idle server.
+#
+# Both containers get restarted, because both used to break a client: the
+# gateway's restart stranded the MCP server in a dead network namespace, and
+# the MCP server's restart invalidated the client's session.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -95,8 +99,16 @@ mcp_request() {
 }
 
 open_mcp_session() {
-  mcp_request "" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0"}}}' headers |
-    grep -i '^mcp-session-id:' | tr -d '\r' | awk '{print $2}'
+  mcp_request "" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0"}}}' headers
+}
+
+# The id a stateful server would hand out. This one is stateless and issues
+# none, which is the whole point: a client holding nothing has nothing a
+# restart can invalidate. Captured anyway, so the calls below carry a real
+# session id if the server is ever switched back, and so this script keeps
+# testing whatever the server actually does rather than what it did once.
+session_id_from() {
+  printf '%s' "$1" | grep -i '^mcp-session-id:' | tr -d '\r' | awk '{print $2}'
 }
 
 # Proof the session still works: a tool this server defines comes back in the
@@ -156,12 +168,13 @@ if [ "${authorized}" = "401" ]; then
 fi
 
 echo "==> a client can open an MCP session"
-session="$(open_mcp_session)"
-if [ -z "${session}" ]; then
-  echo "FAILED: initialize returned no mcp-session-id, so no client can use" \
-    "this server at all." >&2
+handshake="$(open_mcp_session)"
+if ! printf '%s' "${handshake}" | grep -q '"serverInfo"'; then
+  echo "FAILED: initialize did not return a server result, so no client can" \
+    "use this server at all." >&2
   exit 1
 fi
+session="$(session_id_from "${handshake}")"
 mcp_request "${session}" '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   > /dev/null
 
@@ -202,4 +215,20 @@ if [ "$(mcp_instance)" != "${mcp_before}" ]; then
   exit 1
 fi
 
-echo "PASSED: the stack survives a gateway restart."
+# The other half of the promise. A gateway restart is the easy one: the MCP
+# server stays up and the SDK reconnects underneath it. This is the hard one —
+# the process holding the client's session is the one going away. A stateful
+# server answers the next call with 404 and the client has to initialize again,
+# which is exactly the interruption someone has to notice and fix by hand.
+echo "==> restarting the MCP server"
+dc restart moomoo-mcp
+wait_for 90 "the MCP server to come back" endpoint_rejects_anonymous
+
+echo "==> the client keeps calling without re-initializing"
+if ! session_still_lists_tools "${session}"; then
+  echo "FAILED: a call that worked before the MCP server restarted no longer" \
+    "does, so every client has to reconnect when it bounces." >&2
+  exit 1
+fi
+
+echo "PASSED: the stack survives a restart of either container."

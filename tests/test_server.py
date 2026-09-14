@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from moomoo_mcp.server import _auto_unlock_trade, app_lifespan
+import moomoo_mcp.server as server
+from moomoo_mcp.server import _auto_unlock_trade, app_lifespan, close_services
 from moomoo_mcp.services.trading_policy import (
     ENV_VAR,
     TradingMode,
@@ -14,6 +15,18 @@ from moomoo_mcp.services.trading_policy import (
 )
 
 REAL_POLICY = TradingPolicy(TradingMode.REAL)
+
+
+@pytest.fixture(autouse=True)
+def fresh_process_services():
+    """Give each test a process that has not built its services yet.
+
+    They are deliberately built once and cached for the life of the process, so
+    without this a test would be handed whatever the previous one connected.
+    """
+    server._services = None
+    yield
+    server._services = None
 
 
 class TestAutoUnlockTrade:
@@ -146,11 +159,18 @@ class TestLifespanResilience:
         # A failed trade connection must not trigger an unlock attempt.
         trade_service.unlock_trade.assert_not_called()
         market_data_cls.assert_called_once_with(quote_ctx=None)
+
+        # The session ending is not the process ending: the connections outlive
+        # it, and only shutdown releases them.
+        trade_service.close.assert_not_called()
+        moomoo_service.close.assert_not_called()
+
+        close_services()
         trade_service.close.assert_called_once()
         moomoo_service.close.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_partial_startup_still_closes_the_quote_context(self) -> None:
+    async def test_partial_startup_still_releases_the_quote_context(self) -> None:
         moomoo_service, trade_service = self._patched_services(
             trade_error=OSError("trade svr not ready")
         )
@@ -164,8 +184,60 @@ class TestLifespanResilience:
                 pass
 
         assert moomoo_service.quote_ctx is not None
+
+        close_services()
         moomoo_service.close.assert_called_once()
         trade_service.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sessions_share_one_set_of_connections(self) -> None:
+        """Every session after the first reuses what the first one opened.
+
+        The MCP lifespan runs per session — per request once the server is
+        stateless — so building connections in it meant a pair of OpenD sockets
+        and a trade-connect wait for every client, and for every tool call.
+        """
+        moomoo_service, trade_service = self._patched_services()
+
+        with (
+            patch(
+                "moomoo_mcp.server.MoomooService", return_value=moomoo_service
+            ) as quote_cls,
+            patch(
+                "moomoo_mcp.server.TradeService", return_value=trade_service
+            ) as trade_cls,
+            patch("moomoo_mcp.server.MarketDataService"),
+        ):
+            async with app_lifespan(MagicMock()) as first:
+                pass
+            async with app_lifespan(MagicMock()) as second:
+                pass
+
+        assert first is second
+        quote_cls.assert_called_once()
+        trade_cls.assert_called_once()
+        moomoo_service.connect.assert_called_once()
+        trade_service.connect.assert_called_once()
+        trade_service.close.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_is_idempotent(self) -> None:
+        """atexit may fire after an explicit shutdown has already run."""
+        moomoo_service, trade_service = self._patched_services()
+
+        with (
+            patch("moomoo_mcp.server.MoomooService", return_value=moomoo_service),
+            patch("moomoo_mcp.server.TradeService", return_value=trade_service),
+            patch("moomoo_mcp.server.MarketDataService"),
+        ):
+            async with app_lifespan(MagicMock()):
+                pass
+
+        close_services()
+        close_services()
+
+        trade_service.close.assert_called_once()
+        moomoo_service.close.assert_called_once()
 
 
 class TestStartupTradingMode:

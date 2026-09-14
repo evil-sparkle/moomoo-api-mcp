@@ -233,38 +233,41 @@ docker compose logs -f moomoo-mcp
 
 ### 5. Restarting a Container
 
-**OpenD restarting does not require restarting the MCP server or your client.**
-The moomoo SDK reconnects by itself — every six seconds, for as long as it takes —
-and the same context objects keep working afterwards. On reconnect it replays the
-quote subscriptions it held, this server re-asserts the gateway lock in
-`READ_ONLY` mode, and a REAL deployment's startup unlock is replayed by the SDK.
-Your open session keeps working throughout; `scripts/smoke-test.sh` asserts that
-a session opened before the restart still serves calls after it.
-
-Worth knowing when reading logs: over HTTP the gateway connections belong to the
-MCP *session*, not to the server process. The MCP lifespan runs inside
-`Server.run()`, once per session, so a server that no client has connected to yet
-has not dialled OpenD at all, and each session gets its own quote and trade
-contexts.
-
-Tool calls issued while the gateway is away fail with a connect timeout instead of
-hanging (bounded at 3s), and `check_health` reports `disconnected` or `degraded`
-until OpenD answers again — it usually needs ~30s to log back in.
+**Neither container's restart requires you to touch your client.**
 
 ```bash
-docker compose restart opend       # clients keep their sessions
-docker compose restart moomoo-mcp  # clients must reconnect
+docker compose restart opend       # clients keep working
+docker compose restart moomoo-mcp  # clients keep working
 ```
 
-`scripts/smoke-test.sh` runs this exact scenario against a stand-in gateway —
-CI runs it on every pull request, and you can run it locally with Docker
-available. It uses its own Compose project, so it never touches a running
-stack or the `opend-data` volume.
+**When OpenD restarts**, the MCP server stays up and the moomoo SDK reconnects by
+itself — every six seconds, for as long as it takes — reusing the same context
+objects. On reconnect it replays the quote subscriptions it held, this server
+re-asserts the gateway lock in `READ_ONLY` mode, and a REAL deployment's startup
+unlock is replayed by the SDK. Tool calls issued while the gateway is away fail
+with a connect timeout instead of hanging (bounded at 3s), and `check_health`
+reports `disconnected` or `degraded` until OpenD answers again — it usually needs
+~30s to log back in.
 
-Restarting **the MCP server** is the case that does affect clients: streamable-HTTP
-sessions live in memory, so a client holding one from before the restart must
-reconnect. A stale session can surface as a request-parameter error rather than an
-authentication failure.
+**When the MCP server restarts**, the streamable-HTTP endpoint is served
+statelessly: it issues no session id, ignores any a client still holds, and treats
+each request as initialized. There is therefore no session for a restart to
+invalidate. A call in flight during the restart fails and the next one succeeds;
+nothing needs reconfiguring. (A stateful server answers the next call with 404
+instead, and while the MCP spec requires clients to re-initialize on that, not
+every client does — which is the interruption this avoids.) The cost is state this
+server does not keep: no resumable event stream, and no server-initiated
+notifications outside a request. Logging notifications emitted during a tool call
+still ride that call's own response.
+
+`scripts/smoke-test.sh` runs both restarts against a stand-in gateway and asserts
+a client keeps working across each — CI runs it on every pull request, and you can
+run it locally with Docker available. It uses its own Compose project, so it never
+touches a running stack or the `opend-data` volume.
+
+Worth knowing when reading logs: the gateway connections belong to the server
+process and are opened on first use, so a server no client has called yet has not
+dialled OpenD at all. Every session shares that one pair of connections.
 
 ### 6. Stop the Stack
 

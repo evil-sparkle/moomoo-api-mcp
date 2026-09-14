@@ -301,9 +301,10 @@ re-resolves `opend` on every reconnect attempt, so it follows the gateway even
 when the container is recreated on a different address; `scripts/smoke-test.sh`
 asserts exactly that.
 
-**Restarting `moomoo-mcp`** does end every client session: sessions are held in
-memory, so clients must reconnect (see the note under token rotation below).
-OpenD keeps its login throughout, so no interactive step is needed.
+**Restarting `moomoo-mcp`** does not disturb clients either. The endpoint is
+served statelessly, so there is no session for the restart to invalidate: a call
+in flight fails and the next one succeeds. OpenD keeps its login throughout, so
+no interactive step is needed.
 
 Do not publish OpenD's port 11111 to get around a problem. Its API has no
 authentication; it is reachable only from `trading-net` by design.
@@ -330,9 +331,10 @@ curl -si -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/mcp \
   -H "Authorization: Bearer ${NEW_TOKEN}"
 ```
 
-Existing client sessions do not survive the restart. Clients holding a session from
-before it must reconnect; a stale session can surface as request-parameter
-errors rather than an authentication failure.
+Clients keep working across the restart itself — the endpoint is stateless, so
+there is no session to lose — but the token they present must be the new one.
+A client still sending the old token is refused with 401 until its configuration
+is updated.
 
 ## Stop the deployment
 
