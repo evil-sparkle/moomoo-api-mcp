@@ -53,11 +53,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Connections the stand-in gateway has accepted. The MCP server's own SDK
-# dialling in is the evidence that trading-net resolves and routes end to end;
-# a probe exec'd from this script would only prove that this script can.
+# Connections accepted by the gateway process running *now*. The stand-in
+# prints LISTENING once when it starts, so counting only what follows the most
+# recent one makes a restart reset the evidence: afterwards, anything counted
+# here necessarily reached the new gateway. Comparing raw totals across a
+# restart proved too weak — connections to the outgoing gateway pushed the
+# count up on their own, and the assertion passed without a reconnect.
+#
+# The MCP server's own SDK dialling in is the evidence that trading-net
+# resolves and routes end to end; a probe exec'd from this script would only
+# prove that this script can reach the gateway.
 gateway_connections() {
-  dc logs opend 2>/dev/null | grep -c CONNECT || true
+  dc logs opend 2>/dev/null |
+    awk '/LISTENING/ { seen = 0; next } /CONNECT/ { seen++ } END { print seen + 0 }'
+}
+
+# One line per gateway process start, so this only increases when the container
+# has genuinely come back — never while the old one is still being shut down.
+gateway_starts() {
+  dc logs opend 2>/dev/null | grep -c LISTENING || true
 }
 
 endpoint_status() {
@@ -92,8 +106,12 @@ session_still_lists_tools() {
     grep -q '"name":"check_health"'
 }
 
-gateway_accepted_more_than() {
-  [ "$(gateway_connections)" -gt "$1" ]
+gateway_has_connections() {
+  [ "$(gateway_connections)" -gt 0 ]
+}
+
+gateway_restarted_since() {
+  [ "$(gateway_starts)" -gt "$1" ]
 }
 
 # 401 is this server answering: no other process on the host publishes 8000
@@ -148,23 +166,23 @@ mcp_request "${session}" '{"jsonrpc":"2.0","method":"notifications/initialized"}
   > /dev/null
 
 echo "==> the MCP server reaches the gateway at opend:11111"
-wait_for 120 "the MCP server to reach opend:11111" gateway_accepted_more_than 0
+wait_for 120 "the MCP server to reach opend:11111" gateway_has_connections
+echo "    (connections accepted by this gateway: $(gateway_connections))"
 
 # The regression itself. Everything above passed before the fix too; only this
 # part did not.
 echo "==> restarting the gateway"
 mcp_before="$(mcp_instance)"
+starts_before="$(gateway_starts)"
 dc restart opend
 
-# Counted after the restart returns, never before it. The stand-in is PID 1, so
-# it ignores SIGTERM and keeps accepting for the whole stop grace period: a
-# count taken before `restart` is still climbing while the gateway is on its way
-# out, and an increase against it proves nothing. Against a count taken once the
-# new container is up, only a connection to that container can satisfy it.
-accepted_before="$(gateway_connections)"
+# Wait for the gateway's own start marker before judging anything, so the count
+# below is read against the new process and not the departing one.
+wait_for 60 "the gateway to come back up" gateway_restarted_since "${starts_before}"
 
 echo "==> the MCP server reconnects to the restarted gateway"
-wait_for 180 "the MCP server to reconnect" gateway_accepted_more_than "${accepted_before}"
+wait_for 180 "the MCP server to reconnect" gateway_has_connections
+echo "    (connections accepted since the restart: $(gateway_connections))"
 
 echo "==> the MCP endpoint still answers"
 wait_for 30 "the MCP endpoint to survive the gateway restart" \
