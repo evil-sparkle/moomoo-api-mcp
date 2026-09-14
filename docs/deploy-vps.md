@@ -1,6 +1,10 @@
-# Deploy moomoo-api-mcp to a Vultr VPS
+# Deploy moomoo-api-mcp to an Ubuntu server
 
-The GitHub Actions workflow builds and pushes `moomoo-api-mcp` + `moomoo-opend` to ECR on every `main` push. This runbook covers everything from pulling that image to having a running, logged-in stack on a fresh Vultr instance.
+The GitHub Actions workflow builds and pushes `moomoo-api-mcp` + `moomoo-opend` to
+ECR on every `main` push. This runbook covers everything from pulling that image
+to having a running, logged-in stack on a fresh Ubuntu server (VPS or
+otherwise). Tested on Ubuntu 24.04 LTS; other Linux distributions with rootless
+Docker should work but are untested.
 
 **Two images, two runtime constraints.** The MCP server is ordinary — pull and run. OpenD is not: the first start must happen interactively so you can answer the device-verification prompt and "remember the password". Until that token lands in `opend-data`, no unattended start can complete login.
 
@@ -14,8 +18,9 @@ Use the deploy user's rootless Docker installation on Linux. If it is already
 working, skip installation. Otherwise follow [Docker's rootless setup guide](https://docs.docker.com/engine/security/rootless/),
 which creates the `rootless` context and a user `docker.service`.
 Install Git, the AWS CLI, the ECR credential helper, and current Docker Compose v2
-if missing. On Ubuntu, Git/AWS/helper packages are `git`, `awscli`, and
-`amazon-ecr-credential-helper`.
+if missing. On Ubuntu 24.04, install `git` and `amazon-ecr-credential-helper`
+with apt, and AWS CLI v2 with `sudo snap install aws-cli --classic` (or AWS's
+official installer).
 
 Verify as the deploy user, without `sudo`:
 
