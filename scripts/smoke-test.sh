@@ -153,9 +153,15 @@ wait_for 120 "the MCP server to reach opend:11111" gateway_accepted_more_than 0
 # The regression itself. Everything above passed before the fix too; only this
 # part did not.
 echo "==> restarting the gateway"
-accepted_before="$(gateway_connections)"
 mcp_before="$(mcp_instance)"
 dc restart opend
+
+# Counted after the restart returns, never before it. The stand-in is PID 1, so
+# it ignores SIGTERM and keeps accepting for the whole stop grace period: a
+# count taken before `restart` is still climbing while the gateway is on its way
+# out, and an increase against it proves nothing. Against a count taken once the
+# new container is up, only a connection to that container can satisfy it.
+accepted_before="$(gateway_connections)"
 
 echo "==> the MCP server reconnects to the restarted gateway"
 wait_for 180 "the MCP server to reconnect" gateway_accepted_more_than "${accepted_before}"
