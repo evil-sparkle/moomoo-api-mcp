@@ -6,6 +6,16 @@
 # use the exact versions pinned in uv.lock (same as CI) instead of a second
 # copy pinned here.
 repos:
+  # Conventional Commits is enforced by this repository, not by a machine-wide
+  # core.hooksPath: the rule then travels with a fresh clone and applies to every
+  # contributor, instead of depending on one developer's global git config.
+  # Install the commit-msg hook via: uv run pre-commit install --hook-type commit-msg
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.24.0
     hooks:
