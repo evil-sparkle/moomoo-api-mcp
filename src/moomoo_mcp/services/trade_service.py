@@ -27,7 +27,7 @@ from moomoo_mcp.services.health import (
     run_detached,
 )
 from moomoo_mcp.services.sdk_response import as_frame
-from moomoo_mcp.services.trading_policy import TradingPolicy
+from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +251,7 @@ class TradeService:
 
         trade_ctx = OpenSecTradeContext(**kwargs)
         trade_ctx.set_sync_query_connect_timeout(SYNC_CONNECT_TIMEOUT_SECONDS)
+        self._watch_reconnects(trade_ctx)
 
         with self._connect_lock:
             if self._closed:
@@ -262,6 +263,55 @@ class TradeService:
                 should_close = False
         if should_close:
             trade_ctx.close()
+            return
+
+        self._enforce_gateway_lock(trade_ctx, "connecting")
+
+    def _watch_reconnects(self, trade_ctx: OpenSecTradeContext) -> None:
+        """Re-assert this server's gateway lock after every SDK reconnect.
+
+        The SDK reconnects on its own — six seconds after the socket drops, for
+        as long as it takes — and reuses the same context object, so nothing
+        above this layer ever observes that it happened. The lock a READ_ONLY
+        deployment asserts when it first connects is therefore silently lost the
+        moment OpenD restarts or the link blips, leaving this server talking to
+        a gateway whose unlock state it no longer knows.
+
+        ``on_api_socket_reconnected`` is the SDK's own post-reconnect hook: it is
+        where the trade context replays a cached unlock and the quote context
+        replays its subscriptions. Wrapping it on the instance rather than
+        subclassing keeps this independent of how the context was constructed,
+        which is what lets the tests substitute one.
+        """
+        reconnected = trade_ctx.on_api_socket_reconnected
+
+        def on_api_socket_reconnected():
+            result = reconnected()
+            self._enforce_gateway_lock(trade_ctx, "reconnecting")
+            return result
+
+        trade_ctx.on_api_socket_reconnected = on_api_socket_reconnected
+
+    def _enforce_gateway_lock(self, trade_ctx: OpenSecTradeContext, when: str) -> None:
+        """Lock the gateway on a READ_ONLY deployment, without ever raising.
+
+        Called on the SDK's own connect and reconnect threads, so a failure here
+        must not propagate: an exception would abort the SDK's post-reconnect
+        work and be reported as a failed reconnect, costing the connection that
+        did succeed. A gateway that refuses the lock is logged and left alone —
+        policy still rejects every write before it reaches the gateway, so the
+        lock is defence in depth, not the thing standing between this server and
+        an order.
+        """
+        if self.policy.mode is not TradingMode.READ_ONLY:
+            return
+
+        try:
+            self._lock_gateway(trade_ctx)
+        except Exception as exc:  # noqa: BLE001 - runs on an SDK-owned thread
+            logger.warning(f"Failed to lock the trade gateway after {when}: {exc}")
+        else:
+            logger.info(f"Locked trade gateway after {when} (READ_ONLY mode).")
 
     def connect(self, timeout: float | None = None) -> None:
         """Start the trade connection, waiting at most ``timeout`` seconds.
@@ -616,7 +666,15 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.unlock_trade(is_unlock=False)
+        self._lock_gateway(self.trade_ctx)
+
+    def _lock_gateway(self, trade_ctx: OpenSecTradeContext) -> None:
+        """Lock a specific context, which may not be the published one yet.
+
+        The connect worker locks the context it has just built, before it is
+        reachable through ``self.trade_ctx``.
+        """
+        ret, data = trade_ctx.unlock_trade(is_unlock=False)
         if ret != RET_OK:
             raise RuntimeError(f"lock_trade failed: {data}")
 
