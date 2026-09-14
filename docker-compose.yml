@@ -89,12 +89,13 @@ services:
     networks:
       - trading-net
     depends_on:
+      # Ordering only. Deliberately no `restart: true`: it would restart this
+      # container whenever Compose restarts opend, ending every client session
+      # to buy nothing. The SDK re-resolves the service name on each reconnect
+      # attempt, so it follows a recreated gateway to a new address by itself,
+      # and scripts/smoke-test.sh asserts that it does.
       opend:
         condition: service_started
-        # Compose recreates this container when it recreates opend. The SDK
-        # reconnects on its own within seconds, so this is belt-and-braces
-        # rather than the only path back to a working gateway.
-        restart: true
 
 networks:
   # Not `internal: true`: OpenD needs outbound internet to reach Moomoo's

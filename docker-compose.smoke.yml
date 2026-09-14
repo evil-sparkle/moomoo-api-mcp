@@ -1,0 +1,48 @@
+# Smoke-test overlay: replaces the OpenD binary with a stand-in listener, and
+# nothing else.
+#
+# The real gateway needs an interactive device login and Moomoo's servers, so
+# it cannot run in CI. What CI does need to prove is the part that broke
+# before: that the MCP server reaches the gateway over trading-net, and that
+# restarting the gateway container leaves both that connection and the
+# published MCP endpoint intact.
+#
+# Only what runs *inside* the opend container is overridden here. The networks,
+# ports and depends_on under test stay exactly as docker-compose.yml declares
+# them — tests/test_compose_topology.py asserts that this overlay does not move
+# them, so the smoke test cannot quietly start passing against a topology that
+# is not the deployed one.
+services:
+  opend:
+    build: !reset null
+    image: python:3.12-slim
+    # Set in the base file, and global rather than per-project: it would
+    # collide with a real stack on the same host. The project name isolates
+    # the smoke run instead.
+    container_name: !reset null
+    entrypoint:
+      - python3
+      - -u
+      - -c
+      - |
+        # Accept and log connections on the gateway port. Logging is the point:
+        # the MCP server's own SDK dialling in is what proves the bridge works,
+        # which an exec'd probe from the test would not.
+        import socketserver
+
+
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self):
+                print("CONNECT", self.client_address[0], flush=True)
+
+
+        class Server(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
+
+        print("LISTENING 0.0.0.0:11111", flush=True)
+        Server(("0.0.0.0", 11111), Handler).serve_forever()
+
+  moomoo-mcp:
+    container_name: !reset null

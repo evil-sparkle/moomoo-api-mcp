@@ -289,9 +289,11 @@ is not replayed: it re-locks when the order finishes, which clears it).
 Tool calls made during the gap fail with a connect timeout
 and the next call succeeds; `check_health` reports `disconnected` or `degraded`
 until it is back. `opend` still needs ~30s to log in, so expect that long before
-health goes green. Compose also recreates `moomoo-mcp` when it recreates
-`opend` (`depends_on: restart: true`), which is belt-and-braces rather than the
-path back to a working gateway.
+health goes green. `moomoo-mcp` is deliberately left running throughout — its
+`depends_on` declares start ordering only — so client sessions survive. The SDK
+re-resolves `opend` on every reconnect attempt, so it follows the gateway even
+when the container is recreated on a different address; `scripts/smoke-test.sh`
+asserts exactly that.
 
 **Restarting `moomoo-mcp`** does end every client session: sessions are held in
 memory, so clients must reconnect (see the note under token rotation below).
