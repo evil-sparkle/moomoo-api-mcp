@@ -248,6 +248,11 @@ docker compose restart opend       # clients keep their sessions
 docker compose restart moomoo-mcp  # clients must reconnect
 ```
 
+`scripts/smoke-test.sh` runs this exact scenario against a stand-in gateway —
+CI runs it on every pull request, and you can run it locally with Docker
+available. It uses its own Compose project, so it never touches a running
+stack or the `opend-data` volume.
+
 Restarting **the MCP server** is the case that does affect clients: streamable-HTTP
 sessions live in memory, so a client holding one from before the restart must
 reconnect. A stale session can surface as a request-parameter error rather than an

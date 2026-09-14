@@ -109,6 +109,7 @@ moomoo_OpenD*
 docker-compose.*.yml
 !docker-compose.yml
 !docker-compose.prod.yml
+!docker-compose.smoke.yml
 docs/deploy-*.md
 !docs/deploy-vps.md
 .deploy.env

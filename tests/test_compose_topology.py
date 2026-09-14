@@ -154,11 +154,40 @@ class ComposeTopologyTest(unittest.TestCase):
         self.assertIn("-api_ip=$${OPEND_API_IP:-0.0.0.0}", entrypoint)
         self.assertEqual(opend["environment"]["OPEND_API_IP"], "0.0.0.0")
 
-    def test_compose_recreates_the_mcp_server_with_the_gateway(self):
+    def test_a_gateway_restart_leaves_the_mcp_server_running(self):
+        """`restart: true` here would end every client session to buy nothing.
+
+        Compose restarts a dependent service whenever it restarts the
+        dependency, and MCP sessions live in the server's memory, so every
+        gateway bounce would force every client to reconnect — the very
+        disruption the separated namespaces exist to avoid. Nothing is gained
+        in exchange: the SDK re-resolves the service name on each reconnect
+        attempt, so it follows a recreated gateway to a new address on its own.
+        scripts/smoke-test.sh proves both halves against a running stack.
+        """
         depends_on = self._service("moomoo-mcp").get("depends_on", {})
 
-        self.assertIn("opend", depends_on)
-        self.assertIs(depends_on["opend"].get("restart"), True)
+        self.assertIn("opend", depends_on, "start ordering must still be declared")
+        self.assertNotEqual(depends_on["opend"].get("restart"), True)
+
+    def test_the_smoke_overlay_leaves_the_topology_alone(self):
+        """The smoke test has to exercise the deployed networking, not its own.
+
+        docker-compose.smoke.yml swaps the OpenD binary for a stand-in the CI
+        runner can start. If it ever moved a network, a port or a dependency
+        too, the smoke test would be proving something about a topology nobody
+        deploys.
+        """
+        smoke = _render("docker-compose.yml", "docker-compose.smoke.yml")
+
+        self.assertEqual(self.config["networks"], smoke["networks"])
+        for name in ("opend", "moomoo-mcp"):
+            deployed = self.config["services"][name]
+            stubbed = smoke["services"][name]
+            for key in ("networks", "ports", "depends_on", "environment"):
+                self.assertEqual(
+                    deployed.get(key), stubbed.get(key), f"{name}.{key} was moved"
+                )
 
     def test_the_production_overlay_keeps_the_same_topology(self):
         """The VPS runs the overlay, so its merge is what actually deploys."""
