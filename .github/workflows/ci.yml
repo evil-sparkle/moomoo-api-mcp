@@ -39,6 +39,13 @@ jobs:
       - name: Run basedpyright
         run: |
           uv run basedpyright
+      # tests/test_compose_topology.py renders docker-compose.yml through
+      # Compose itself, which is the only check covering the compose file:
+      # docker-build below builds the images without ever starting the stack.
+      # Fail here, with an obvious message, rather than inside the suite.
+      - name: Check Docker Compose is available
+        run: |
+          docker compose version
       - name: Run Tests
         run: |
           uv run pytest

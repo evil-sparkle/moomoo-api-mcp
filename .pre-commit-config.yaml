@@ -36,11 +36,12 @@ repos:
         types_or: [python, pyi]
         pass_filenames: false
 
-      # tests/test_deploy_scripts.py exercises the shell scripts, so script
+      # tests/test_deploy_scripts.py exercises the shell scripts and
+      # tests/test_compose_topology.py the compose files, so script and YAML
       # changes trigger the suite too.
       - id: pytest
         name: pytest
         entry: uv run pytest -q
         language: system
-        types_or: [python, pyi, shell]
+        types_or: [python, pyi, shell, yaml]
         pass_filenames: false
