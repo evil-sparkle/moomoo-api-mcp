@@ -13,6 +13,13 @@
 # The real gateway needs an interactive device login and Moomoo's own servers,
 # so docker-compose.smoke.yml swaps the OpenD binary for a stand-in listener.
 # It swaps nothing else: the networking under test is the deployed file's.
+#
+# Note the order of the checks below. Under streamable HTTP the MCP lifespan
+# runs per session, inside Server.run() — not once at process start. A freshly
+# started container has therefore not dialled the gateway, and never will until
+# a client initializes a session. This opens a real MCP session to provoke that
+# connection, which also means the restart assertions below are made against a
+# live client session rather than an idle server.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -57,6 +64,34 @@ endpoint_status() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@" "$ENDPOINT" || true
 }
 
+# An MCP client, reduced to the three calls this needs. initialize is what makes
+# the server enter its lifespan and connect to the gateway; the session id it
+# returns is what a real client would hold, and what must still work afterwards.
+mcp_request() {
+  local session="$1" body="$2" show_headers="${3:-}"
+  local -a args=(
+    -s --max-time 30
+    -H "Authorization: Bearer ${TOKEN}"
+    -H "Content-Type: application/json"
+    -H "Accept: application/json, text/event-stream"
+  )
+  [ -n "${session}" ] && args+=(-H "mcp-session-id: ${session}")
+  [ -n "${show_headers}" ] && args+=(-i)
+  curl "${args[@]}" -d "${body}" "$ENDPOINT" || true
+}
+
+open_mcp_session() {
+  mcp_request "" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0"}}}' headers |
+    grep -i '^mcp-session-id:' | tr -d '\r' | awk '{print $2}'
+}
+
+# Proof the session still works: a tool this server defines comes back in the
+# listing. A dead or forgotten session answers with an error instead.
+session_still_lists_tools() {
+  mcp_request "$1" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' |
+    grep -q '"name":"check_health"'
+}
+
 gateway_accepted_more_than() {
   [ "$(gateway_connections)" -gt "$1" ]
 }
@@ -92,9 +127,6 @@ wait_for() {
 echo "==> starting the stack"
 dc up -d --build --quiet-pull
 
-echo "==> the MCP server reaches the gateway at opend:11111"
-wait_for 180 "the MCP server to reach opend:11111" gateway_accepted_more_than 0
-
 echo "==> the MCP endpoint answers on 127.0.0.1:8000"
 wait_for 60 "the MCP endpoint to answer" endpoint_rejects_anonymous
 
@@ -104,6 +136,19 @@ if [ "${authorized}" = "401" ]; then
     "127.0.0.1:8000 is not this server." >&2
   exit 1
 fi
+
+echo "==> a client can open an MCP session"
+session="$(open_mcp_session)"
+if [ -z "${session}" ]; then
+  echo "FAILED: initialize returned no mcp-session-id, so no client can use" \
+    "this server at all." >&2
+  exit 1
+fi
+mcp_request "${session}" '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  > /dev/null
+
+echo "==> the MCP server reaches the gateway at opend:11111"
+wait_for 120 "the MCP server to reach opend:11111" gateway_accepted_more_than 0
 
 # The regression itself. Everything above passed before the fix too; only this
 # part did not.
@@ -118,6 +163,13 @@ wait_for 180 "the MCP server to reconnect" gateway_accepted_more_than "${accepte
 echo "==> the MCP endpoint still answers"
 wait_for 30 "the MCP endpoint to survive the gateway restart" \
   endpoint_rejects_anonymous
+
+echo "==> the client's session survived the gateway restart"
+if ! session_still_lists_tools "${session}"; then
+  echo "FAILED: the MCP session opened before the restart no longer works, so a" \
+    "gateway restart forces every client to reconnect." >&2
+  exit 1
+fi
 
 echo "==> the MCP server itself was left running"
 if [ "$(mcp_instance)" != "${mcp_before}" ]; then

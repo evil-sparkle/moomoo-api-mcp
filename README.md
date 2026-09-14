@@ -238,6 +238,14 @@ The moomoo SDK reconnects by itself — every six seconds, for as long as it tak
 and the same context objects keep working afterwards. On reconnect it replays the
 quote subscriptions it held, this server re-asserts the gateway lock in
 `READ_ONLY` mode, and a REAL deployment's startup unlock is replayed by the SDK.
+Your open session keeps working throughout; `scripts/smoke-test.sh` asserts that
+a session opened before the restart still serves calls after it.
+
+Worth knowing when reading logs: over HTTP the gateway connections belong to the
+MCP *session*, not to the server process. The MCP lifespan runs inside
+`Server.run()`, once per session, so a server that no client has connected to yet
+has not dialled OpenD at all, and each session gets its own quote and trade
+contexts.
 
 Tool calls issued while the gateway is away fail with a connect timeout instead of
 hanging (bounded at 3s), and `check_health` reports `disconnected` or `degraded`

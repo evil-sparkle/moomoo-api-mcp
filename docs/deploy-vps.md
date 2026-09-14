@@ -281,7 +281,8 @@ cd "$HOME/moomoo"
 ```
 
 **Restarting `opend`** does not require restarting anything else and does not
-disturb MCP clients. The moomoo SDK reconnects on its own, retrying every six
+disturb MCP clients: open sessions keep serving calls across the restart. The
+moomoo SDK reconnects on its own, retrying every six
 seconds for as long as it takes, and on reconnect it replays the quote
 subscriptions it was holding, re-asserts the READ_ONLY lock, and replays a REAL
 deployment's startup unlock if one was performed (an order's just-in-time unlock
