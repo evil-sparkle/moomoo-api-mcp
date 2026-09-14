@@ -269,6 +269,37 @@ cryptographic guarantee of immutable image content.
 The inspection command above also works if `OPEND_DATA_DIR` selects a bind mount.
 Do not remove this volume during ordinary deployments: it holds device tokens.
 
+## Everyday: restart one container
+
+The two containers have their own network namespaces and talk over the
+`trading-net` bridge, so they can be restarted independently.
+
+```sh
+cd "$HOME/moomoo"
+./scripts/compose-prod.sh restart opend       # gateway only
+./scripts/compose-prod.sh restart moomoo-mcp  # MCP server only
+```
+
+**Restarting `opend`** does not require restarting anything else and does not
+disturb MCP clients. The moomoo SDK reconnects on its own, retrying every six
+seconds for as long as it takes, and on reconnect it replays the quote
+subscriptions it was holding, re-asserts the READ_ONLY lock, and replays a REAL
+deployment's startup unlock if one was performed (an order's just-in-time unlock
+is not replayed: it re-locks when the order finishes, which clears it).
+Tool calls made during the gap fail with a connect timeout
+and the next call succeeds; `check_health` reports `disconnected` or `degraded`
+until it is back. `opend` still needs ~30s to log in, so expect that long before
+health goes green. Compose also recreates `moomoo-mcp` when it recreates
+`opend` (`depends_on: restart: true`), which is belt-and-braces rather than the
+path back to a working gateway.
+
+**Restarting `moomoo-mcp`** does end every client session: sessions are held in
+memory, so clients must reconnect (see the note under token rotation below).
+OpenD keeps its login throughout, so no interactive step is needed.
+
+Do not publish OpenD's port 11111 to get around a problem. Its API has no
+authentication; it is reachable only from `trading-net` by design.
+
 ## Everyday: rotate `MCP_AUTH_TOKEN`
 
 Rotate whenever the token has been displayed, shared, or copied into a client

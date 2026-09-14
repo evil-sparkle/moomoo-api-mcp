@@ -175,6 +175,8 @@ moomoo-api-mcp
 
 Running OpenD and the MCP server via Docker isolates the OpenD gateway on an internal bridge network (`trading-net`), protects trading credentials, and persists device authorization across restarts.
 
+Each container has its own network namespace and they reach each other by service name over `trading-net`: the MCP server connects to `opend:11111`, which is never published to the host, and publishes its own endpoint on `127.0.0.1:8000`. That separation is what lets either container restart without taking the other's networking with it.
+
 ### 1. Build the Images
 
 ```bash
@@ -229,7 +231,29 @@ docker compose logs -f opend
 docker compose logs -f moomoo-mcp
 ```
 
-### 5. Stop the Stack
+### 5. Restarting a Container
+
+**OpenD restarting does not require restarting the MCP server or your client.**
+The moomoo SDK reconnects by itself — every six seconds, for as long as it takes —
+and the same context objects keep working afterwards. On reconnect it replays the
+quote subscriptions it held, this server re-asserts the gateway lock in
+`READ_ONLY` mode, and a REAL deployment's startup unlock is replayed by the SDK.
+
+Tool calls issued while the gateway is away fail with a connect timeout instead of
+hanging (bounded at 3s), and `check_health` reports `disconnected` or `degraded`
+until OpenD answers again — it usually needs ~30s to log back in.
+
+```bash
+docker compose restart opend       # clients keep their sessions
+docker compose restart moomoo-mcp  # clients must reconnect
+```
+
+Restarting **the MCP server** is the case that does affect clients: streamable-HTTP
+sessions live in memory, so a client holding one from before the restart must
+reconnect. A stale session can surface as a request-parameter error rather than an
+authentication failure.
+
+### 6. Stop the Stack
 
 ```bash
 docker compose down
@@ -260,7 +284,9 @@ The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local ga
 
 3. **Configure**:
    - Ensure the listening port is set to `11111` (this is the default).
-   - **Note**: The MCP server connects to `127.0.0.1:11111` by default.
+   - **Note**: The MCP server connects to `127.0.0.1:11111` by default; set
+     `MOOMOO_OPEND_HOST` / `MOOMOO_OPEND_PORT` to point elsewhere. The Docker
+     Compose stack sets these to `opend:11111` for you.
 
 ### 2. Environment Variables
 

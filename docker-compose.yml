@@ -19,6 +19,12 @@ services:
       - MOOMOO_LOGIN_BY_REMEMBER=${MOOMOO_LOGIN_BY_REMEMBER:-1}
       - MOOMOO_LOGIN_REGION=${MOOMOO_LOGIN_REGION:-sg}
       - OPEND_INTERACTIVE=${OPEND_INTERACTIVE:-0}
+      # OpenD must answer on the container's trading-net interface, not just
+      # loopback: moomoo-mcp now has a network namespace of its own. Port 11111
+      # is never published, so this listener is reachable only from containers
+      # attached to trading-net — the OpenD API has no authentication of its
+      # own, so keep it that way.
+      - OPEND_API_IP=${OPEND_API_IP:-0.0.0.0}
     entrypoint:
       - /bin/sh
       - -c
@@ -29,7 +35,7 @@ services:
           has_token=1
         fi
 
-        COMMON_ARGS="-api_ip=127.0.0.1 -no_monitor=1 -lang=en -login_region=$$MOOMOO_LOGIN_REGION"
+        COMMON_ARGS="-api_ip=$${OPEND_API_IP:-0.0.0.0} -no_monitor=1 -lang=en -login_region=$$MOOMOO_LOGIN_REGION"
 
         if [ "$$OPEND_INTERACTIVE" = "1" ]; then
           if [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
@@ -50,11 +56,10 @@ services:
           echo "ERROR: MOOMOO_LOGIN_ACCOUNT is empty. Set it in .env; headless start also needs a remembered token from the interactive login (OPEND_INTERACTIVE=1)." >&2
           exit 1
         fi
-    ports:
-      # Bind MCP HTTP endpoint strictly to localhost on host machine
-      # (Published via opend because moomoo-mcp shares its network namespace)
-      - "127.0.0.1:8000:8000"
-    # Port 11111 is NOT mapped to the host; only accessible to moomoo-mcp via localhost.
+    networks:
+      - trading-net
+    # Port 11111 is NOT published to the host; it is reachable only from
+    # containers attached to trading-net.
 
   moomoo-mcp:
     platform: linux/amd64
@@ -63,9 +68,8 @@ services:
       dockerfile: Dockerfile
     container_name: moomoo-api-mcp
     restart: unless-stopped
-    network_mode: "service:opend"
     environment:
-      - MOOMOO_OPEND_HOST=127.0.0.1
+      - MOOMOO_OPEND_HOST=opend
       - MOOMOO_OPEND_PORT=11111
       - MOOMOO_SECURITY_FIRM=${MOOMOO_SECURITY_FIRM:-FUTUSG}
       - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
@@ -77,8 +81,26 @@ services:
       - FASTMCP_HOST=0.0.0.0
       - FASTMCP_PORT=8000
       - MCP_TRANSPORT=${MCP_TRANSPORT:-streamable-http}
+    ports:
+      # Bind MCP HTTP endpoint strictly to localhost on host machine.
+      # Published by the container that actually serves it, so restarting
+      # OpenD cannot take the endpoint away from clients.
+      - "127.0.0.1:8000:8000"
+    networks:
+      - trading-net
     depends_on:
-      - opend
+      opend:
+        condition: service_started
+        # Compose recreates this container when it recreates opend. The SDK
+        # reconnects on its own within seconds, so this is belt-and-braces
+        # rather than the only path back to a working gateway.
+        restart: true
+
+networks:
+  # Not `internal: true`: OpenD needs outbound internet to reach Moomoo's
+  # servers. Isolation comes from publishing no port for 11111.
+  trading-net:
+    driver: bridge
 
 volumes:
   opend-data:
