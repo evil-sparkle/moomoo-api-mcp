@@ -6,6 +6,9 @@ to having a running, logged-in stack on a fresh Ubuntu server (VPS or
 otherwise). Tested on Ubuntu 24.04 LTS; other Linux distributions with rootless
 Docker should work but are untested.
 
+For what state the stack holds and what each restart costs, see
+[`state-and-restarts.md`](state-and-restarts.md).
+
 **Two images, two runtime constraints.** The MCP server is ordinary — pull and run. OpenD is not: the first start must happen interactively so you can answer the device-verification prompt and "remember the password". Until that token lands in `opend-data`, no unattended start can complete login.
 
 ---
