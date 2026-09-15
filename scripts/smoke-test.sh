@@ -108,7 +108,11 @@ open_mcp_session() {
 # session id if the server is ever switched back, and so this script keeps
 # testing whatever the server actually does rather than what it did once.
 session_id_from() {
-  printf '%s' "$1" | grep -i '^mcp-session-id:' | tr -d '\r' | awk '{print $2}'
+  # `|| true` because no match is the expected case, not a failure: a stateless
+  # server sends no such header, and under `set -o pipefail` an unmatched grep
+  # would take the whole script down without printing a thing.
+  printf '%s' "$1" | grep -i '^mcp-session-id:' | tr -d '\r' | awk '{print $2}' ||
+    true
 }
 
 # Proof the session still works: a tool this server defines comes back in the
