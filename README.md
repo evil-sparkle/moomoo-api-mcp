@@ -177,6 +177,8 @@ Running OpenD and the MCP server via Docker isolates the OpenD gateway on an int
 
 Each container has its own network namespace and they reach each other by service name over `trading-net`: the MCP server connects to `opend:11111`, which is never published to the host, and publishes its own endpoint on `127.0.0.1:8000`. That separation is what lets either container restart without taking the other's networking with it.
 
+For what state the stack holds, where each piece of it lives, what survives which restart, and how exposed the stored credentials are, see [`docs/state-and-restarts.md`](docs/state-and-restarts.md).
+
 ### 1. Build the Images
 
 ```bash
