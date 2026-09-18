@@ -355,8 +355,9 @@ async def unlock_trade(
         Success status dictionary with {'status': 'unlocked'}.
 
     Note:
-        The unlock state is maintained for the session. You only need to call this
-        once per session to access REAL account data.
+        The unlock state is maintained on the OpenD gateway, not per client session.
+        Calling this unlocks trading on OpenD until the gateway restarts or the
+        unlock expires.
 
         Unlocking requires MOOMOO_TRADING_MODE=REAL. In READ_ONLY or SIMULATE
         mode this tool returns an explicit policy error, and a configured trade
