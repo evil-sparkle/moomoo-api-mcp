@@ -67,8 +67,11 @@ The code follows these rules. Each points to where it is specified or explained.
   stateless HTTP it runs per request. Tools read services through
   `ctx.request_context.lifespan_context`. The rationale is in the `app_lifespan`
   docstring.
-- **Streamable HTTP is stateless.** No session id is issued or honoured, and
-  authentication is checked per request (`stateless_http=True` in `server.py`).
+- **Streamable HTTP is stateless.** No MCP session id is issued or required
+  (`stateless_http=True` in `server.py`). Authentication is separate: when
+  `MCP_AUTH_TOKEN` is set, bearer authentication is enforced on every request,
+  independently of session state. Without a token, HTTP currently runs
+  unauthenticated. Do not treat statelessness as authentication.
 - **The OpenD gateway may be absent.** A failed connection is logged and the
   server keeps serving, so `check_health` stays callable.
 - **Blocking SDK calls leave the event loop.** Tools start blocking work with
@@ -93,15 +96,15 @@ One container, `moomoo-mcp`, runs two processes under
   nowhere. The MCP server dials it there.
 - The MCP endpoint is published on host loopback, `127.0.0.1:8000`.
 - The `opend-data` volume (`/home/opend/.com.moomoo.OpenD`, uid 10001) holds the
-  device authorization and survives container replacement.
+  device authorization and survives container restarts and recreation.
 
 Recovery policy (`supervisor.py`):
 
 | Event | Response |
 | --- | --- |
 | OpenD exits | Restart OpenD in place with backoff; MCP keeps serving |
-| OpenD exits again past `OPEND_MAX_RESTARTS` within `OPEND_RESTART_WINDOW_SECONDS` | Stop MCP, exit non-zero; Docker replaces the container |
-| MCP exits | Stop OpenD, exit non-zero; Docker replaces the container |
+| OpenD exits again past `OPEND_MAX_RESTARTS` within `OPEND_RESTART_WINDOW_SECONDS` | Stop MCP, exit non-zero; `restart: unless-stopped` restarts the container with fresh processes |
+| MCP exits | Stop OpenD, exit non-zero; `restart: unless-stopped` restarts the container with fresh processes |
 | OpenD running, broker unavailable | Nothing. Health reports it; no restart |
 | No usable OpenD login configured | Log why, run MCP without a gateway |
 | SIGTERM / SIGINT | Forward to both, bounded wait, then SIGKILL |
@@ -157,8 +160,11 @@ npx -y @fission-ai/openspec@1.13.1 validate --all --strict --no-interactive
   which is why it listens on loopback only.
 - **Codes** take the form `MARKET.SYMBOL`: `HK.00700`, `US.AAPL`, `SH.600519`,
   `SZ.000001`.
-- **SDK calls** return `(ret, data)`. `data` is a DataFrame on success and an
-  error string otherwise. Narrow it through `services/sdk_response.py`.
+- **SDK response shapes are operation-specific.** Check the return code before
+  consuming the payload, then narrow it with the matching helper in
+  `services/sdk_response.py` (`as_frame`, `as_dict`, `as_list`). Successful
+  payloads may be DataFrames, dicts or lists, and some calls return more than
+  two values: `request_history_kline` also returns a pagination key.
 - **Trading environments**: `TrdEnv.SIMULATE` (paper) and `TrdEnv.REAL`. Which
   one a request may use is decided by the trading policy, not by the caller.
 - **Limits**: subscription quotas depend on the account tier, and OpenD rate

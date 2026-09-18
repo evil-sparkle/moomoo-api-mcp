@@ -106,14 +106,16 @@ stop signals to both processes.
 - **GIVEN** the OpenD process has exited and been restarted up to the configured bound
 - **WHEN** it exits again within the configured window
 - **THEN** the supervisor SHALL stop the MCP server cleanly
-- **AND** exit non-zero so the container runtime replaces the whole unit
+- **AND** exit non-zero so the container runtime's restart policy restarts
+  the container with fresh processes
 
 #### Scenario: MCP process death takes the container down
 
 - **GIVEN** the deployment is running
 - **WHEN** the MCP server process exits unexpectedly
 - **THEN** the supervisor SHALL stop the OpenD process cleanly
-- **AND** exit non-zero so the container runtime replaces the whole unit
+- **AND** exit non-zero so the container runtime's restart policy restarts
+  the container with fresh processes
 
 #### Scenario: A degraded broker connection is not a restart trigger
 

@@ -55,9 +55,11 @@ retry budget of the deployment's supervision policy, the MCP server process
 SHALL keep running, and gateway access SHALL recover without restarting the MCP
 server and without any change to client configuration once the gateway is
 reachable and logged in again. A gateway failure that exhausts that budget MAY
-instead stop the MCP server and replace the whole deployment, as
-`Paired Process Supervision` specifies. That case, like a container restart,
-recreation or redeploy, stops both processes and is covered by
+instead stop the MCP server and exit the supervisor non-zero, as
+`Paired Process Supervision` specifies, so that the container runtime's restart
+policy restarts the container with fresh supervisor, OpenD and MCP processes.
+That case stops both processes, as do an operator restart and a recreation or
+redeploy of the container, and it is covered by
 `Recovery From an MCP Server Restart`, not by this requirement. Recovery covers
 access to the gateway. It does not guarantee that requests made while the
 gateway is away succeed; see `Restart Recovery Does Not Replay Trading
@@ -71,13 +73,15 @@ Commands`.
 - **THEN** the MCP server process SHALL NOT be restarted as a consequence
 - **AND** the MCP endpoint SHALL continue to answer requests throughout
 
-#### Scenario: An exhausted retry budget falls back to replacing the deployment
+#### Scenario: An exhausted retry budget falls back to a container restart
 
 - **GIVEN** the OpenD gateway process has already been restarted in place as
   many times as the supervisor's retry budget allows within its window
 - **WHEN** it exits again within that window
-- **THEN** the MCP server process MAY be stopped and the whole deployment
-  replaced, as `Paired Process Supervision` specifies
+- **THEN** the supervisor MAY stop the MCP server process and exit non-zero,
+  as `Paired Process Supervision` specifies
+- **AND** the container runtime's restart policy SHALL restart the container,
+  starting fresh supervisor, OpenD and MCP processes
 - **AND** recovery from that point SHALL be as specified by
   `Recovery From an MCP Server Restart`
 
@@ -101,8 +105,8 @@ Commands`.
 When the MCP server process restarts, subsequent authenticated requests SHALL
 succeed once the server is serving again, and no session state the client
 held from before the restart SHALL prevent them. Where the gateway restarts
-together with the MCP server, as it does whenever the whole deployment is
-restarted, recreated or redeployed, gateway-backed requests SHALL also require
+together with the MCP server, as it does whenever the container is restarted,
+recreated or redeployed, gateway-backed requests SHALL also require
 the gateway to be reachable and logged in again.
 
 #### Scenario: First request after restart needs no re-initialization

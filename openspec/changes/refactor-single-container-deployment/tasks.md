@@ -79,16 +79,16 @@ defers to `Paired Process Supervision` below.
    - [x] 5.3 `scripts/smoke-test.sh` rewritten: opens a real MCP session first,
      then kills the gateway *process* inside the container and asserts the
      session survives, the endpoint keeps answering, the gateway comes back and
-     the container itself was never replaced.
-   - [x] 5.4 Also kills the MCP process and asserts the container is replaced
-     and comes back serving.
+     the container itself was never restarted.
+   - [x] 5.4 Also kills the MCP process and asserts the container restarts
+     (a new `StartedAt`; the same container id passes) and comes back serving.
    - [x] 5.5 Also probes from a second container on the same network: port 8000
      reachable (the control), 11111 refused.
    - [x] 5.6 Run the rewritten smoke test. Not runnable locally (no Docker
      daemon); CI runs it. **Passing** as of 6e1d97f, having taken four runs and
      found four real bugs on the way (9.1, 9.7, 9.8, 9.9). Every assertion now
      executes, including the two that had never run before that commit: the
-     container being replaced when the server dies, and a client calling
+     container restarting when the server dies, and a client calling
      successfully afterwards.
    - [x] 5.7 Assert credentials never reach the container log: the overlay hands
      the gateway a fake PIN hash and the smoke test fails if it appears in

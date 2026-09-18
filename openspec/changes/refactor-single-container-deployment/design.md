@@ -65,15 +65,15 @@ So the policy is asymmetric:
 | Event | Behaviour |
 | --- | --- |
 | OpenD exits | Restart OpenD in place, MCP untouched. Bounded: N attempts within a window, with backoff. |
-| OpenD keeps failing past the bound | Stop MCP cleanly, exit non-zero. Docker replaces the container. |
-| MCP exits | Stop OpenD cleanly, exit non-zero. Docker replaces the container. |
+| OpenD keeps failing past the bound | Stop MCP cleanly, exit non-zero. Docker's restart policy restarts the container. |
+| MCP exits | Stop OpenD cleanly, exit non-zero. Docker's restart policy restarts the container. |
 | Gateway up, broker connection unavailable | Nothing. Report `degraded`, let the SDK reconnect. |
 | SIGTERM/SIGINT | Forward to both, wait bounded, escalate to SIGKILL, exit. |
 | Container starts | Both start; OpenD first, but MCP does not wait on it. |
 
 MCP is not restarted in place because there is nothing to preserve by doing so:
 the server is stateless over HTTP, holds no session a restart could protect, and
-does not dial the gateway until a request arrives. Replacing the whole container
+does not dial the gateway until a request arrives. Restarting the whole container
 is the simpler path and costs a client one failed call, which is what a
 `moomoo-mcp` restart costs today.
 

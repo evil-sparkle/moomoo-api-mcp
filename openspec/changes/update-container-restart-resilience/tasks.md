@@ -13,7 +13,7 @@
       Execution` or `Paired Process Supervision`. It must also not promise
       anything those requirements contradict. The one contradiction found so
       far is already reconciled: "MCP is never restarted by a gateway restart"
-      against "an exhausted retry budget takes the container down". See
+      against "an exhausted retry budget restarts the container". See
       `design.md` § Decisions.
 - [ ] 1.5 Confirm the evidence tables in `design.md` cite the single-container
       code and tests on `main`, not the two-container baseline they were first
@@ -46,7 +46,7 @@ documentation-only change must not make, or a test that turns a **gap** or
 - [ ] 3.1 Test: pin `stateless_http=True`, and assert over HTTP that a foreign
       `mcp-session-id` is processed rather than rejected. Today this rests on
       one manual measurement.
-- [ ] 3.2 Test: after the MCP process is killed and the container replaced,
+- [ ] 3.2 Test: after the MCP process is killed and the container restarts,
       the smoke test waits for the new MCP server to reach the new gateway, as
       it already does after a gateway-only restart. Also assert that
       `initialize` returns no `mcp-session-id`. Today the smoke test accepts

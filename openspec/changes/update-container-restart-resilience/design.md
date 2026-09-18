@@ -8,15 +8,15 @@ read as if it covered the MCP transport.
 | State | Owner | Lifetime | Survives gateway restart | Survives MCP restart | Spec home |
 | --- | --- | --- | --- | --- | --- |
 | OpenD device authorization, remembered login | `opend-data` volume | until `down -v` | yes | yes | `container-deployment` › Session State Persistence (being modified by `refactor-single-container-deployment`; untouched here) |
-| OpenD live broker login | OpenD process | OpenD process | no, re-logs in (~30s) | no: an MCP exit replaces the whole container, gateway included | none; observed only |
-| OpenD unlock state | OpenD process, plus the SDK's cached copy in the MCP process | see § Reconnect replay | no, returns locked unless the SDK replays an unlock | no: the replacement gateway starts locked | `trade-unlock` |
+| OpenD live broker login | OpenD process | OpenD process | no, re-logs in (~30s) | no: an MCP exit restarts the whole container, gateway included | none; observed only |
+| OpenD unlock state | OpenD process, plus the SDK's cached copy in the MCP process | see § Reconnect replay | no, returns locked unless the SDK replays an unlock | no: the restarted gateway starts locked | `trade-unlock` |
 | MCP transport session | nobody: stateless | none | n/a | n/a | `transport-sessions` (new) |
 | Gateway connections, quote subscriptions | MCP process | MCP process | yes, the SDK reconnects and replays them | no, reopened on the next request | `transport-sessions` (new) |
 | Durable trading state (order intent, outcome reconciliation) | does not exist | — | — | — | out of scope; see Non-Goals |
 
 "Survives MCP restart" describes the single-container deployment, where the
-supervisor answers an MCP exit by stopping OpenD and letting Docker replace the
-container. Under the two-container stack this was drafted against, an MCP
+supervisor answers an MCP exit by stopping OpenD and exiting, and Docker's
+`restart: unless-stopped` policy restarts the same container. Under the two-container stack this was drafted against, an MCP
 restart left OpenD, its login and any gateway-wide unlock running.
 
 The last row is listed so its absence is on record. Nothing in the stack
@@ -62,10 +62,11 @@ whose response was lost.
   draft said a gateway restart never restarts the MCP server. That was true of
   the two-container layout, but it contradicts `Paired Process Supervision`: a
   gateway that keeps dying past its budget takes the MCP server down with it, on
-  purpose, so Docker replaces the whole unit. The two requirements have
+  purpose, so Docker's restart policy restarts the whole container. The two requirements have
   different names, and `openspec validate` cannot see the conflict between them.
   So the gateway requirement now covers in-place restarts within the budget and
-  hands the exhausted case, like any whole-container restart or redeploy, to
+  hands the exhausted case, like an operator restart, recreation or redeploy
+  of the container, to
   `Recovery From an MCP Server Restart`.
 - **Allow failures during downtime explicitly.** The stateless transport and
   the SDK's reconnect remove the need for *manual* recovery. They do not make
@@ -137,6 +138,11 @@ older stack (`Dockerfile.opend`, separate network namespaces, `depends_on`
 without restart propagation, `docker compose restart opend`). They are in git
 history and no longer describe anything that runs. Test names are as on `main`.
 
+"Container restarted" in these tables means what the smoke test checks:
+`container_instance` changes when the container's `StartedAt` does, so the
+same container restarted by `restart: unless-stopped` passes. Nothing here
+tests container recreation or redeployment.
+
 ### container-deployment
 
 | Requirement › scenario | Carried by | Evidence |
@@ -150,8 +156,8 @@ history and no longer describe anything that runs. Test names are as on `main`.
 | Gateway restart › endpoint keeps answering | the supervisor leaves the MCP process running | **smoke** `smoke-test.sh:360-370` (`tools/list` only) |
 | Gateway restart › access resumes | SDK reconnect over `127.0.0.1:11111` | **smoke**: new TCP connections reach the restarted stand-in (`:356-358`). **gap**: no gateway-backed call after the restart; no real login |
 | Gateway restart › health reports absence | `services/health.py` | **unit** `test_health.py` (status mapping); **gap** during a real restart |
-| MCP restart › no re-initialization | `server.py:262` `stateless_http=True` | **smoke** `smoke-test.sh:381-398` (MCP process killed, container replaced, `tools/list` without re-initializing) |
-| MCP restart › connections reopened on demand | `server.py:197-207` `get_services` | **unit** `test_sessions_share_one_set_of_connections`; **gap**: smoke does not check the gateway after the container is replaced |
+| MCP restart › no re-initialization | `server.py:262` `stateless_http=True` | **smoke** `smoke-test.sh:381-398` (MCP process killed, container restarted, `tools/list` without re-initializing) |
+| MCP restart › connections reopened on demand | `server.py:197-207` `get_services` | **unit** `test_sessions_share_one_set_of_connections`; **gap**: smoke does not check the gateway after the container restarts |
 | No replay › overlapping request may fail | bounded waits: `health.py:34` (3s), `trade_service.py:36` (5s) | permissive; nothing to prove |
 | No replay › SDK replays connection state only | `trade_service.py:286-293`; SDK lines 37-55 | **unit** `test_the_sdk_reconnect_work_still_runs_and_is_reported`; order non-replay: **code** |
 | No replay › lost order response | no retry around order calls in `trade_service.py` | **code**; **gap** live |
@@ -180,7 +186,7 @@ history and no longer describe anything that runs. Test names are as on `main`.
 | Requirement › scenario | Carried by | Evidence |
 | --- | --- | --- |
 | Stateless › no session id issued | `server.py:262` | **manual** (`f6d8a92`). **gap**: the smoke test reads an id if one is issued and accepts either (`smoke-test.sh:113-124`), so it never asserts that none is. The `ef4acc4` table overstated this. No unit test pins `stateless_http=True` |
-| Stateless › no prior initialize needed | `server.py:262` | **smoke** `smoke-test.sh:392-398` (after the container is replaced); **manual** (`f6d8a92`) |
+| Stateless › no prior initialize needed | `server.py:262` | **smoke** `smoke-test.sh:392-398` (after the container restarts); **manual** (`f6d8a92`) |
 | Stateless › foreign session id ignored | `server.py:262` | **manual** only (`f6d8a92`); smoke never sends one because none is issued |
 | Stateless › session id is not authentication | `server.py:29-46` per-request middleware | **unit** `test_streamable_http_app_rejects_missing_auth_token`; the with-session-id case: **code** |
 | Stateless › notifications ride the call | MCP SDK stateless mode | **manual** (`f6d8a92`) |

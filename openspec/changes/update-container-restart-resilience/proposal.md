@@ -38,8 +38,8 @@ changes no code.
   - **ADDED** `Recovery From a Gateway Restart`: while the gateway is restarted
     in place within the supervisor's retry budget, the MCP server keeps
     running, and gateway access recovers without restarting MCP or
-    reconfiguring the client. Once the budget is exhausted, recovery falls to
-    whole-deployment replacement instead.
+    reconfiguring the client. Once the budget is exhausted, the supervisor
+    exits and Docker's restart policy restarts the container instead.
   - **ADDED** `Recovery From an MCP Server Restart`: once the server is back,
     authenticated requests work without a stale session blocking them.
   - **ADDED** `Restart Recovery Does Not Replay Trading Commands`: requests that
