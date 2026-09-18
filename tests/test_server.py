@@ -572,6 +572,7 @@ class TestStatelessStreamableHTTP:
 
     def test_initialize_issues_no_session_id(self) -> None:
         """initialize returns a JSON response without an mcp-session-id header."""
+        import mcp.types as types
         from starlette.testclient import TestClient
 
         from moomoo_mcp.server import create_streamable_http_app
@@ -585,7 +586,7 @@ class TestStatelessStreamableHTTP:
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "protocolVersion": "2024-11-05",
+                        "protocolVersion": types.LATEST_PROTOCOL_VERSION,
                         "capabilities": {},
                         "clientInfo": {"name": "test-client", "version": "1.0.0"},
                     },
@@ -687,32 +688,64 @@ class TestStatelessStreamableHTTP:
         self,
     ) -> None:
         """Tool call is answered with single JSON result, dropping notifications."""
+        from typing import Any
+
+        from mcp.server.fastmcp import Context
+        from mcp.server.session import ServerSession
         from starlette.testclient import TestClient
 
         from moomoo_mcp.server import create_streamable_http_app
 
-        app = create_streamable_http_app(auth_token="test_token")
-        with TestClient(app) as client:
-            # check_health calls ctx.info("Health check status: ...") internally
-            resp = client.post(
-                "/mcp",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 5,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "check_health",
-                        "arguments": {},
-                    },
-                },
-                headers={
-                    "Authorization": "Bearer test_token",
-                    "Accept": "application/json",
-                },
-            )
-            assert resp.status_code == 200
-            assert resp.headers.get("content-type") == "application/json"
-            body = resp.json()
-            assert body.get("id") == 5
-            assert body.get("result", {}).get("isError") is False
-            assert "structuredContent" in body.get("result", {})
+        test_tool_name = "_test_stateless_notification_drop"
+
+        @server.mcp.tool(name=test_tool_name)
+        async def _test_stateless_notification_tool(ctx: Context) -> str:
+            await ctx.info("sentinel-notification-dropped")
+            return "sentinel-tool-result"
+
+        try:
+            orig_send_log = ServerSession.send_log_message
+            captured_logs: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+            async def spy_send_log(
+                session_self: ServerSession, *args: Any, **kwargs: Any
+            ) -> None:
+                captured_logs.append((args, kwargs))
+                await orig_send_log(session_self, *args, **kwargs)
+
+            with patch.object(ServerSession, "send_log_message", new=spy_send_log):
+                app = create_streamable_http_app(auth_token="test_token")
+                with TestClient(app) as client:
+                    resp = client.post(
+                        "/mcp",
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": 5,
+                            "method": "tools/call",
+                            "params": {
+                                "name": test_tool_name,
+                                "arguments": {},
+                            },
+                        },
+                        headers={
+                            "Authorization": "Bearer test_token",
+                            "Accept": "application/json",
+                        },
+                    )
+                    assert resp.status_code == 200
+                    assert resp.headers.get("content-type") == "application/json"
+                    body = resp.json()
+                    assert body.get("id") == 5
+                    assert body.get("result", {}).get("isError") is False
+                    assert "structuredContent" in body.get("result", {})
+
+                    # 1. Prove a logging notification was emitted during tool execution
+                    assert len(captured_logs) == 1
+                    _, log_kwargs = captured_logs[0]
+                    assert log_kwargs.get("data") == "sentinel-notification-dropped"
+
+                    # 2. Prove response carries result alone and omits notifications
+                    assert "sentinel-tool-result" in resp.text
+                    assert "sentinel-notification-dropped" not in resp.text
+        finally:
+            server.mcp._tool_manager.remove_tool(test_tool_name)
