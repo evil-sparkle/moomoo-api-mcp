@@ -382,7 +382,7 @@ class ProbeTest(unittest.TestCase):
                 self.assertIn("Verification failed", output)
                 self.assertNotIn("completed an MCP initialize", output)
 
-    def test_the_protocol_version_must_be_a_supported_one(self):
+    def test_the_protocol_version_must_be_a_valid_string(self):
         """A version must be a non-empty string in the initialize result."""
         for version in (
             "2024-11-05",
