@@ -86,6 +86,16 @@ whose response was lost.
   session semantics or connection ownership, and no other capability does.
   Putting them in `container-deployment` would tie a transport contract to a
   deployment method; the same server runs outside containers.
+- **Specify notifications as they are, not as first measured.** With
+  `json_response=True` (`dd066e7`, for clients that read only JSON) a call is
+  answered with its result alone, and notifications a tool emits during it are
+  dropped. The 1.1 review chose to specify that rather than restore delivery,
+  which would be a runtime change and would break those clients. Restoring it,
+  or making it configurable, is a follow-up (`tasks.md` § 3.9).
+- **Authentication is conditional, so say so.** Bearer checks run only when
+  `MCP_AUTH_TOKEN` is set. The requirement states the condition and that
+  statelessness is not access control, rather than implying every request is
+  authenticated.
 - **Keep existing scenario names in MODIFIED blocks.** OpenSpec 1.13 refuses a
   MODIFIED requirement that drops an existing scenario, so renamed scenarios
   keep their old titles with rewritten bodies (for example, `Server starts in
@@ -161,7 +171,7 @@ tests container recreation or redeployment.
 | Gateway restart › endpoint keeps answering | the supervisor leaves the MCP process running | **smoke** `smoke-test.sh:360-370` (`tools/list` only) |
 | Gateway restart › access resumes | SDK reconnect over `127.0.0.1:11111` | **smoke**: new TCP connections reach the restarted stand-in (`:356-358`). **gap**: no gateway-backed call after the restart; no real login |
 | Gateway restart › health reports absence | `services/health.py` | **unit** `test_health.py` (status mapping); **gap** during a real restart |
-| MCP restart › no re-initialization | `server.py:262` `stateless_http=True` | **smoke** `smoke-test.sh:381-398` (MCP process killed, container restarted, `tools/list` without re-initializing) |
+| MCP restart › no re-initialization | `server.py:261` `stateless_http=True` | **smoke** `smoke-test.sh:381-398` (MCP process killed, container restarted, `tools/list` without re-initializing) |
 | MCP restart › connections reopened on demand | `server.py:197-207` `get_services` | **unit** `test_sessions_share_one_set_of_connections`; **live**: after four container restarts (one `compose restart`, three `stop`/`up`), the first request opened fresh connections and `check_health` reported quote and trade `ok`; **gap**: smoke does not check the gateway after the container restarts |
 | No replay › overlapping request may fail | bounded waits: `health.py:34` (3s), `trade_service.py:36` (5s) | permissive; nothing to prove |
 | No replay › SDK replays connection state only | `trade_service.py:286-293`; SDK lines 37-55 | **unit** `test_the_sdk_reconnect_work_still_runs_and_is_reported`; order non-replay: **code** |
@@ -190,11 +200,11 @@ tests container recreation or redeployment.
 
 | Requirement › scenario | Carried by | Evidence |
 | --- | --- | --- |
-| Stateless › no session id issued | `server.py:262` | **manual** (`f6d8a92`). **gap**: the smoke test reads an id if one is issued and accepts either (`smoke-test.sh:113-124`), so it never asserts that none is. The `ef4acc4` table overstated this. No unit test pins `stateless_http=True` |
-| Stateless › no prior initialize needed | `server.py:262` | **smoke** `smoke-test.sh:392-398` (after the container restarts); **live**: every `tools/call` was sent to a fresh process with no `initialize`; **manual** (`f6d8a92`) |
-| Stateless › foreign session id ignored | `server.py:262` | **manual** only (`f6d8a92`); smoke never sends one because none is issued |
+| Stateless › no session id issued | `server.py:261` | **manual** (`f6d8a92`). **gap**: the smoke test reads an id if one is issued and accepts either (`smoke-test.sh:113-124`), so it never asserts that none is. The `ef4acc4` table overstated this. No unit test pins `stateless_http=True` |
+| Stateless › no prior initialize needed | `server.py:261` | **smoke** `smoke-test.sh:392-398` (after the container restarts); **live**: every `tools/call` was sent to a fresh process with no `initialize`; **manual** (`f6d8a92`) |
+| Stateless › foreign session id ignored | `server.py:261` | **code**: in stateless mode the SDK (mcp 1.25.0) builds each request's transport with no session id, and `StreamableHTTPServerTransport._validate_session` then returns before reading the header; **manual** (`f6d8a92`); smoke never sends one because none is issued |
 | Stateless › session id is not authentication | `server.py:29-46` per-request middleware | **unit** `test_streamable_http_app_rejects_missing_auth_token`; the with-session-id case: **code** |
-| Stateless › notifications ride the call | MCP SDK stateless mode | **manual** (`f6d8a92`) |
+| Stateless › a call is answered with its result alone | `server.py:266` `json_response=True` (`dd066e7`) | **code**: the SDK's JSON-response branch of `_handle_post_request` reads until the response and discards every notification before it; **live**: every `tools/call` on the VPS (2026-09-18) came back as one JSON object carrying the result and none of the tool's `ctx.info` messages. The `f6d8a92` manual measurement predates `json_response` and saw notifications delivered, which is no longer true |
 | Process-owned › fresh process has not dialled | `server.py:197-207` (lazy) | **code**; smoke relies on it (`smoke-test.sh:25-30`) |
 | Process-owned › shared across requests and clients | `server.py:121-207` | **unit** `test_sessions_share_one_set_of_connections` (lifespan level); **manual**: one gateway connection per process (`f6d8a92`) |
 | Process-owned › ending a session leaves them open | same | **unit**, same test (`close` not called) |
@@ -203,10 +213,13 @@ tests container recreation or redeployment.
 
 ## Risks / Trade-offs
 
-- Specifying a behaviour turns it into a contract. The weakest items above
-  (foreign session id ignored, notifications on the call's response) rest on a
-  single manual measurement. If an MCP SDK upgrade changed stateless mode, no
-  test would notice. Adding those tests is in `tasks.md` § 3.
+- Specifying a behaviour turns it into a contract. The transport items above
+  rest on reading the SDK and on one-off measurements, not on tests. That has
+  already cost something: the draft of this change said notifications ride the
+  call's response, measured at `f6d8a92`, and a one-line `json_response=True`
+  (`dd066e7`) silently made it false. Nothing failed; the 1.1 review found it
+  by reading the SDK. A test pinning `stateless_http` and `json_response` and
+  their observable effects is `tasks.md` § 3.1.
 - The permissive scenarios (a request "MAY fail") cannot be violated, which is
   the point. They exist so nobody reads the recovery requirements as a promise
   of uninterrupted service.
@@ -217,6 +230,10 @@ None. Documentation only. On approval the change is archived and the three
 specs are updated. There is no deploy step.
 
 ## Open Questions
+
+Accepted at review (2026-09-19) as tracked follow-ups, not decided here: the
+specs describe today's behaviour without endorsing it. See `tasks.md` §§
+3.10-3.12.
 
 - **Should REAL mode hold a standing startup unlock at all?** Auto-unlock
   leaves the gateway unlocked until the first JIT re-lock, and the SDK replays

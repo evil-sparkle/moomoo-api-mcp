@@ -264,8 +264,9 @@ nothing needs reconfiguring. (A stateful server answers the next call with 404
 instead, and while the MCP spec requires clients to re-initialize on that, not
 every client does — which is the interruption this avoids.) The cost is state this
 server does not keep: no resumable event stream, and no server-initiated
-notifications outside a request. Logging notifications emitted during a tool call
-still ride that call's own response.
+notifications outside a request. Each call is also answered with a single JSON
+response, for clients that only read JSON, so logging notifications a tool emits
+during a call are not delivered; everything a caller needs is in the result.
 
 `scripts/smoke-test.sh` runs both restarts against a stand-in gateway and asserts
 a client keeps working across each — CI runs it on every pull request, and you can

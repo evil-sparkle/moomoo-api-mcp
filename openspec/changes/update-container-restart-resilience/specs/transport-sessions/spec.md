@@ -5,9 +5,12 @@
 When served over the Streamable HTTP transport, the MCP server SHALL keep no
 per-client session state. It SHALL NOT issue a session id, SHALL NOT require one,
 SHALL ignore any session id a client presents, and SHALL process each request as
-already initialized. Authentication SHALL be evaluated on every request,
-independently of any session id. This requirement covers the Streamable HTTP
-transport only; the SSE and stdio transports are unaffected.
+already initialized. It SHALL answer each request with a single JSON response.
+When `MCP_AUTH_TOKEN` is configured, bearer authentication SHALL be evaluated on
+every request, independently of any session id. Statelessness is not access
+control: without a configured token the endpoint is unauthenticated. This
+requirement covers the Streamable HTTP transport only; the SSE and stdio
+transports are unaffected.
 
 #### Scenario: No session id is issued
 
@@ -36,19 +39,21 @@ transport only; the SSE and stdio transports are unaffected.
 - **WHEN** a request carries an `mcp-session-id` but no valid bearer token
 - **THEN** the server SHALL reject it with HTTP 401
 
-#### Scenario: Notifications are limited to the request that produces them
+#### Scenario: A call is answered with its result alone
 
 - **GIVEN** the server is running with `MCP_TRANSPORT=streamable-http`
 - **WHEN** a tool emits logging notifications while handling a call
-- **THEN** those notifications SHALL be delivered on that call's own response
+- **THEN** the server SHALL answer with a single JSON response carrying the
+  call's result
+- **AND** those notifications SHALL NOT be delivered to the client
 - **AND** the server SHALL NOT offer resumable event streams or send
   notifications outside a request
 
 ### Requirement: Process-Owned Gateway Connections
 
 The MCP server SHALL own its OpenD quote and trade connections at process
-scope. It SHALL open them at most once per process, on the first request that
-needs them, and SHALL share them across every request, session and client. It
+scope. It SHALL open them at most once per process, on the first request it
+serves, and SHALL share them across every request, session and client. It
 SHALL NOT open or close gateway connections when a request or session begins or
 ends, and SHALL release them when the process exits. Failure to reach the
 gateway SHALL NOT prevent the server from serving requests, including

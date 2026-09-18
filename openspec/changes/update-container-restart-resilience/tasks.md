@@ -1,23 +1,35 @@
 ## 1. Review (this change)
 
-- [ ] 1.1 Review each requirement against the code it cites in `design.md` §
+- [x] 1.1 Review each requirement against the code it cites in `design.md` §
       Evidence, and confirm it describes behaviour on `main` rather than a new
-      promise.
-- [ ] 1.2 Confirm every **gap** in the evidence tables is acceptable to leave
-      specified-but-unproven, or promote it to § 3 before approval.
-- [ ] 1.3 Decide the three open questions in `design.md`, or accept them as
-      tracked follow-ups.
-- [ ] 1.4 Confirm no conflict with `refactor-single-container-deployment`,
+      promise. Reviewed 2026-09-19 against `main` at `5fc1b57`. Three
+      corrections, all to match the code:
+      - Notifications: the draft said they ride the call's response. Since
+        `dd066e7` (`json_response=True`) the SDK drops them. Now specified as
+        dropped, by decision; the README, `docs/state-and-restarts.md` and the
+        `server.py` comment said the same wrong thing and are fixed too.
+      - Authentication: now conditional on `MCP_AUTH_TOKEN`, as the middleware is.
+      - Process-owned connections open on the first request served, not "the
+        first request that needs them": the lifespan runs for every request.
+- [x] 1.2 Confirm every **gap** in the evidence tables is acceptable to leave
+      specified-but-unproven, or promote it to § 3 before approval. Accepted
+      2026-09-19: the testable gaps are already § 3.1-3.4; the rest (killed
+      processes against the real OpenD, REAL-mode paths, a lost order
+      response) stay listed in `design.md`.
+- [x] 1.3 Decide the three open questions in `design.md`, or accept them as
+      tracked follow-ups. Accepted as follow-ups 2026-09-19: § 3.10-3.12.
+- [x] 1.4 Confirm no conflict with `refactor-single-container-deployment`,
       in names or in behaviour. This change must not edit `Isolated OpenD
       Gateway Network`, `Session State Persistence`, `Non-Root Container
       Execution` or `Paired Process Supervision`. It must also not promise
       anything those requirements contradict. The one contradiction found so
       far is already reconciled: "MCP is never restarted by a gateway restart"
       against "an exhausted retry budget restarts the container". See
-      `design.md` § Decisions.
-- [ ] 1.5 Confirm the evidence tables in `design.md` cite the single-container
+      `design.md` § Decisions. Rechecked 2026-09-19 against the canonical
+      spec after that change was archived: no further conflict.
+- [x] 1.5 Confirm the evidence tables in `design.md` cite the single-container
       code and tests on `main`, not the two-container baseline they were first
-      drafted against.
+      drafted against. Done in #15 and extended with live results in #17.
 
 ## 2. Apply (after approval; documentation only)
 
@@ -44,9 +56,11 @@ Found while drafting. Each is either a runtime change, which this
 documentation-only change must not make, or a test that turns a **gap** or
 **manual** item in `design.md` into automated evidence.
 
-- [ ] 3.1 Test: pin `stateless_http=True`, and assert over HTTP that a foreign
-      `mcp-session-id` is processed rather than rejected. Today this rests on
-      one manual measurement.
+- [ ] 3.1 Test: pin `stateless_http=True` and `json_response=True`, and assert
+      over HTTP that a foreign `mcp-session-id` is processed rather than
+      rejected and that a call is answered with one JSON response. Today this
+      rests on reading the SDK, and `json_response` already changed the
+      notification behaviour once without any test noticing.
 - [ ] 3.2 Test: after the MCP process is killed and the container restarts,
       the smoke test waits for the new MCP server to reach the new gateway, as
       it already does after a gateway-only restart. Also assert that
@@ -73,3 +87,14 @@ documentation-only change must not make, or a test that turns a **gap** or
       in `openspec/AGENTS.md` skips the proposal, not the spec-impact check, and
       `openspec validate --strict` checks structure only, so it cannot catch a
       stale spec. The stale checksum passed it.
+- [ ] 3.9 Runtime, if wanted: notifications. With `json_response=True` a
+      tool's `ctx.info` / `ctx.warning` never reaches an HTTP client. Options:
+      move anything a caller needs into tool results (it may already be
+      there), or make JSON responses a setting so SSE-capable clients get
+      notifications again. The spec would then need a MODIFIED requirement.
+- [ ] 3.10 Decide: should REAL mode hold a standing startup unlock at all?
+      (`design.md` § Open Questions.)
+- [ ] 3.11 Decide: should a refused READ_ONLY lock surface in `check_health`
+      rather than the log only?
+- [ ] 3.12 Establish: is OpenD's unlock gateway-wide or per connection? Needs
+      a live REAL-mode test.
