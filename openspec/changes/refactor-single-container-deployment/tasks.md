@@ -77,9 +77,12 @@ daemon and are marked so rather than assumed.
      and comes back serving.
    - [x] 5.5 Also probes from a second container on the same network: port 8000
      reachable (the control), 11111 refused.
-   - [x] 5.6 Run the rewritten smoke test. Still not runnable locally (no Docker
-     daemon), but CI has now executed it once and it found a real bug — see 9.1.
-     Its next run is the first that could pass.
+   - [x] 5.6 Run the rewritten smoke test. Not runnable locally (no Docker
+     daemon); CI runs it. **Passing** as of 6e1d97f, having taken four runs and
+     found four real bugs on the way (9.1, 9.7, 9.8, 9.9). Every assertion now
+     executes, including the two that had never run before that commit: the
+     container being replaced when the server dies, and a client calling
+     successfully afterwards.
    - [x] 5.7 Assert credentials never reach the container log: the overlay hands
      the gateway a fake PIN hash and the smoke test fails if it appears in
      `docker logs`.
@@ -110,11 +113,11 @@ daemon and are marked so rather than assumed.
      recorded as the open risk it is.
 
 8. **Verify**
-   - [x] 8.1 `uv run pytest` passes: 573 passed, 1 skipped.
+   - [x] 8.1 `uv run pytest` passes: 575 passed, 1 skipped.
    - [x] 8.2 `uv run ruff check` and `ruff format --check` are clean, and
      `basedpyright` reports 0 errors.
-   - [ ] 8.3 **Not done locally — needs a Docker daemon.** `scripts/smoke-test.sh`
-     runs in CI. First run failed on 9.1; awaiting the next.
+   - [x] 8.3 `scripts/smoke-test.sh` passes in CI (not runnable locally — no
+     Docker daemon). Same item as 5.6.
    - [ ] 8.4 **Not done — no CLI available.** `openspec validate
      refactor-single-container-deployment --strict --no-interactive`; the
      `openspec` binary is not installed here and is not on npm under that name.
