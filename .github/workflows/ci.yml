@@ -156,7 +156,8 @@ jobs:
 
   # Specs are prose, so docs_only does not skip this job: an openspec/ edit is
   # exactly the change it exists to check. The CLI version is pinned so CI and
-  # a local run (see openspec/project.md) validate against the same rules.
+  # a local run (see the context in openspec/config.yaml) validate against the
+  # same rules.
   # Structure only: --strict cannot tell whether a spec still matches the code.
   openspec:
     name: Validate OpenSpec
