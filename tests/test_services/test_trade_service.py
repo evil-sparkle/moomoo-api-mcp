@@ -1220,3 +1220,98 @@ class TestPlaceComboOrder:
         )
 
         assert mock_trade_ctx.place_combo_order.call_args.kwargs["acc_id"] == 456
+
+
+class TestAutomaticAccountSelection:
+    """Tests for automatic account resolution.
+
+    Resolves account based on market and trading environment.
+    """
+
+    def test_get_market_from_code(self, trade_service_with_mock):
+        assert trade_service_with_mock._get_market_from_code("US.AAPL") == "US"
+        assert trade_service_with_mock._get_market_from_code("JP.8058") == "JP"
+        assert trade_service_with_mock._get_market_from_code("HK.00700") == "HK"
+        assert trade_service_with_mock._get_market_from_code("INVALID") is None
+
+    def test_find_best_account_success(self, trade_service_with_mock):
+        mock_accounts = [
+            {"acc_id": 1, "trd_env": "SIMULATE", "trdmarket_auth": ["HK", "US"]},
+            {"acc_id": 2, "trd_env": "SIMULATE", "trdmarket_auth": ["JP"]},
+            {"acc_id": 3, "trd_env": "REAL", "trdmarket_auth": ["JP"]},
+        ]
+        with patch.object(
+            trade_service_with_mock, "get_accounts", return_value=mock_accounts
+        ):
+            assert trade_service_with_mock._find_best_account("SIMULATE", "JP") == 2
+            assert trade_service_with_mock._find_best_account("SIMULATE", "US") == 1
+            assert trade_service_with_mock._find_best_account("REAL", "JP") == 3
+
+    def test_find_best_account_failure(self, trade_service_with_mock):
+        mock_accounts = [
+            {"acc_id": 1, "trd_env": "SIMULATE", "trdmarket_auth": ["HK"]},
+        ]
+        expected_err = (
+            "No account found in SIMULATE environment that supports trading in JP"
+        )
+        with (
+            patch.object(
+                trade_service_with_mock, "get_accounts", return_value=mock_accounts
+            ),
+            pytest.raises(ValueError) as exc_info,
+        ):
+            trade_service_with_mock._find_best_account("SIMULATE", "JP")
+        assert expected_err in str(exc_info.value)
+
+    def test_find_best_account_api_failure(self, trade_service_with_mock):
+        with (
+            patch.object(
+                trade_service_with_mock,
+                "get_accounts",
+                side_effect=RuntimeError("API error"),
+            ),
+            pytest.raises(ValueError) as exc_info,
+        ):
+            trade_service_with_mock._find_best_account("SIMULATE", "JP")
+        assert "Failed to retrieve account list from the API" in str(exc_info.value)
+
+    def test_find_best_account_no_accounts_for_env(self, trade_service_with_mock):
+        mock_accounts = [
+            {"acc_id": 1, "trd_env": "REAL", "trdmarket_auth": ["JP"]},
+        ]
+        expected_err = "No accounts found for the 'SIMULATE' environment"
+        with (
+            patch.object(
+                trade_service_with_mock, "get_accounts", return_value=mock_accounts
+            ),
+            pytest.raises(ValueError) as exc_info,
+        ):
+            trade_service_with_mock._find_best_account("SIMULATE", "JP")
+        assert expected_err in str(exc_info.value)
+
+    def test_place_order_auto_select_account(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        mock_accounts = [
+            {"acc_id": 999, "trd_env": "SIMULATE", "trdmarket_auth": ["JP"]},
+        ]
+        mock_trade_ctx.place_order.return_value = (
+            0,
+            pd.DataFrame([{"order_id": "1", "code": "JP.8058"}]),
+        )
+
+        with patch.object(
+            trade_service_with_mock, "get_accounts", return_value=mock_accounts
+        ):
+            trade_service_with_mock.place_order(
+                code="JP.8058",
+                price=1000,
+                qty=100,
+                trd_side="BUY",
+                trd_env="SIMULATE",
+                acc_id=0,
+            )
+
+            kwargs = mock_trade_ctx.place_order.call_args[1]
+            assert kwargs["acc_id"] == 999
+            assert kwargs["code"] == "JP.8058"
