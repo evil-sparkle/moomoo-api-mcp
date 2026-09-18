@@ -192,26 +192,48 @@ container_restarted_since() {
   [ "${now}" != "gone" ] && [ "${now}" != "$1" ]
 }
 
-# Kill one process inside the container, by scanning /proc rather than reaching
+# Find one process inside the container, by scanning /proc rather than reaching
 # for pgrep: the deployed image has no procps, and adding one for a test would
 # change the thing under test.
-kill_in_container() {
-  local pattern="$1"
+#
+# Finding and killing are separate on purpose. A kill that matches nothing has
+# to fail *here*, loudly, rather than further down as a mystery timeout waiting
+# for a container that was never going to restart -- which is exactly how a
+# stale pattern hid itself once already.
+#
+# The second argument excludes: "moomoo-api-mcp" is a substring of
+# "moomoo-api-mcp-supervisor", so asking for the server would otherwise also
+# name PID 1.
+pid_in_container() {
   dc exec -T "$SERVICE" sh -c '
-    killed=0
     for proc in /proc/[0-9]*; do
       pid="${proc#/proc/}"
-      # This shell carries the pattern in its own argv, and PID 1 is the
-      # supervisor. Killing either would take down the thing under test
-      # instead of the process being aimed at.
+      # This shell carries the patterns in its own argv, and PID 1 is the
+      # supervisor: naming either would aim the kill at the wrong process.
       [ "$pid" = "$$" ] && continue
       [ "$pid" = "1" ] && continue
-      if grep -qa "$1" "$proc/cmdline" 2>/dev/null; then
-        kill "$pid" 2>/dev/null && killed=1
+      grep -qa "$1" "$proc/cmdline" 2>/dev/null || continue
+      if [ -n "$2" ] && grep -qa "$2" "$proc/cmdline" 2>/dev/null; then
+        continue
       fi
+      echo "$pid"
     done
-    [ "$killed" = 1 ]
-  ' sh "$pattern"
+  ' sh "$1" "${2:-}" | tr -d "\r"
+}
+
+kill_in_container() {
+  local what="$1" pattern="$2" exclude="${3:-}" pid
+  pid="$(pid_in_container "${pattern}" "${exclude}" | head -1)"
+  if [ -z "${pid}" ]; then
+    echo "FAILED: no process inside the container matches ${pattern}, so this" \
+      "test is aiming at something that is not there. If the way ${what} is" \
+      "launched changed, this pattern has to change with it." >&2
+    exit 1
+  fi
+  echo "    (${what} is pid ${pid})"
+  # Tolerated: killing the server brings the container down, and the exec can
+  # lose its own connection on the way out. The assertions below are the verdict.
+  dc exec -T "$SERVICE" sh -c 'kill "$1"' sh "${pid}" || true
 }
 
 wait_for() {
@@ -326,7 +348,7 @@ print("    (8000 reachable, 11111 refused)")
 echo "==> killing the gateway process"
 instance_before="$(container_instance)"
 starts_before="$(gateway_starts)"
-kill_in_container opend-stub
+kill_in_container "the gateway" opend-stub
 
 echo "==> the supervisor restarts the gateway in place"
 wait_for 60 "the gateway to come back" gateway_restarted_since "${starts_before}"
@@ -360,10 +382,7 @@ fi
 # Docker's restart policy. The supervisor has to make it visible by exiting.
 echo "==> killing the MCP server process"
 instance_before="$(container_instance)"
-# Tolerated, uniquely: this kill is meant to bring the container down, and the
-# exec can lose its own connection on the way out. Whether it worked is settled
-# by the restart assertion below, not by this exit status.
-kill_in_container moomoo_mcp.server || true
+kill_in_container "the MCP server" moomoo-api-mcp supervisor
 
 echo "==> the container is replaced and comes back serving"
 wait_for 120 "the container to be restarted" \
