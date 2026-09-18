@@ -81,18 +81,24 @@ Every process in the deployment SHALL run as an unprivileged, non-root user.
 
 ### Requirement: Paired Process Supervision
 
-A supervisor process SHALL own both the OpenD gateway and the MCP server, and
-SHALL implement an explicit recovery policy rather than leaving a dead child
-invisible to the container runtime's restart policy. The supervisor SHALL reap
-terminated children and SHALL forward stop signals to both processes.
+A supervisor process SHALL run as the container's PID 1 and own both the OpenD
+gateway and the MCP server, implementing an explicit recovery policy rather than
+leaving a dead child invisible to the container runtime's restart policy. No
+other init SHALL be inserted in front of it. The supervisor SHALL reap
+terminated children, including orphans reparented onto it, and SHALL forward
+stop signals to both processes.
 
 #### Scenario: Gateway process death does not remove the MCP endpoint
 
 - **GIVEN** a client holds a working connection to the MCP endpoint
 - **WHEN** the OpenD process exits unexpectedly
 - **THEN** the supervisor SHALL restart OpenD in place
-- **AND** the MCP server SHALL keep serving requests throughout
-- **AND** health SHALL report `disconnected` or `degraded` until the gateway answers
+- **AND** the MCP endpoint SHALL remain reachable throughout, with no
+  reconnection or re-initialization required of the client
+- **AND** requests that do not need a healthy gateway SHALL continue to work
+- **AND** requests that do need one SHALL fail with a bounded connect timeout
+  rather than hanging, until the gateway answers again
+- **AND** health SHALL report `disconnected` or `degraded` until it does
 
 #### Scenario: Gateway that cannot be recovered takes the container down
 
@@ -124,6 +130,29 @@ terminated children and SHALL forward stop signals to both processes.
 - **THEN** the supervisor SHALL forward it to both processes
 - **AND** wait a bounded period before escalating to SIGKILL
 - **AND** exit without leaving either process running
+
+#### Scenario: A gateway that cannot be started does not take the server down
+
+- **GIVEN** no usable gateway login is configured
+- **WHEN** the container starts
+- **THEN** the supervisor SHALL log why the gateway cannot be started
+- **AND** SHALL start the MCP server anyway
+- **AND** the MCP endpoint SHALL answer health requests reporting the gateway
+  as unavailable, rather than the container exiting and restarting in a loop
+
+#### Scenario: A malformed supervision setting stops the container
+
+- **GIVEN** a supervision tunable is set to a value the policy cannot run under,
+  such as a non-numeric, non-finite, negative or zero interval
+- **WHEN** the container starts
+- **THEN** the supervisor SHALL refuse to start and exit non-zero naming the
+  setting, rather than silently substituting a default nobody chose
+
+#### Scenario: Credentials do not reach the container log
+
+- **GIVEN** the gateway is configured with a trade or login credential
+- **WHEN** the supervisor logs the command line it started
+- **THEN** the credential SHALL be redacted
 
 #### Scenario: MCP start does not wait on the gateway
 

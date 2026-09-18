@@ -162,11 +162,16 @@ class ComposeTopologyTest(unittest.TestCase):
 
         self.assertEqual(service.get("restart"), "unless-stopped")
 
-    def test_orphan_reaping_is_configured_as_well_as_implemented(self):
-        self.assertTrue(
-            self._service().get("init"),
-            "docker-init backs up the supervisor's own reaping",
-        )
+    def test_nothing_is_inserted_in_front_of_the_supervisor(self):
+        """`init: true` would make docker-init PID 1 and the supervisor PID 2.
+
+        That is a coherent design, but it is not this one: the supervisor
+        installs its own signal handlers because PID 1 has no default
+        dispositions, and reaps orphans itself. The spec and its tests describe
+        the supervisor as PID 1, so the compose file has to actually give it
+        that job.
+        """
+        self.assertNotIn("init", self._service())
 
     def test_the_device_authorization_volume_keeps_its_path(self):
         """A moved mount point reads as an empty directory, and OpenD would ask
@@ -210,9 +215,14 @@ class ComposeTopologyTest(unittest.TestCase):
         }
         self.assertEqual(
             changed,
-            {"OPEND_BINARY", "OPEND_RESTART_WINDOW_SECONDS"},
-            "the overlay may stand in for the gateway binary and hurry its "
-            "restarts along, and nothing else",
+            {
+                "OPEND_BINARY",
+                "OPEND_RESTART_WINDOW_SECONDS",
+                "MOOMOO_LOGIN_ACCOUNT",
+                "MOOMOO_LOGIN_PWD_MD5",
+            },
+            "the overlay may stand in for the gateway binary, hurry its restarts "
+            "along and hand it a fake login to start with, and nothing else",
         )
 
     def test_the_production_overlay_keeps_the_same_topology(self):

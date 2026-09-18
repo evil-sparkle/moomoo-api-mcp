@@ -88,6 +88,16 @@ job, and the supervisor is a program that has to be tested — not a shell line
 that backgrounds one process and execs the other. That shape is what makes a
 dead OpenD invisible to Docker's restart policy in the first place.
 
+It is also not set. An earlier draft kept it as a belt-and-braces reaper, which
+contradicted the rest of this document: docker-init would take PID 1 and push
+the supervisor to PID 2, so the supervisor's own signal handling and orphan
+reaping — written precisely because PID 1 has no default dispositions — would be
+describing a job it no longer held. Two coherent designs were available
+(docker-init as PID 1 with a plain process manager under it, or the supervisor
+as PID 1 doing both). This picks the second, because it is the one that is
+written and tested, and `tests/test_compose_topology.py` now asserts nothing is
+inserted in front of it.
+
 **Alternative considered — the symmetric policy.** Rejected for the reason
 above: it converts a routine gateway restart into a client-visible outage. It
 stays a reasonable first cut for a deployment that never had the asymmetric
@@ -106,8 +116,8 @@ as the image's `CMD`), not `s6-overlay`, `supervisord` or a shell script.
   forwarding, bounded shutdown. Both general-purpose supervisors would need
   configuration of comparable length to express the asymmetry.
 - It is PID 1, so it must reap orphans and must not rely on default signal
-  dispositions. `init: true` can stay as a belt-and-braces reaper; it does not
-  replace the module.
+  dispositions — which is why `init: true` is deliberately absent from the
+  compose file rather than layered on top.
 
 Risk: PID 1 semantics are easy to get subtly wrong, and the failure mode is a
 container that will not stop. Mitigated by testing the policy directly, and by

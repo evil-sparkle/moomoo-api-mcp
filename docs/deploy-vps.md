@@ -313,6 +313,15 @@ in flight fails and the next one succeeds. OpenD does *not* keep its login
 across this — the process is replaced — so expect the same ~30s before health
 goes green. No interactive step is needed: the device token is on the volume.
 
+**If the gateway cannot start at all** — no account set, or no remembered token
+yet — the container does *not* exit. The supervisor logs the reason and runs the
+MCP server without a gateway, so `check_health` still answers and tells you the
+gateway is unavailable. Fix `.env`, then restart the container. A malformed
+supervision setting (`OPEND_MAX_RESTARTS`, `OPEND_RESTART_WINDOW_SECONDS`,
+`SUPERVISOR_STOP_TIMEOUT_SECONDS`) is treated the other way and refuses to
+start, naming the setting, rather than running under a default you did not
+choose.
+
 That is also the cost of the single container, and it is worth stating plainly:
 **every deploy restarts OpenD**, because there is no longer a way to update the
 server without replacing the container. Two containers could be upgraded

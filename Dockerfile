@@ -5,7 +5,12 @@
 # its own shared libraries and is the component with real opinions about what
 # it runs on; the interpreter is the portable half, so uv brings its own rather
 # than putting OpenD on a distribution nobody has tested it against.
-FROM ubuntu:22.04
+# Pinned by digest so a rebuild of this commit starts from the same rootfs. The
+# apt layer below is still resolved at build time, so this is reproducibility of
+# the base, not of the whole image; bump with `docker buildx imagetools inspect
+# ubuntu:22.04`.
+ARG UBUNTU_DIGEST=sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02
+FROM ubuntu:22.04@${UBUNTU_DIGEST}
 
 # ca-certificates/curl/tar/gzip fetch OpenD; libssl-dev is its runtime dependency.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -60,11 +65,12 @@ ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 ENV PYTHONUNBUFFERED=1
 # Ubuntu 22.04's own Python is 3.10; the image this replaces ran 3.12, so uv
-# fetches one rather than quietly dropping two minor versions. The cost is a
-# build that is no longer hermetic in its interpreter, which uv.lock does not
-# cover -- recorded as a trade-off in the change's design.md.
+# fetches one rather than quietly dropping two minor versions. Pinned to the
+# patch release, not the 3.12 series: uv resolves a series to whatever is newest
+# at build time, which would make the same commit build a different interpreter
+# next month. uv.lock covers everything above it.
 ENV UV_PYTHON_DOWNLOADS=automatic
-ENV UV_PYTHON=3.12
+ENV UV_PYTHON=3.12.13
 ENV UV_PYTHON_PREFERENCE=only-managed
 # Not the default (~/.local/share/uv/python): the build runs as root and the
 # container does not, and a 0700 /root would leave the venv pointing at an
