@@ -25,10 +25,11 @@
       --no-interactive` passes. It passes today with the pinned CLI
       (`@fission-ai/openspec` 1.13.1); CI's `openspec` job runs the `--all`
       form on every push.
-- [ ] 2.2 Archive `refactor-single-container-deployment` first: its
+- [x] 2.2 Archive `refactor-single-container-deployment` first: its
       `Paired Process Supervision` requirement is the one this change's
-      gateway-restart requirement defers to. That archive waits on that
-      change's own open verification items (2.6, 6.2, 6.3).
+      gateway-restart requirement defers to. Done on 2026-09-19, after its
+      verification items (2.6, 6.2, 6.3) passed on the live deployment:
+      `changes/archive/2026-09-19-refactor-single-container-deployment`.
 - [ ] 2.3 Archive with `openspec archive update-container-restart-resilience
       --yes`, in a separate PR, updating `container-deployment`,
       `trade-unlock` and creating `transport-sessions`.

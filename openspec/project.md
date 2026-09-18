@@ -109,10 +109,10 @@ Recovery policy (`supervisor.py`):
 | No usable OpenD login configured | Log why, run MCP without a gateway |
 | SIGTERM / SIGINT | Forward to both, bounded wait, then SIGKILL |
 
-The policy is specified by `container-deployment` › `Paired Process
-Supervision`, currently in the active change
-`refactor-single-container-deployment`. That change is implemented on `main` and
-waits on verification against the real OpenD binary before it is archived.
+The policy is specified by `openspec/specs/container-deployment` › `Paired
+Process Supervision`. It was added by `refactor-single-container-deployment`,
+which was verified against the real OpenD on the live deployment and archived
+on 2026-09-19.
 
 ## Where things are specified
 
