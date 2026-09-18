@@ -56,11 +56,10 @@ Found while drafting. Each is either a runtime change, which this
 documentation-only change must not make, or a test that turns a **gap** or
 **manual** item in `design.md` into automated evidence.
 
-- [ ] 3.1 Test: pin `stateless_http=True` and `json_response=True`, and assert
+- [x] 3.1 Test: pin `stateless_http=True` and `json_response=True`, and assert
       over HTTP that a foreign `mcp-session-id` is processed rather than
-      rejected and that a call is answered with one JSON response. Today this
-      rests on reading the SDK, and `json_response` already changed the
-      notification behaviour once without any test noticing.
+      rejected and that a call is answered with one JSON response. Pinned and
+      asserted in `TestStatelessStreamableHTTP` in `tests/test_server.py`.
 - [ ] 3.2 Test: after the MCP process is killed and the container restarts,
       the smoke test waits for the new MCP server to reach the new gateway, as
       it already does after a gateway-only restart. Also assert that
