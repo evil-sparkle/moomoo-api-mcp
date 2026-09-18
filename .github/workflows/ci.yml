@@ -15,9 +15,153 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Decide what this push actually needs, before anything expensive starts.
+  #
+  # docs_only says the change touches nothing ruff, basedpyright, pytest or the
+  # compose smoke test can catch, so test and smoke are skipped for it. The
+  # image result is consumed by docker-build via
+  # needs.changes.outputs.moomoo-api-mcp. PRs and feature-branch pushes force a
+  # build (to catch Dockerfile regressions) unless the change is docs_only —
+  # only main pushes honor the filter for code changes.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.filter.outputs.docs_only }}
+      moomoo-api-mcp: ${{ steps.filter.outputs.moomoo-api-mcp }}
+      baseline: ${{ steps.filter.outputs.baseline }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # so full commit history is available for baseline comparison
+
+      - id: filter
+        name: Compute the image change map
+        run: |
+          current="${GITHUB_SHA:-HEAD}"
+          before="${{ github.event.before }}"
+          event_name="${GITHUB_EVENT_NAME}"
+
+          # Detect comparison baseline: support multi-commit pushes and PRs
+          # Require ^{commit} to ensure git verifies the object exists in the repo
+          is_valid_base=false
+          if [ "${event_name}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            if [ -n "${base}" ] && git rev-parse --quiet --verify "${base}^{commit}" >/dev/null 2>&1; then
+              prev="$(git rev-parse --verify "${base}^{commit}")"
+              is_valid_base=true
+            fi
+          elif [ -n "${before}" ] && [ "${before}" != "0000000000000000000000000000000000000000" ]; then
+            if git rev-parse --quiet --verify "${before}^{commit}" >/dev/null 2>&1; then
+              prev="$(git rev-parse --verify "${before}^{commit}")"
+              is_valid_base=true
+            fi
+          fi
+
+          # If push/PR baseline cannot be established, force a full build
+          if [ "${is_valid_base}" = "false" ]; then
+            echo "No valid baseline commit available; triggering a full build."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
+            echo "baseline=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Propagate git diff failures instead of silently continuing
+          if ! changed_raw=$(git diff --name-only "${prev}" "${current}"); then
+            echo "git diff failed between ${prev} and ${current}; triggering a full build."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
+            echo "baseline=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mapfile -t changed <<< "${changed_raw}"
+          echo "baseline=${prev}" >> "$GITHUB_OUTPUT"
+
+          # A change is documentation-only when *every* changed path is prose:
+          # openspec/, docs/, a Markdown file, or LICENSE. None of it is read by
+          # ruff, basedpyright, pytest or the compose smoke test, so those jobs
+          # have nothing to say about it. README.md and LICENSE count as prose
+          # even though the Dockerfile COPYs them: they cannot fail a test, and
+          # needed_mcp below still rebuilds the image that carries them.
+          # .github/ is workflow, never prose — a change there runs everything.
+          # An empty diff leaves this false, so the fallback is the full run.
+          docs_only=false
+          if [ -n "${changed_raw}" ]; then
+            docs_only=true
+            for path in "${changed[@]}"; do
+              case "${path}" in
+                .github/*) docs_only=false ;;
+                docs/*|openspec/*|*.md|LICENSE) ;;
+                *) docs_only=false ;;
+              esac
+              [ "${docs_only}" = "false" ] && break
+            done
+          fi
+          echo "Documentation-only change: ${docs_only}"
+
+          # Declare which paths the image rebuilds on. The "needed" set has to
+          # include every Dockerfile input. One image now carries the gateway
+          # too, and OpenD contributes no repo files of its own — only
+          # network-fetched release assets pinned in the Dockerfile.
+          needed_mcp=(
+            "Dockerfile"
+            "pyproject.toml"
+            "uv.lock"
+            "README.md"
+            "LICENSE"
+            "src/"
+          )
+
+          mcp=false
+          for path in "${changed[@]}"; do
+            # Workflow + overlay changes always force a build — never quietly
+            # skip what the deploy path depends on.
+            if [ "${path}" = ".github/workflows/ci.yml" ] \
+              || [ "${path}" = ".dockerignore" ] \
+              || [ "${path}" = "docker-compose.yml" ] \
+              || [ "${path}" = "docker-compose.prod.yml" ]; then
+              mcp=true
+              continue
+            fi
+            # Match path against needed_mcp entries without regex
+            for needed in "${needed_mcp[@]}"; do
+              ends_in_slash=false
+              [ "${needed}" != "${needed%/}" ] && ends_in_slash=true
+              if [ "${ends_in_slash}" = "true" ]; then
+                prefix="${needed%/}/"
+                [ "${path#"${prefix}"}" = "${path}" ] && continue
+              else
+                [ "${path}" != "${needed}" ] && continue
+              fi
+              mcp=true
+              break
+            done
+          done
+
+          # Honor the contract: PRs / feature branches always build, so no
+          # Dockerfile regression reaches main unbuilt. Only main pushes follow
+          # the filter — except for a docs-only change, which follows it
+          # everywhere. That is what lets a README edit still rebuild the image
+          # that COPYs it while an openspec edit builds nothing at all.
+          if [ "${docs_only}" != "true" ] \
+            && { [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
+              || [ "${GITHUB_REF}" != "refs/heads/main" ]; }; then
+            mcp=true
+          fi
+
+          echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+          echo "moomoo-api-mcp=${mcp}" >> "$GITHUB_OUTPUT"
+
   test:
     name: Run Tests and Lint
     runs-on: ubuntu-latest
+    needs: changes
+    # Nothing in a documentation-only change can fail lint, type checks or the
+    # suite, so do not spend a runner proving it. smoke needs this job and is
+    # skipped along with it.
+    if: needs.changes.outputs.docs_only != 'true'
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
@@ -65,111 +209,6 @@ jobs:
         run: |
           ./scripts/smoke-test.sh
 
-  # Decide whether the image actually needs to be rebuilt for this push. The
-  # result is consumed by docker-build via needs.changes.outputs.moomoo-api-mcp.
-  # PRs and feature-branch pushes force a build (to catch Dockerfile
-  # regressions) — only main pushes honor the filter.
-  changes:
-    name: Detect changed image paths
-    runs-on: ubuntu-latest
-    outputs:
-      moomoo-api-mcp: ${{ steps.filter.outputs.moomoo-api-mcp }}
-      baseline: ${{ steps.filter.outputs.baseline }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0   # so full commit history is available for baseline comparison
-
-      - id: filter
-        name: Compute the image change map
-        run: |
-          current="${GITHUB_SHA:-HEAD}"
-          before="${{ github.event.before }}"
-          event_name="${GITHUB_EVENT_NAME}"
-
-          # Detect comparison baseline: support multi-commit pushes and PRs
-          # Require ^{commit} to ensure git verifies the object exists in the repo
-          is_valid_base=false
-          if [ "${event_name}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-            if [ -n "${base}" ] && git rev-parse --quiet --verify "${base}^{commit}" >/dev/null 2>&1; then
-              prev="$(git rev-parse --verify "${base}^{commit}")"
-              is_valid_base=true
-            fi
-          elif [ -n "${before}" ] && [ "${before}" != "0000000000000000000000000000000000000000" ]; then
-            if git rev-parse --quiet --verify "${before}^{commit}" >/dev/null 2>&1; then
-              prev="$(git rev-parse --verify "${before}^{commit}")"
-              is_valid_base=true
-            fi
-          fi
-
-          # If push/PR baseline cannot be established, force a full build
-          if [ "${is_valid_base}" = "false" ]; then
-            echo "No valid baseline commit available; triggering a full build."
-            echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
-            echo "baseline=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Propagate git diff failures instead of silently continuing
-          if ! changed_raw=$(git diff --name-only "${prev}" "${current}"); then
-            echo "git diff failed between ${prev} and ${current}; triggering a full build."
-            echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
-            echo "baseline=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          mapfile -t changed <<< "${changed_raw}"
-          echo "baseline=${prev}" >> "$GITHUB_OUTPUT"
-
-          # Declare which paths the image rebuilds on. The "needed" set has to
-          # include every Dockerfile input. One image now carries the gateway
-          # too, and OpenD contributes no repo files of its own — only
-          # network-fetched release assets pinned in the Dockerfile.
-          needed_mcp=(
-            "Dockerfile"
-            "pyproject.toml"
-            "uv.lock"
-            "README.md"
-            "LICENSE"
-            "src/"
-          )
-
-          mcp=false
-          for path in "${changed[@]}"; do
-            # Workflow + overlay changes always force a build — never quietly
-            # skip what the deploy path depends on.
-            if [ "${path}" = ".github/workflows/ci.yml" ] \
-              || [ "${path}" = ".dockerignore" ] \
-              || [ "${path}" = "docker-compose.yml" ] \
-              || [ "${path}" = "docker-compose.prod.yml" ]; then
-              mcp=true
-              continue
-            fi
-            # Match path against needed_mcp entries without regex
-            for needed in "${needed_mcp[@]}"; do
-              ends_in_slash=false
-              [ "${needed}" != "${needed%/}" ] && ends_in_slash=true
-              if [ "${ends_in_slash}" = "true" ]; then
-                prefix="${needed%/}/"
-                [ "${path#"${prefix}"}" = "${path}" ] && continue
-              else
-                [ "${path}" != "${needed}" ] && continue
-              fi
-              mcp=true
-              break
-            done
-          done
-
-          # Honor the contract: PRs / feature branches always build.
-          # Only main pushes follow the filter.
-          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
-            || [ "${GITHUB_REF}" != "refs/heads/main" ]; then
-            mcp=true
-          fi
-
-          echo "moomoo-api-mcp=${mcp}" >> "$GITHUB_OUTPUT"
-
   # One image, because the gateway and the server now ship together. The
   # moomoo-opend ECR repository is no longer written to; leave it in place until
   # the last two-container deploy is past being a rollback target, then delete
@@ -178,6 +217,19 @@ jobs:
     name: Build moomoo-api-mcp
     runs-on: ubuntu-latest
     needs: [test, changes]
+    # A skipped `test` would skip this job with it, so state the dependency as a
+    # result check instead. Main pushes always come through: the retag step below
+    # is what keeps the image tagged at the exact commit the deploy wrapper asks
+    # for, and a documentation-only commit still has to be deployable. Anywhere
+    # else there is nothing to do unless the image actually changed.
+    if: >-
+      !cancelled()
+      && needs.changes.result == 'success'
+      && (needs.test.result == 'success' || needs.test.result == 'skipped')
+      && (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        || needs.changes.outputs.moomoo-api-mcp == 'true'
+      )
     permissions:
       contents: read
       id-token: write   # required to mint the OIDC token for AWS
@@ -303,7 +355,7 @@ jobs:
 
       - name: Resolve image tags
         id: tags
-        if: needs.changes.outputs.moomoo-api-mcp == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
+        if: needs.changes.outputs.moomoo-api-mcp == 'true' || steps.retag.outputs.rebuild_needed == 'true'
         run: |
           deploy_tag="${GITHUB_SHA::7}"
           audit_tag="commit-${GITHUB_SHA}"
@@ -327,7 +379,7 @@ jobs:
           fi
 
       - name: Build and push
-        if: needs.changes.outputs.moomoo-api-mcp == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
+        if: needs.changes.outputs.moomoo-api-mcp == 'true' || steps.retag.outputs.rebuild_needed == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
