@@ -83,9 +83,10 @@ The code follows these rules. Each points to where it is specified or explained.
 - **Trading commands are never replayed.** A lost order response is not treated
   as a result, and recovery never resubmits the command.
 
-The process-ownership, stateless-transport and no-replay contracts are being
-specified by the active change `update-container-restart-resilience`. Until it
-is archived, `docs/state-and-restarts.md` is their fullest description.
+The process-ownership, stateless-transport and no-replay contracts are specified
+by `container-deployment`, `trade-unlock` and `transport-sessions` (archived
+from `update-container-restart-resilience`). `docs/state-and-restarts.md`
+remains their fullest narrative description.
 
 ## Deployment
 
@@ -119,8 +120,8 @@ on 2026-09-19.
 | Document | Owns |
 | --- | --- |
 | `openspec/specs/container-deployment` | Packaging, loopback binding, supervision policy, volume persistence, non-root execution, download integrity |
-| `openspec/specs/transport-sessions` (pending, see above) | Stateless Streamable HTTP, process-owned connections, transport-level restart semantics |
-| `openspec/specs/trade-unlock`, `trading-policy` | Mode-dependent authorization, startup and just-in-time unlock, reconnect locking (pending, see above) |
+| `openspec/specs/transport-sessions` | Stateless Streamable HTTP, process-owned connections, transport-level restart semantics |
+| `openspec/specs/trade-unlock`, `trading-policy` | Mode-dependent authorization, startup and just-in-time unlock, reconnect locking |
 | Other `openspec/specs/*` | One capability per tool family |
 | `docs/state-and-restarts.md` | Operator view: what state lives where, what each restart costs |
 | `docs/deploy-vps.md`, `docs/rootless-docker.md` | Operator commands, upgrade and recovery procedures |
