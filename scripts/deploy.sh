@@ -36,15 +36,23 @@ fi
 # started with. compose-prod.sh passes --env-file .env to Compose, and a naive
 # "everything after the first =" is not that: MCP_AUTH_TOKEN="abc" starts the
 # container with abc but would send "abc" — quotes included — as a bearer
-# token, 401 the healthy deploy and roll it back. Handled here, without
-# patterns beyond the shell's own: CRLF, surrounding whitespace, single and
-# double quotes, and inline comments on unquoted values.
+# token, 401 the healthy deploy and roll it back.
 #
-# Not reimplemented: Compose's parameter expansion (${...}) in unquoted and
-# double-quoted values. Guessing at it wrong sends bytes the container never
-# saw, so an unresolvable value is refused instead, and exporting
-# MCP_AUTH_TOKEN in the environment is the escape hatch — Compose also lets
-# the real environment win over env files.
+# What is implemented is a subset of Compose's dotenv grammar: CRLF, comment
+# lines, surrounding whitespace, an optional export prefix, single and double
+# quotes on one line, and " #" inline comments on unquoted values. Everything
+# in that subset resolves to the same bytes Compose resolves.
+#
+# What is deliberately NOT implemented is refused, never guessed at, because
+# guessing wrong sends bytes the container never saw:
+#   - escape sequences and literal backslashes in double-quoted values
+#     (Compose translates \n, \", \\; refusing beats mistranslating)
+#   - quoted values spanning lines
+#   - parameter expansion, which Compose performs on bare and double-quoted
+#     values. Refusing is not a limitation the operator cannot escape:
+#     exporting MCP_AUTH_TOKEN in the environment wins in both tools.
+# Single-quoted values need no interpolation and are sent as written, which
+# matches Compose treating them literally.
 parse_env_token() {
   local file="$1" name="$2" raw line key value dq='"' sq="'" tab
   tab="$(printf '\t')"
@@ -62,6 +70,19 @@ parse_env_token() {
     case "$line" in
       ''|'#'*) continue ;;
     esac
+    # Compose accepts an `export` prefix on assignments, for files that can
+    # also be sourced by a shell.
+    case "$line" in
+      'export '*|'export'"$tab"*) line="${line#export}" ;;
+      *) ;;
+    esac
+    while :; do
+      case "$line" in
+        ' '*) line="${line# }" ;;
+        "$tab"*) line="${line#"$tab"}" ;;
+        *) break ;;
+      esac
+    done
     key="${line%%=*}"
     value="${line#*=}"
     if [ "$key" = "$line" ]; then
@@ -87,15 +108,42 @@ parse_env_token() {
       esac
     done
     case "$value" in
-      # Quoted: keep everything inside the quotes, drop the rest — which is
-      # where an inline comment after the closing quote lives.
-      "${dq}"*"${dq}"*)
-        value="${value#"$dq"}"
-        value="${value%%"$dq"*}"
-        ;;
-      "${sq}"*"${sq}"*)
+      # Single-quoted: Compose takes the content literally — no escapes, no
+      # interpolation — so the content up to the closing quote is final.
+      "${sq}"*)
         value="${value#"$sq"}"
-        value="${value%%"$sq"*}"
+        case "$value" in
+          *"${sq}"*) value="${value%%"$sq"*}" ;;
+          *)
+            echo "deploy.sh cannot resolve a quoted value spanning lines ($name=... from $file). Set $name on one line." >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      # Double-quoted: Compose would process backslash escapes and expand
+      # ${...}; neither is reimplemented, so a value needing either is
+      # refused rather than sent as different bytes.
+      "${dq}"*)
+        case "$value" in
+          *'\'*)
+            echo "deploy.sh cannot resolve the escape sequences in $name=... (from $file). Set $name as a literal value without backslashes." >&2
+            exit 1
+            ;;
+        esac
+        value="${value#"$dq"}"
+        case "$value" in
+          *"$dq"*) value="${value%%"$dq"*}" ;;
+          *)
+            echo "deploy.sh cannot resolve a quoted value spanning lines ($name=... from $file). Set $name on one line." >&2
+            exit 1
+            ;;
+        esac
+        case "$value" in
+          *'${'*)
+            echo "deploy.sh cannot resolve the parameter expansion in $name=... (from $file). Set a literal value, or export $name in the environment." >&2
+            exit 1
+            ;;
+        esac
         ;;
       *)
         # Unquoted: whitespace followed by # begins an inline comment.
@@ -109,12 +157,14 @@ parse_env_token() {
             *) break ;;
           esac
         done
-        ;;
-    esac
-    case "$value" in
-      *'${'*)
-        echo "deploy.sh cannot resolve the parameter expansion in $name=${value}... (from $file). Set a literal value, or export $name in the environment." >&2
-        exit 1
+        case "$value" in
+          # Unquoted values are still interpolated by Compose; refusing is
+          # the only honest answer without reimplementing that too.
+          *'${'*)
+            echo "deploy.sh cannot resolve the parameter expansion in $name=... (from $file). Set a literal value, or export $name in the environment." >&2
+            exit 1
+            ;;
+        esac
         ;;
     esac
     printf '%s' "$value"
@@ -329,6 +379,15 @@ finish_deploy() {
       sleep 3
       elapsed=$((elapsed + 3))
     done
+    # Delete the secret while header_file is still in scope. The EXIT trap
+    # cannot do this on the success path: it fires after finish_deploy has
+    # returned, when this local is out of scope and the expansion is empty —
+    # the file would survive the deploy holding the bearer token. The trap
+    # stays for abnormal exits (rollback's exit), which happen from inside
+    # this function while the variable is still set.
+    if [ -n "$header_file" ]; then
+      rm -f "$header_file"
+    fi
     if [ "$verified" = true ]; then
       echo "Deploy verified: ${short} as ${image_tag}" >&2
       ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
