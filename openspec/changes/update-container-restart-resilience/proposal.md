@@ -35,9 +35,11 @@ changes no code.
     configuration. Verification happens before extraction, and a mismatch fails
     the build whatever the download source. The digest is deliberately not
     restated; the current values appear below as evidence only.
-  - **ADDED** `Recovery From a Gateway Restart`: the MCP server keeps running,
-    and gateway access recovers without restarting MCP or reconfiguring the
-    client.
+  - **ADDED** `Recovery From a Gateway Restart`: while the gateway is restarted
+    in place within the supervisor's retry budget, the MCP server keeps
+    running, and gateway access recovers without restarting MCP or
+    reconfiguring the client. Once the budget is exhausted, recovery falls to
+    whole-deployment replacement instead.
   - **ADDED** `Recovery From an MCP Server Restart`: once the server is back,
     authenticated requests work without a stale session blocking them.
   - **ADDED** `Restart Recovery Does Not Replay Trading Commands`: requests that
@@ -70,11 +72,14 @@ None of this belongs in the requirement.
 
 | Item | Value | Source |
 | --- | --- | --- |
-| OpenD version / tag | `10.10.7008` / `v10.10.7008-opend` | `Dockerfile.opend` build args |
-| Pinned SHA-256 | `72eaa6e47b5cb8905306427b5e3679d591408243492e3e7acbc3a7d46f09a0aa` | `Dockerfile.opend` `OPEND_SHA256` |
+| OpenD version / tag | `10.10.7008` / `v10.10.7008-opend` | `Dockerfile:31-32` build args |
+| Pinned SHA-256 | `72eaa6e47b5cb8905306427b5e3679d591408243492e3e7acbc3a7d46f09a0aa` | `Dockerfile:39` `OPEND_SHA256` |
 | GitHub-reported digest of `moomoo_OpenD_10.10.7008_Ubuntu18.04.tar.gz` | `sha256:72eaa6e4…09a0aa` (matches) | Releases API, checked 2026-09-18 |
 | Asset size | 466,932,458 bytes | Releases API |
 | CDN fallback size | 466,932,458 bytes (same) | HTTP `HEAD`, checked 2026-09-18 |
+
+When this was drafted (`ef4acc4`), the pins lived in `Dockerfile.opend`. PR #9
+moved them unchanged into the combined `Dockerfile` and deleted that file.
 
 The digest comes from GitHub's release metadata. Nobody downloaded the archive
 and re-hashed it independently, and the CDN copy was compared by size only.
@@ -90,9 +95,16 @@ never extracted.
 - Interaction with `refactor-single-container-deployment`: that change
   MODIFIES `Isolated OpenD Gateway Network`, `Session State Persistence` and
   `Non-Root Container Execution`, and ADDS `Paired Process Supervision`. This
-  change touches none of those four. Its restart requirements are worded in
-  terms of the gateway *process* and the MCP server *process*, so they hold
-  under the current two-container layout and under the proposed single
-  container. Neither change needs to land first.
+  change edits none of those four, but the two changes still interact.
+  Separate requirement names do not rule out contradictory behaviour. As first
+  drafted, "the MCP server SHALL NOT be restarted as a consequence" of a gateway
+  restart contradicted `Paired Process Supervision`, which stops the MCP server
+  once the gateway exhausts its retry budget. `Recovery From a Gateway Restart`
+  is now scoped to in-place restarts within that budget and defers to
+  `Paired Process Supervision` beyond it.
+- Ordering: `refactor-single-container-deployment` is implemented on `main`
+  (PR #9), and this change now names its `Paired Process Supervision`
+  requirement. Archive that change first, so the requirement exists in the
+  canonical spec before this one refers to it.
 - Follow-up work found while drafting (runtime or docs changes, deliberately
   kept out of this documentation-only change) is listed in `tasks.md` § 3.

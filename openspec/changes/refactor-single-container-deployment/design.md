@@ -8,8 +8,8 @@ easy to confuse, so they are named here once:
 | Arrangement | Networking | Status |
 | --- | --- | --- |
 | Shared namespace | `moomoo-mcp` ran with `network_mode: service:opend` | Abandoned. Restarting OpenD destroyed the namespace `moomoo-mcp` lived in; its published port answered nothing and its gateway connection was refused forever. |
-| Separate containers on a bridge | Two namespaces, joined by `trading-net`, MCP dials `opend:11111` | **Deployed today.** The restart failure is gone and asserted against. |
-| One container, two processes | One namespace, one process boundary, MCP dials `127.0.0.1:11111` | Proposed here. |
+| Separate containers on a bridge | Two namespaces, joined by `trading-net`, MCP dials `opend:11111` | Deployed when this was written; replaced by PR #9. The restart failure was gone and asserted against. |
+| One container, two processes | One namespace, one process boundary, MCP dials `127.0.0.1:11111` | Proposed here; on `main` since PR #9. |
 
 The third is being proposed against the second, not against the first. The
 lifecycle argument that motivated moving off the first does not distinguish the
@@ -139,9 +139,10 @@ This flips `UV_PYTHON_DOWNLOADS` from `never` to `automatic`, which is a real
 loss: the build stops being hermetic with respect to the interpreter. The
 alternative, Ubuntu 22.04's system Python 3.10, satisfies `requires-python
 >=3.10` but is older than the 3.12 the current image runs and older still than
-the 3.14 `openspec/project.md` describes. A build-stage download pinned by
-version keeps the resolved interpreter explicit; `uv.lock` continues to pin
-everything above it.
+the 3.14 `openspec/project.md` described at the time. That was never the
+supported range; `project.md` now states the real one. A build-stage download
+pinned by version keeps the resolved interpreter explicit; `uv.lock` continues
+to pin everything above it.
 
 The OpenD download, checksum verification and version pins move across
 unchanged. They are the one part of `Dockerfile.opend` that must not be

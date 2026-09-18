@@ -20,12 +20,13 @@ reachable from any other container or network.
   deployment's container address
 - **THEN** the connection SHALL be refused because the gateway listens on loopback only
 
-#### Scenario: MCP server reaches OpenD over container loopback
+#### Scenario: MCP server reaches OpenD internally
 
-- **GIVEN** the deployment is running and the gateway has started
+- **GIVEN** the single-container deployment is running
+- **AND** OpenD is accepting connections
 - **WHEN** the MCP server connects to `127.0.0.1:11111`
-- **THEN** the connection SHALL succeed without the gateway listening on any
-  non-loopback address
+- **THEN** the connection SHALL use container loopback
+- **AND** OpenD SHALL NOT require a non-loopback listener
 
 #### Scenario: MCP endpoint published to host loopback only
 

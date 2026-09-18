@@ -4,6 +4,13 @@ Checked items were implemented and verified as stated. Items left unchecked
 carry the reason; several cannot be done from a machine without a Docker
 daemon and are marked so rather than assumed.
 
+**Status:** implemented on `main` (PR #9, merged 2026-09-18). CI builds the
+image and passes the smoke test, which runs a stub in place of OpenD. Not
+archived yet: 2.6, 6.2 and 6.3 need the real binary and the real deployment,
+and nothing in CI stands in for them. Archive this change before
+`update-container-restart-resilience`, whose gateway-restart requirement
+defers to `Paired Process Supervision` below.
+
 1. **Write the supervisor, tests first**
    - [x] 1.1 `tests/test_supervisor.py` covers the policy in `design.md` against
      fake child processes, not the real binaries: OpenD exit restarts OpenD
@@ -118,11 +125,13 @@ daemon and are marked so rather than assumed.
      `basedpyright` reports 0 errors.
    - [x] 8.3 `scripts/smoke-test.sh` passes in CI (not runnable locally — no
      Docker daemon). Same item as 5.6.
-   - [ ] 8.4 **Not done — no CLI available.** `openspec validate
-     refactor-single-container-deployment --strict --no-interactive`; the
-     `openspec` binary is not installed here and is not on npm under that name.
-     The delta was checked by hand: 4 requirements, 15 scenarios, every
-     requirement carrying at least one.
+   - [x] 8.4 `openspec validate --all --strict --no-interactive` passes: 24
+     passed, 0 failed. The CLI is the npm package `@fission-ai/openspec` (the
+     unscoped `openspec` name is not it), pinned at 1.13.1 and run by CI's
+     `openspec` job. The first real run failed this change: the MODIFIED
+     `Isolated OpenD Gateway Network` block had renamed the canonical scenario
+     `MCP server reaches OpenD internally`, and archive refuses to drop one. The
+     title is kept and its body rewritten for loopback.
 
 9. **From CI and review** (found after the first push)
    - [x] 9.1 **CI, container smoke test.** A missing gateway login was fatal:
