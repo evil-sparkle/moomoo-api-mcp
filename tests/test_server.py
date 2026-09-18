@@ -546,3 +546,173 @@ class TestFastMCPSecurity:
                 "Serving MCP streamable-http endpoint without authentication at http://127.0.0.1:8000/mcp"
                 in caplog.text
             )
+
+
+class TestStatelessStreamableHTTP:
+    """Tests pinning stateless_http and json_response under Streamable HTTP."""
+
+    @pytest.fixture(autouse=True)
+    def reset_streamable_session_manager(self):
+        """Reset FastMCP session manager and mock services for each test."""
+        server.mcp._session_manager = None
+        mock_services = MagicMock()
+        mock_check = MagicMock()
+        mock_check.futures = ()
+        mock_check.remaining.return_value = 1.0
+        mock_check.result.return_value = {"status": "ok", "trading_mode": "READ_ONLY"}
+        mock_services.moomoo_service.start_health_check.return_value = mock_check
+        with patch("moomoo_mcp.server.get_services", return_value=mock_services):
+            yield
+        server.mcp._session_manager = None
+
+    def test_pinned_fastmcp_settings(self) -> None:
+        """FastMCP settings must explicitly pin stateless_http and json_response."""
+        assert server.mcp.settings.stateless_http is True
+        assert server.mcp.settings.json_response is True
+
+    def test_initialize_issues_no_session_id(self) -> None:
+        """initialize returns a JSON response without an mcp-session-id header."""
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_streamable_http_app
+
+        app = create_streamable_http_app(auth_token="test_token")
+        with TestClient(app) as client:
+            resp = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test-client", "version": "1.0.0"},
+                    },
+                },
+                headers={
+                    "Authorization": "Bearer test_token",
+                    "Accept": "application/json",
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.headers.get("content-type") == "application/json"
+            assert "mcp-session-id" not in resp.headers
+            body = resp.json()
+            assert body.get("id") == 1
+            assert "protocolVersion" in body.get("result", {})
+
+    def test_request_served_without_prior_initialize(self) -> None:
+        """tools/list is served without a prior initialize request."""
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_streamable_http_app
+
+        app = create_streamable_http_app(auth_token="test_token")
+        with TestClient(app) as client:
+            resp = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/list",
+                    "params": {},
+                },
+                headers={
+                    "Authorization": "Bearer test_token",
+                    "Accept": "application/json",
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.headers.get("content-type") == "application/json"
+            assert "mcp-session-id" not in resp.headers
+            body = resp.json()
+            assert body.get("id") == 2
+            assert "tools" in body.get("result", {})
+
+    def test_foreign_session_id_is_ignored_and_request_succeeds(self) -> None:
+        """A foreign mcp-session-id is ignored rather than rejected as unknown."""
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_streamable_http_app
+
+        app = create_streamable_http_app(auth_token="test_token")
+        with TestClient(app) as client:
+            resp = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/list",
+                    "params": {},
+                },
+                headers={
+                    "Authorization": "Bearer test_token",
+                    "Accept": "application/json",
+                    "mcp-session-id": "foreign-session-uuid-from-previous-run",
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.headers.get("content-type") == "application/json"
+            assert "mcp-session-id" not in resp.headers
+            body = resp.json()
+            assert body.get("id") == 3
+            assert "tools" in body.get("result", {})
+
+    def test_session_id_does_not_stand_in_for_authentication(self) -> None:
+        """A request with mcp-session-id without valid auth is rejected with 401."""
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_streamable_http_app
+
+        app = create_streamable_http_app(auth_token="test_token")
+        with TestClient(app) as client:
+            resp = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/list",
+                    "params": {},
+                },
+                headers={
+                    "Accept": "application/json",
+                    "mcp-session-id": "foreign-session-uuid-from-previous-run",
+                },
+            )
+            assert resp.status_code == 401
+            assert "Unauthorized" in resp.text
+
+    def test_call_tool_answered_with_single_json_response_and_notifications_dropped(
+        self,
+    ) -> None:
+        """Tool call is answered with single JSON result, dropping notifications."""
+        from starlette.testclient import TestClient
+
+        from moomoo_mcp.server import create_streamable_http_app
+
+        app = create_streamable_http_app(auth_token="test_token")
+        with TestClient(app) as client:
+            # check_health calls ctx.info("Health check status: ...") internally
+            resp = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "check_health",
+                        "arguments": {},
+                    },
+                },
+                headers={
+                    "Authorization": "Bearer test_token",
+                    "Accept": "application/json",
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.headers.get("content-type") == "application/json"
+            body = resp.json()
+            assert body.get("id") == 5
+            assert body.get("result", {}).get("isError") is False
+            assert "structuredContent" in body.get("result", {})
