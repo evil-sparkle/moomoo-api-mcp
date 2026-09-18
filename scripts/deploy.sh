@@ -39,20 +39,22 @@ fi
 # token, 401 the healthy deploy and roll it back.
 #
 # What is implemented is a subset of Compose's dotenv grammar: CRLF, comment
-# lines, surrounding whitespace, an optional export prefix, single and double
-# quotes on one line, and " #" inline comments on unquoted values. Everything
-# in that subset resolves to the same bytes Compose resolves.
+# lines, surrounding whitespace, an optional export prefix, the '=' and ':'
+# delimiters, single and double quotes on one line, and " #" inline comments
+# on unquoted values. Everything in that subset resolves to the same bytes
+# Compose resolves.
 #
 # What is deliberately NOT implemented is refused, never guessed at, because
 # guessing wrong sends bytes the container never saw:
-#   - escape sequences and literal backslashes in double-quoted values
-#     (Compose translates \n, \", \\; refusing beats mistranslating)
+#   - escape sequences and literal backslashes in quoted values (Compose
+#     translates \n, \", \\; refusing beats mistranslating)
 #   - quoted values spanning lines
-#   - parameter expansion, which Compose performs on bare and double-quoted
-#     values. Refusing is not a limitation the operator cannot escape:
-#     exporting MCP_AUTH_TOKEN in the environment wins in both tools.
-# Single-quoted values need no interpolation and are sent as written, which
-# matches Compose treating them literally.
+#   - variable references, which Compose expands in bare and double-quoted
+#     values, braced and unbraced alike. Refusing is not a limitation the
+#     operator cannot escape: exporting MCP_AUTH_TOKEN in the environment
+#     wins in both tools.
+# Single-quoted values are otherwise sent as written, which matches Compose
+# treating them literally.
 parse_env_token() {
   local file="$1" name="$2" raw line key value dq='"' sq="'" tab
   tab="$(printf '\t')"
@@ -86,7 +88,17 @@ parse_env_token() {
     key="${line%%=*}"
     value="${line#*=}"
     if [ "$key" = "$line" ]; then
-      continue  # no '=' on the line: not an assignment
+      # No '='. Docker's env-file documentation also names ':' as a
+      # delimiter, and a silently skipped MCP_AUTH_TOKEN is the worst
+      # outcome here: the container would start authenticated while the
+      # probe sent no token. So honor the colon form too; if this Compose
+      # rejects colon lines outright, compose fails the deploy first, at
+      # `up`, and the resolution below never runs.
+      key="${line%%:*}"
+      value="${line#*:}"
+      if [ "$key" = "$line" ]; then
+        continue  # no delimiter on the line: not an assignment
+      fi
     fi
     while :; do
       case "$key" in
@@ -108,9 +120,18 @@ parse_env_token() {
       esac
     done
     case "$value" in
-      # Single-quoted: Compose takes the content literally — no escapes, no
-      # interpolation — so the content up to the closing quote is final.
+      # Single-quoted: Compose takes the content literally — no interpolation
+      # — so the content up to the closing quote is final. Docker's docs have
+      # also shown escaped quotes working inside single quotes, which this
+      # first-quote stop cannot honor; a backslash therefore refuses rather
+      # than risks parsing a different value than the container received.
       "${sq}"*)
+        case "$value" in
+          *'\'*)
+            echo "deploy.sh does not resolve escape sequences in single-quoted $name=... (from $file). Set $name without backslashes." >&2
+            exit 1
+            ;;
+        esac
         value="${value#"$sq"}"
         case "$value" in
           *"${sq}"*) value="${value%%"$sq"*}" ;;
@@ -121,8 +142,8 @@ parse_env_token() {
         esac
         ;;
       # Double-quoted: Compose would process backslash escapes and expand
-      # ${...}; neither is reimplemented, so a value needing either is
-      # refused rather than sent as different bytes.
+      # variable references; neither is reimplemented, so a value needing
+      # either is refused rather than sent as different bytes.
       "${dq}"*)
         case "$value" in
           *'\'*)
@@ -139,8 +160,8 @@ parse_env_token() {
             ;;
         esac
         case "$value" in
-          *'${'*)
-            echo "deploy.sh cannot resolve the parameter expansion in $name=... (from $file). Set a literal value, or export $name in the environment." >&2
+          *'$'*)
+            echo "deploy.sh cannot resolve the variable reference in $name=... (from $file). Set a literal value, or export $name in the environment." >&2
             exit 1
             ;;
         esac
@@ -158,10 +179,11 @@ parse_env_token() {
           esac
         done
         case "$value" in
-          # Unquoted values are still interpolated by Compose; refusing is
-          # the only honest answer without reimplementing that too.
-          *'${'*)
-            echo "deploy.sh cannot resolve the parameter expansion in $name=... (from $file). Set a literal value, or export $name in the environment." >&2
+          # Unquoted values are still interpolated by Compose — $VAR and
+          # ${VAR} alike; refusing any $ is the only honest answer without
+          # reimplementing that too.
+          *'$'*)
+            echo "deploy.sh cannot resolve the variable reference in $name=... (from $file). Set a literal value, or export $name in the environment." >&2
             exit 1
             ;;
         esac
