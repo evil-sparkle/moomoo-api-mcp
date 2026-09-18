@@ -340,9 +340,48 @@ if name == "curl":
         (self.repo / ".env").write_text("MCP_AUTH_TOKEN=${LOCAL_TOKEN}\n")
         result = self.deploy(self.commit)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("parameter expansion", result.stderr)
+        self.assertIn("variable reference", result.stderr)
         self.assertIn("MCP_AUTH_TOKEN", result.stderr)
         self.assertFalse((self.repo / ".deploy.env").exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_colon_delimiter_token_is_supported(self):
+        """Docker's env-file documentation names ':' as a delimiter too.
+
+        Silently skipping the line would start the container authenticated
+        while the probe sent no token, so the colon form is honored the same
+        as '='.
+        """
+        (self.repo / ".env").write_text("MCP_AUTH_TOKEN: colon-form\n")
+        result = self.deploy(self.commit)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        headers = [c for c in self.calls() if c[0] == "curl-header"]
+        self.assertEqual(len(headers), 1)
+        self.assertEqual(headers[0][1], ["Authorization: Bearer colon-form\n"])
+
+    def test_unbraced_dollar_interpolation_is_refused(self):
+        """Compose expands $VAR, not only ${VAR}; unresolvable means refused.
+
+        Sending the raw bytes would 401 and roll back a healthy deploy.
+        """
+        (self.repo / ".env").write_text("MCP_AUTH_TOKEN=$LOCAL_TOKEN\n")
+        result = self.deploy(self.commit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("variable reference", result.stderr)
+        self.assertIn("MCP_AUTH_TOKEN", result.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_escaped_quote_in_single_quotes_is_refused(self):
+        """Escaped quotes inside single quotes are not resolved here.
+
+        Compose has documented them; the first-quote stop would parse
+        MCP_AUTH_TOKEN='Let\\'s-go' as something else. A backslash refuses
+        rather than risks sending a different value than the container got.
+        """
+        (self.repo / ".env").write_text("MCP_AUTH_TOKEN='Let\\'s-go'\n")
+        result = self.deploy(self.commit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("escape sequences", result.stderr)
         self.assertEqual(self.calls(), [])
 
     def test_200_that_is_not_an_mcp_initialize_result_fails(self):
