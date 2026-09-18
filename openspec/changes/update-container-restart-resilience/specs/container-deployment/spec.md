@@ -2,7 +2,7 @@
 
 ### Requirement: Binary Download Integrity Verification
 
-The OpenD image build SHALL verify the downloaded OpenD archive against the
+The image build SHALL verify the downloaded OpenD archive against the
 reviewed SHA-256 pin for the selected OpenD release. The pin is recorded in the
 version-controlled build configuration next to that release's version, tag and
 download URL; today that is the `OPEND_SHA256` build arg. Verification SHALL

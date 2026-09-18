@@ -57,7 +57,11 @@ changes no code.
     and "no password" no longer implies "SIMULATE-only".
 - `transport-sessions` (new capability)
   - **ADDED** `Stateless Streamable HTTP`: no session id is issued or required,
-    a stale one is ignored, and authentication is checked per request.
+    and a stale one is ignored. Each call is answered with one JSON response,
+    so notifications a tool emits during the call are not delivered (behaviour
+    since `dd066e7`, which enabled JSON responses for client compatibility).
+    When `MCP_AUTH_TOKEN` is set, authentication is checked per request;
+    without one, the endpoint is unauthenticated.
   - **ADDED** `Process-Owned Gateway Connections`: connections open once per
     process and are shared by every request and client. Sessions do not own
     them, and they close at process exit.
