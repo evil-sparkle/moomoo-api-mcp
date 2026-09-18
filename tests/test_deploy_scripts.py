@@ -305,6 +305,12 @@ if name == "curl":
         self.assertEqual(len(headers), 1)
         self.assertEqual(headers[0][1], ["Authorization: Bearer test-only\n"])
         self.assertEqual(headers[0][2], "600")
+        # The secret file must be gone once deploy.sh exits. The EXIT trap
+        # cannot delete it after finish_deploy's scope is gone; the script
+        # must remove it itself, or it survives holding the bearer token.
+        header_args = [a for a in curls[0] if a.startswith("@")]
+        self.assertEqual(len(header_args), 1)
+        self.assertFalse(Path(header_args[0][1:]).exists())
 
     def test_env_token_parsed_with_compose_semantics(self):
         """Quoted values, whitespace, comments, CRLF: what the container gets,
@@ -372,6 +378,12 @@ if name == "curl":
         self.assertIn("Deploy verification failed", result.stderr)
         self.assertIn("MCP_AUTH_TOKEN", result.stderr)
         self.assertNotIn("Deploy verified", result.stderr)
+        # The rollback exits from inside finish_deploy, where the EXIT trap
+        # still sees header_file — this path deletes it too.
+        curls = [args for name, args, _ in self.calls() if name == "curl"]
+        header_args = [a for a in curls[0] if a.startswith("@")]
+        self.assertEqual(len(header_args), 1)
+        self.assertFalse(Path(header_args[0][1:]).exists())
 
     def test_release_tagged_commit_still_deploys_commit_tag(self):
         """A commit carrying a v* git tag still deploys under its short commit."""
