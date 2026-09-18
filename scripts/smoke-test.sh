@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
-# Run the deployed container topology and prove it works.
+# Run the deployed container and prove the recovery policy works.
 #
 # tests/test_compose_topology.py reads the compose file; it never runs it. This
-# does. It asserts what broke before: the MCP server reaches the gateway by
-# service name over trading-net, its endpoint is published by the container
-# that serves it, and restarting the gateway leaves both intact. Under the
-# previous topology — moomoo-mcp sharing OpenD's network namespace — that
-# restart stranded the MCP container in an orphaned namespace, where its
-# gateway connection was refused forever and its published port answered
-# nothing.
+# does. It asserts what the single-container design promises and what earlier
+# arrangements got wrong:
+#
+#   * the MCP server reaches the gateway over container loopback, and nothing
+#     outside the container can reach the gateway at all;
+#   * killing the gateway process restarts *the gateway*, leaving the container,
+#     the MCP endpoint and a live client session untouched;
+#   * killing the MCP server takes the whole container down, and Docker's
+#     restart policy brings it back.
+#
+# That asymmetry is the policy in moomoo_mcp/supervisor.py, and it is the part
+# packaging cannot be trusted to provide on its own: a supervisor that merely
+# backgrounded OpenD would leave a live container serving a gateway that is no
+# longer there, and Docker would never notice.
 #
 # The real gateway needs an interactive device login and Moomoo's own servers,
-# so docker-compose.smoke.yml swaps the OpenD binary for a stand-in listener.
-# It swaps nothing else: the networking under test is the deployed file's.
+# so docker-compose.smoke.yml points OPEND_BINARY at a stand-in. It swaps
+# nothing else: the image, the supervisor, the ports and the volume under test
+# are the deployed file's.
 #
 # Note the order of the checks below. Under streamable HTTP the MCP lifespan
 # runs per session, inside Server.run() — not once at process start. A freshly
@@ -20,10 +28,6 @@
 # a client sends its first request. This opens a real MCP session to provoke
 # that connection, which also means the restart assertions are made against a
 # live client rather than an idle server.
-#
-# Both containers get restarted, because both used to break a client: the
-# gateway's restart stranded the MCP server in a dead network namespace, and
-# the MCP server's restart invalidated the client's session.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -31,8 +35,10 @@ cd "$(dirname "$0")/.."
 # which under that name would take the real opend-data volume — and with it the
 # device tokens that only an interactive login can replace.
 PROJECT="moomoo-smoke"
+SERVICE="moomoo-mcp"
 ENDPOINT="http://127.0.0.1:8000/mcp"
 TOKEN="smoke-test-token-not-a-secret"
+PROBE_IMAGE="python:3.12-slim"
 
 ENV_FILE="$(mktemp)"
 # Explicit, because Compose otherwise reads whatever .env a developer has, and
@@ -47,35 +53,37 @@ dc() {
 cleanup() {
   local status=$?
   if [ "$status" -ne 0 ]; then
-    echo "--- opend ---" >&2
-    dc logs --tail=30 opend >&2 || true
-    echo "--- moomoo-mcp ---" >&2
-    dc logs --tail=30 moomoo-mcp >&2 || true
+    echo "--- ${SERVICE} ---" >&2
+    dc logs --tail=60 "$SERVICE" >&2 || true
   fi
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   rm -f "$ENV_FILE"
 }
 trap cleanup EXIT
 
-# Connections accepted by the gateway process running *now*. The stand-in
-# prints LISTENING once when it starts, so counting only what follows the most
-# recent one makes a restart reset the evidence: afterwards, anything counted
-# here necessarily reached the new gateway. Comparing raw totals across a
-# restart proved too weak — connections to the outgoing gateway pushed the
-# count up on their own, and the assertion passed without a reconnect.
-#
-# The MCP server's own SDK dialling in is the evidence that trading-net
-# resolves and routes end to end; a probe exec'd from this script would only
-# prove that this script can reach the gateway.
-gateway_connections() {
-  dc logs opend 2>/dev/null |
-    awk '/LISTENING/ { seen = 0; next } /CONNECT/ { seen++ } END { print seen + 0 }'
+# Both processes log to the same stream now, so the prefix is noise and the
+# markers below are the stand-in gateway's own.
+logs() {
+  dc logs --no-log-prefix "$SERVICE" 2>/dev/null || true
 }
 
-# One line per gateway process start, so this only increases when the container
-# has genuinely come back — never while the old one is still being shut down.
+# Connections accepted by the gateway process running *now*. The stand-in prints
+# LISTENING once when it starts, so counting only what follows the most recent
+# one makes a restart reset the evidence: afterwards, anything counted here
+# necessarily reached the new gateway process. Comparing raw totals across a
+# restart proved too weak — connections to the outgoing gateway pushed the count
+# up on their own, and the assertion passed without a reconnect.
+#
+# The MCP server's own SDK dialling in is the evidence that the two halves reach
+# each other; a probe run from this script would only prove that this script can.
+gateway_connections() {
+  logs | awk '/^LISTENING / { seen = 0; next } /^CONNECT / { seen++ } END { print seen + 0 }'
+}
+
+# One line per gateway process start, so this only increases when the gateway
+# has genuinely come back.
 gateway_starts() {
-  dc logs opend 2>/dev/null | grep -c LISTENING || true
+  logs | grep -c '^LISTENING ' || true
 }
 
 endpoint_status() {
@@ -136,13 +144,51 @@ endpoint_rejects_anonymous() {
   [ "$(endpoint_status)" = "401" ]
 }
 
-# Identity of the running MCP container. A gateway restart must not disturb it:
-# restarting the server would drop every streamable-HTTP session, which are held
-# in memory, and that is the disruption the separated namespaces exist to avoid.
-mcp_instance() {
+container_id() {
+  dc ps -q "$SERVICE"
+}
+
+# Identity *and* incarnation. A gateway restart must disturb neither: the
+# supervisor is supposed to replace one child, not let the container exit.
+# Prints "gone" while the container is between incarnations, so a caller can
+# tell "restarted" from "not back yet".
+container_instance() {
   local id
-  id="$(dc ps -q moomoo-mcp)"
-  printf '%s %s' "${id}" "$(docker inspect -f '{{.State.StartedAt}}' "${id}")"
+  id="$(container_id 2>/dev/null || true)"
+  if [ -z "${id}" ]; then
+    printf 'gone'
+    return 0
+  fi
+  printf '%s %s' "${id}" \
+    "$(docker inspect -f '{{.State.StartedAt}}' "${id}" 2>/dev/null || echo unknown)"
+}
+
+container_restarted_since() {
+  local now
+  now="$(container_instance)"
+  [ "${now}" != "gone" ] && [ "${now}" != "$1" ]
+}
+
+# Kill one process inside the container, by scanning /proc rather than reaching
+# for pgrep: the deployed image has no procps, and adding one for a test would
+# change the thing under test.
+kill_in_container() {
+  local pattern="$1"
+  dc exec -T "$SERVICE" sh -c '
+    killed=0
+    for proc in /proc/[0-9]*; do
+      pid="${proc#/proc/}"
+      # This shell carries the pattern in its own argv, and PID 1 is the
+      # supervisor. Killing either would take down the thing under test
+      # instead of the process being aimed at.
+      [ "$pid" = "$$" ] && continue
+      [ "$pid" = "1" ] && continue
+      if grep -qa "$1" "$proc/cmdline" 2>/dev/null; then
+        kill "$pid" 2>/dev/null && killed=1
+      fi
+    done
+    [ "$killed" = 1 ]
+  ' sh "$pattern"
 }
 
 wait_for() {
@@ -182,20 +228,73 @@ session="$(session_id_from "${handshake}")"
 mcp_request "${session}" '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   > /dev/null
 
-echo "==> the MCP server reaches the gateway at opend:11111"
-wait_for 120 "the MCP server to reach opend:11111" gateway_has_connections
+echo "==> the MCP server reaches the gateway at 127.0.0.1:11111"
+wait_for 120 "the MCP server to reach the gateway" gateway_has_connections
 echo "    (connections accepted by this gateway: $(gateway_connections))"
 
-# The regression itself. Everything above passed before the fix too; only this
-# part did not.
-echo "==> restarting the gateway"
-mcp_before="$(mcp_instance)"
-starts_before="$(gateway_starts)"
-dc restart opend
+# Loopback is the claim; this is what makes it one. The stand-in binds whatever
+# -api_ip it was handed, so a supervisor that widened the listener would show a
+# bridge address here instead.
+if ! logs | grep -q '^CONNECT 127\.0\.0\.1'; then
+  echo "FAILED: the gateway accepted a connection from something other than" \
+    "container loopback, so it is listening wider than it should be:" >&2
+  logs | grep '^CONNECT ' | tail -5 >&2
+  exit 1
+fi
 
-# Wait for the gateway's own start marker before judging anything, so the count
-# below is read against the new process and not the departing one.
-wait_for 60 "the gateway to come back up" gateway_restarted_since "${starts_before}"
+# The exposure this whole arrangement exists to close. Port 8000 is the control:
+# the same probe, on the same network, must reach the endpoint — otherwise a
+# refused 11111 would prove nothing but a broken probe.
+echo "==> the gateway is unreachable from another container"
+target_ip="$(docker inspect \
+  -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(container_id)")"
+if [ -z "${target_ip}" ]; then
+  echo "FAILED: could not determine the container's address to probe." >&2
+  exit 1
+fi
+network="$(docker inspect \
+  -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' \
+  "$(container_id)")"
+docker run --rm --network "${network}" "${PROBE_IMAGE}" python3 -c '
+import socket
+import sys
+
+host = sys.argv[1]
+
+
+def reachable(port):
+    probe = socket.socket()
+    probe.settimeout(5)
+    try:
+        probe.connect((host, port))
+    except OSError:
+        return False
+    finally:
+        probe.close()
+    return True
+
+
+if not reachable(8000):
+    print("FAILED: the probe cannot reach port 8000 either, so this says "
+          "nothing about 11111.")
+    sys.exit(1)
+if reachable(11111):
+    print("FAILED: the OpenD API answered another container. It has no "
+          "authentication of its own and must listen on loopback only.")
+    sys.exit(1)
+print("    (8000 reachable, 11111 refused)")
+' "${target_ip}"
+
+# The policy's first half. `docker compose restart` cannot express this: the
+# gateway *process* has to die while the container keeps running, which is
+# exactly what happens when OpenD crashes in production.
+echo "==> killing the gateway process"
+instance_before="$(container_instance)"
+starts_before="$(gateway_starts)"
+kill_in_container opend-stub
+
+echo "==> the supervisor restarts the gateway in place"
+wait_for 60 "the gateway to come back" gateway_restarted_since "${starts_before}"
 
 echo "==> the MCP server reconnects to the restarted gateway"
 wait_for 180 "the MCP server to reconnect" gateway_has_connections
@@ -207,32 +306,39 @@ wait_for 30 "the MCP endpoint to survive the gateway restart" \
 
 echo "==> the client's session survived the gateway restart"
 if ! session_still_lists_tools "${session}"; then
-  echo "FAILED: the MCP session opened before the restart no longer works, so a" \
-    "gateway restart forces every client to reconnect." >&2
+  echo "FAILED: the MCP session opened before the gateway died no longer works," \
+    "so a gateway restart forces every client to reconnect." >&2
   exit 1
 fi
 
-echo "==> the MCP server itself was left running"
-if [ "$(mcp_instance)" != "${mcp_before}" ]; then
-  echo "FAILED: restarting the gateway restarted the MCP server too, which ends" \
-    "every client session. Check depends_on in docker-compose.yml." >&2
+echo "==> the container itself was left alone"
+if [ "$(container_instance)" != "${instance_before}" ]; then
+  echo "FAILED: a dead gateway took the whole container down with it. That" \
+    "costs every client the ~30s OpenD needs to log back in, which the" \
+    "asymmetric policy in moomoo_mcp/supervisor.py exists to avoid." >&2
   exit 1
 fi
 
-# The other half of the promise. A gateway restart is the easy one: the MCP
-# server stays up and the SDK reconnects underneath it. This is the hard one —
-# the process holding the client's session is the one going away. A stateful
-# server answers the next call with 404 and the client has to initialize again,
-# which is exactly the interruption someone has to notice and fix by hand.
-echo "==> restarting the MCP server"
-dc restart moomoo-mcp
-wait_for 90 "the MCP server to come back" endpoint_rejects_anonymous
+# The policy's other half, and the failure mode packaging introduces: a child
+# that dies inside a container whose PID 1 keeps running is invisible to
+# Docker's restart policy. The supervisor has to make it visible by exiting.
+echo "==> killing the MCP server process"
+instance_before="$(container_instance)"
+# Tolerated, uniquely: this kill is meant to bring the container down, and the
+# exec can lose its own connection on the way out. Whether it worked is settled
+# by the restart assertion below, not by this exit status.
+kill_in_container moomoo_mcp.server || true
+
+echo "==> the container is replaced and comes back serving"
+wait_for 120 "the container to be restarted" \
+  container_restarted_since "${instance_before}"
+wait_for 120 "the MCP endpoint to come back" endpoint_rejects_anonymous
 
 echo "==> the client keeps calling without re-initializing"
 if ! session_still_lists_tools "${session}"; then
-  echo "FAILED: a call that worked before the MCP server restarted no longer" \
-    "does, so every client has to reconnect when it bounces." >&2
+  echo "FAILED: a call that worked before the server died no longer does, so" \
+    "every client has to reconnect when the container is replaced." >&2
   exit 1
 fi
 
-echo "PASSED: the stack survives a restart of either container."
+echo "PASSED: the gateway restarts alone, the server takes the container with it."

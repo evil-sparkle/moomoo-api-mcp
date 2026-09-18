@@ -1,15 +1,24 @@
 """Guard the container topology the deployment depends on.
 
-These assertions exist because of a specific outage shape: moomoo-mcp used to
-run inside OpenD's network namespace (``network_mode: service:opend``) and
-published port 8000 through it. Restarting the OpenD container then destroyed
-the namespace moomoo-mcp was still living in — its loopback no longer reached
-the new gateway, and the host's published port mapped into a new sandbox where
-nothing was listening. Clients lost the MCP endpoint entirely, and the SDK's
-reconnect retried forever against an address that could never answer again.
+These assertions exist because of two specific outage shapes.
 
-Nothing else in the suite would notice that regression, and CI builds the images
-without ever starting the stack, so the compose file is checked here instead.
+The first: moomoo-mcp used to run inside OpenD's network namespace
+(``network_mode: service:opend``) and published port 8000 through it. Restarting
+the OpenD container then destroyed the namespace moomoo-mcp was still living in
+— its loopback no longer reached the new gateway, and the host's published port
+mapped into a new sandbox where nothing was listening. Clients lost the MCP
+endpoint entirely, and the SDK's reconnect retried forever against an address
+that could never answer again.
+
+The second is not an outage but an exposure, and it is why the two containers
+became one: OpenD's API has no authentication, so while the gateway answered on
+``0.0.0.0:11111`` over a shared bridge, the only thing standing between it and
+anything else on that bridge was the fact that nothing else had been attached
+yet. It now listens on container loopback, where the process boundary does that
+job instead.
+
+Nothing else in the suite would notice either regression, and CI builds the
+image without ever starting the stack, so the compose file is checked here.
 ``docker compose config`` is used rather than a YAML parse so the checks run
 against Compose's own interpolation, overlay merge, and schema validation.
 """
@@ -22,6 +31,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+SERVICE = "moomoo-mcp"
+OPEND_DATA_PATH = "/home/opend/.com.moomoo.OpenD"
 
 # Any value: the prod overlay only requires that these are set (`${VAR:?}`).
 PROD_ENV = {
@@ -73,7 +85,7 @@ def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
 
 
 class ComposeTopologyTest(unittest.TestCase):
-    """The stack's two containers must be independently restartable."""
+    """One container, serving one endpoint, with the gateway behind it."""
 
     @classmethod
     def setUpClass(cls):
@@ -92,41 +104,23 @@ class ComposeTopologyTest(unittest.TestCase):
             "docker-compose.yml", "docker-compose.prod.yml", env=PROD_ENV
         )
 
-    def _service(self, name: str) -> dict:
-        self.assertIn(name, self.config["services"])
-        return self.config["services"][name]
+    def _service(self, config: dict | None = None) -> dict:
+        config = self.config if config is None else config
+        self.assertIn(SERVICE, config["services"])
+        return config["services"][SERVICE]
 
-    def test_neither_service_shares_a_network_namespace(self):
-        """The outage itself: a shared namespace dies with its owner."""
+    def test_the_stack_is_one_service(self):
+        """Two services meant two lifecycles to keep in step. There is now one."""
+        self.assertEqual(list(self.config["services"]), [SERVICE])
+
+    def test_no_service_shares_a_network_namespace(self):
+        """The original outage: a borrowed namespace dies with its owner."""
         for name, service in self.config["services"].items():
             self.assertNotIn(
                 "network_mode",
                 service,
-                f"{name} must keep its own network namespace so restarting the "
-                "other container cannot take its networking with it",
+                f"{name} must not take its networking from another container",
             )
-
-    def test_both_services_share_the_trading_net_bridge(self):
-        self.assertIn("trading-net", self.config.get("networks", {}))
-        for name in ("opend", "moomoo-mcp"):
-            self.assertIn("trading-net", self._service(name).get("networks", {}))
-
-    def test_the_bridge_is_not_internal(self):
-        """OpenD needs outbound access to reach Moomoo's servers."""
-        self.assertNotEqual(
-            self.config["networks"]["trading-net"].get("internal"), True
-        )
-
-    def test_the_mcp_endpoint_is_published_by_the_server_that_serves_it(self):
-        """Published through opend, the endpoint vanished when opend restarted."""
-        ports = self._service("moomoo-mcp").get("ports", [])
-        published = {(p.get("host_ip"), str(p.get("published"))) for p in ports}
-
-        self.assertEqual(published, {("127.0.0.1", "8000")})
-        self.assertFalse(
-            self._service("opend").get("ports"),
-            "opend must publish nothing: it no longer fronts the MCP endpoint",
-        )
 
     def test_the_gateway_port_is_never_published(self):
         """OpenD's API has no authentication of its own."""
@@ -135,75 +129,108 @@ class ComposeTopologyTest(unittest.TestCase):
                 self.assertNotIn(
                     "11111",
                     (str(port.get("published")), str(port.get("target"))),
-                    f"{name} must not expose the OpenD API beyond trading-net",
+                    f"{name} must not expose the OpenD API outside the container",
                 )
 
-    def test_the_mcp_server_reaches_the_gateway_by_service_name(self):
-        """Loopback only ever worked because the namespace was shared."""
-        environment = self._service("moomoo-mcp")["environment"]
+    def test_the_mcp_endpoint_is_published_to_host_loopback_only(self):
+        ports = self._service().get("ports", [])
+        published = {(p.get("host_ip"), str(p.get("published"))) for p in ports}
 
-        self.assertEqual(environment["MOOMOO_OPEND_HOST"], "opend")
+        self.assertEqual(published, {("127.0.0.1", "8000")})
+
+    def test_the_mcp_server_reaches_the_gateway_over_container_loopback(self):
+        """A service name here would mean the gateway is listening on a bridge."""
+        environment = self._service()["environment"]
+
+        self.assertEqual(environment["MOOMOO_OPEND_HOST"], "127.0.0.1")
         self.assertEqual(str(environment["MOOMOO_OPEND_PORT"]), "11111")
 
-    def test_the_gateway_listens_beyond_loopback(self):
-        """A gateway bound to 127.0.0.1 is unreachable from another namespace."""
-        opend = self._service("opend")
-        entrypoint = " ".join(opend.get("entrypoint", []))
+    def test_the_listener_is_not_an_operator_setting(self):
+        """`OPEND_API_IP` let a deployment widen an unauthenticated API by
+        editing .env. The supervisor pins it, and nothing here may re-open it."""
+        for name, service in self.config["services"].items():
+            self.assertNotIn(
+                "OPEND_API_IP",
+                service.get("environment", {}),
+                f"{name} must not make the gateway's listener configurable",
+            )
 
-        self.assertNotIn("-api_ip=127.0.0.1", entrypoint)
-        self.assertIn("-api_ip=$${OPEND_API_IP:-0.0.0.0}", entrypoint)
-        self.assertEqual(opend["environment"]["OPEND_API_IP"], "0.0.0.0")
+    def test_the_container_is_replaced_when_the_supervisor_gives_up(self):
+        """The recovery policy's other half lives out here: the supervisor exits
+        non-zero when a child cannot be recovered, and this is what acts on it."""
+        service = self._service()
 
-    def test_a_gateway_restart_leaves_the_mcp_server_running(self):
-        """`restart: true` here would end every client session to buy nothing.
+        self.assertEqual(service.get("restart"), "unless-stopped")
 
-        Compose restarts a dependent service whenever it restarts the
-        dependency, and MCP sessions live in the server's memory, so every
-        gateway bounce would force every client to reconnect — the very
-        disruption the separated namespaces exist to avoid. Nothing is gained
-        in exchange: the SDK re-resolves the service name on each reconnect
-        attempt, so it follows a recreated gateway to a new address on its own.
-        scripts/smoke-test.sh proves both halves against a running stack.
-        """
-        depends_on = self._service("moomoo-mcp").get("depends_on", {})
+    def test_orphan_reaping_is_configured_as_well_as_implemented(self):
+        self.assertTrue(
+            self._service().get("init"),
+            "docker-init backs up the supervisor's own reaping",
+        )
 
-        self.assertIn("opend", depends_on, "start ordering must still be declared")
-        self.assertNotEqual(depends_on["opend"].get("restart"), True)
+    def test_the_device_authorization_volume_keeps_its_path(self):
+        """A moved mount point reads as an empty directory, and OpenD would ask
+        for a fresh device authorization over SMS."""
+        targets = {v.get("target") for v in self._service().get("volumes", [])}
 
-    def test_the_smoke_overlay_leaves_the_topology_alone(self):
-        """The smoke test has to exercise the deployed networking, not its own.
+        self.assertIn(OPEND_DATA_PATH, targets)
+
+    def test_the_interactive_login_can_still_reach_a_tty(self):
+        service = self._service()
+
+        self.assertTrue(service.get("stdin_open"))
+        self.assertTrue(service.get("tty"))
+
+    def test_the_smoke_overlay_changes_only_the_gateway_binary(self):
+        """The smoke test has to exercise the deployed stack, not its own.
 
         docker-compose.smoke.yml swaps the OpenD binary for a stand-in the CI
-        runner can start. If it ever moved a network, a port or a dependency
-        too, the smoke test would be proving something about a topology nobody
-        deploys.
+        runner can start. If it ever moved a port, a volume, the restart policy
+        or the supervisor's own settings too, the smoke test would be proving
+        something about a stack nobody deploys.
         """
         smoke = _render("docker-compose.yml", "docker-compose.smoke.yml")
 
-        self.assertEqual(self.config["networks"], smoke["networks"])
-        for name in ("opend", "moomoo-mcp"):
-            deployed = self.config["services"][name]
-            stubbed = smoke["services"][name]
-            for key in ("networks", "ports", "depends_on", "environment"):
-                self.assertEqual(
-                    deployed.get(key), stubbed.get(key), f"{name}.{key} was moved"
-                )
+        deployed = self._service()
+        stubbed = self._service(smoke)
+        for key in ("ports", "volumes", "restart", "init", "build"):
+            if key == "volumes":
+                # The overlay mounts the stub in addition; the deployed mounts
+                # must all survive it.
+                deployed_targets = {v.get("target") for v in deployed.get(key, [])}
+                stubbed_targets = {v.get("target") for v in stubbed.get(key, [])}
+                self.assertTrue(deployed_targets <= stubbed_targets, "a mount was lost")
+                continue
+            self.assertEqual(deployed.get(key), stubbed.get(key), f"{key} was moved")
+
+        changed = {
+            name
+            for name in set(deployed["environment"]) | set(stubbed["environment"])
+            if deployed["environment"].get(name) != stubbed["environment"].get(name)
+        }
+        self.assertEqual(
+            changed,
+            {"OPEND_BINARY", "OPEND_RESTART_WINDOW_SECONDS"},
+            "the overlay may stand in for the gateway binary and hurry its "
+            "restarts along, and nothing else",
+        )
 
     def test_the_production_overlay_keeps_the_same_topology(self):
         """The VPS runs the overlay, so its merge is what actually deploys."""
-        for name in ("opend", "moomoo-mcp"):
-            service = self.prod["services"][name]
-            self.assertNotIn("network_mode", service)
-            self.assertIn("trading-net", service.get("networks", {}))
-            self.assertTrue(service.get("image"), f"{name} must run a built image")
+        service = self._service(self.prod)
 
-        self.assertFalse(self.prod["services"]["opend"].get("ports"))
+        self.assertNotIn("network_mode", service)
+        self.assertTrue(service.get("image"), "the deployment must run a built image")
+        self.assertEqual(service.get("restart"), "unless-stopped")
         self.assertEqual(
             [
                 (p.get("host_ip"), str(p.get("published")))
-                for p in self.prod["services"]["moomoo-mcp"].get("ports", [])
+                for p in service.get("ports", [])
             ],
             [("127.0.0.1", "8000")],
+        )
+        self.assertIn(
+            OPEND_DATA_PATH, {v.get("target") for v in service.get("volumes", [])}
         )
 
 

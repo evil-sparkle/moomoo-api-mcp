@@ -22,7 +22,15 @@ third closes.
 **Goals**
 
 - OpenD's API reachable only from inside its own container.
-- No dependence on `-api_ip`, a flag never verified against a real OpenD build.
+- No *dependence* on `-api_ip`, a flag never verified against a real OpenD
+  build. Implementation note: the flag is still passed, pinned to `127.0.0.1`.
+  Dropping it entirely (as `tasks.md` first proposed) would have swapped a
+  dependence on the flag for a dependence on OpenD's default being loopback,
+  which is equally unverified here. Pinning it means the gateway ends up on
+  loopback whether OpenD honours the flag or ignores it — where the old
+  `0.0.0.0` needed the flag to work in order to be reachable at all. What is
+  retired is the `OPEND_API_IP` setting: the value is no longer a deployment's
+  to choose.
 - Keep the deployed property that an OpenD restart costs a live client nothing.
 - One deployable unit: one image, one service, one restart policy.
 

@@ -44,6 +44,10 @@ dependencies = [
 
 [project.scripts]
 moomoo-api-mcp = "moomoo_mcp.server:main"
+# Container entry point: owns both the gateway and the server (see
+# moomoo_mcp/supervisor.py). Running the server alone stays the default
+# for anyone pointing an MCP client at a gateway they already run.
+moomoo-api-mcp-supervisor = "moomoo_mcp.supervisor:main"
 
 [project.optional-dependencies]
 dev = [
