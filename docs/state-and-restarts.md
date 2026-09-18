@@ -146,8 +146,10 @@ taking the gateway's API off the network, and it is worth knowing before a
 deploy rather than during one.
 
 What stateless gives up is state this server does not keep: no resumable event
-stream, and no server-initiated notifications outside a request. Logging
-notifications emitted during a tool call still ride that call's own response.
+stream, and no server-initiated notifications outside a request. Responses are
+also plain JSON (`json_response=True`, for clients that only read JSON), so
+logging notifications a tool emits during a call are dropped rather than
+delivered on that call's response.
 This applies to the Streamable HTTP transport when configured statelessly; `MCP_TRANSPORT=sse` is unchanged.
 
 ## Why the gateway connections belong to the process

@@ -253,13 +253,16 @@ mcp = FastMCP(
     # and treats each request as initialized, so a restart costs a client one
     # failed call rather than its session. What it gives up is state this
     # server does not keep: no resumable event stream and no server-initiated
-    # notifications outside a request (the logging notifications tools emit
-    # during a call still ride that call's own response).
+    # notifications outside a request.
     #
     # Viable only because the gateway connections are no longer built per
     # lifespan — see app_lifespan. Reverting that would open a pair of OpenD
     # connections per tool call.
     stateless_http=True,
+    # One JSON body per request instead of an SSE stream, for clients that only
+    # read JSON (zeroclaw). The SDK then answers with the result alone and drops
+    # every notification a tool emits during the call, so ctx.info / ctx.warning
+    # never reach an HTTP client; anything a caller needs belongs in the result.
     json_response=True,
     host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("FASTMCP_PORT", "8000")),
