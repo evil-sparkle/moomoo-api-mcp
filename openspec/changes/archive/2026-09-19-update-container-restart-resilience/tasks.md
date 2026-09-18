@@ -33,7 +33,7 @@
 
 ## 2. Apply (after approval; documentation only)
 
-- [ ] 2.1 `openspec validate update-container-restart-resilience --strict
+- [x] 2.1 `openspec validate update-container-restart-resilience --strict
       --no-interactive` passes. It passes today with the pinned CLI
       (`@fission-ai/openspec` 1.13.1); CI's `openspec` job runs the `--all`
       form on every push.
@@ -42,10 +42,10 @@
       gateway-restart requirement defers to. Done on 2026-09-19, after its
       verification items (2.6, 6.2, 6.3) passed on the live deployment:
       `changes/archive/2026-09-19-refactor-single-container-deployment`.
-- [ ] 2.3 Archive with `openspec archive update-container-restart-resilience
+- [x] 2.3 Archive with `openspec archive update-container-restart-resilience
       --yes`, in a separate PR, updating `container-deployment`,
       `trade-unlock` and creating `transport-sessions`.
-- [ ] 2.4 `openspec validate --all --strict --no-interactive` passes after the
+- [x] 2.4 `openspec validate --all --strict --no-interactive` passes after the
       archive.
 
 No code, configuration or deployment step belongs in this change.
