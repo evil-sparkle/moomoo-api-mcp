@@ -7,7 +7,7 @@ read as if it covered the MCP transport.
 
 | State | Owner | Lifetime | Survives gateway restart | Survives MCP restart | Spec home |
 | --- | --- | --- | --- | --- | --- |
-| OpenD device authorization, remembered login | `opend-data` volume | until `down -v` | yes | yes | `container-deployment` › Session State Persistence (being modified by `refactor-single-container-deployment`; untouched here) |
+| OpenD device authorization, remembered login | `opend-data` volume | until `down -v` | yes | yes | `container-deployment` › Session State Persistence (as modified by the archived `refactor-single-container-deployment`; untouched here) |
 | OpenD live broker login | OpenD process | OpenD process | no, re-logs in (~30s) | no: an MCP exit restarts the whole container, gateway included | none; observed only |
 | OpenD unlock state | OpenD process, plus the SDK's cached copy in the MCP process | see § Reconnect replay | no, returns locked unless the SDK replays an unlock | no: the restarted gateway starts locked | `trade-unlock` |
 | MCP transport session | nobody: stateless | none | n/a | n/a | `transport-sessions` (new) |
@@ -125,12 +125,17 @@ processes for the supervisor. **smoke**: `scripts/smoke-test.sh` against the
 deployed single-container image, with the OpenD binary replaced by
 `tests/fixtures/opend_stub.py`, a TCP stand-in that accepts connections and
 speaks no OpenD protocol. **manual**: measured by hand once, per the commit
-message, not automated. **code**: follows from reading the code; no test.
+message, not automated. **live**: observed on the production deployment
+against the real OpenD and broker, in READ_ONLY mode, on 2026-09-18 (recorded
+in the archived `refactor-single-container-deployment` tasks 2.6, 6.2, 6.3); one-off
+observations, not automated. **code**: follows from reading the code; no test.
 **gap**: not demonstrated anywhere.
 
-Nothing here has been exercised against a live broker. The stand-in gateway
-proves networking and process-restart policy only, not login, subscription
-restoration, unlock state or order outcomes.
+Apart from the **live** entries, nothing here has been exercised against a live
+broker. The stand-in gateway proves networking and process-restart policy only,
+not login, subscription restoration, unlock state or order outcomes. The live
+runs covered operator stops, restarts and recreation, never a killed process,
+and never SIMULATE or REAL mode.
 
 These tables were refreshed against `main` at `42d884b`, after PR #9 replaced
 the two-container stack. The originals were drafted at `ef4acc4` against that
@@ -157,7 +162,7 @@ tests container recreation or redeployment.
 | Gateway restart › access resumes | SDK reconnect over `127.0.0.1:11111` | **smoke**: new TCP connections reach the restarted stand-in (`:356-358`). **gap**: no gateway-backed call after the restart; no real login |
 | Gateway restart › health reports absence | `services/health.py` | **unit** `test_health.py` (status mapping); **gap** during a real restart |
 | MCP restart › no re-initialization | `server.py:262` `stateless_http=True` | **smoke** `smoke-test.sh:381-398` (MCP process killed, container restarted, `tools/list` without re-initializing) |
-| MCP restart › connections reopened on demand | `server.py:197-207` `get_services` | **unit** `test_sessions_share_one_set_of_connections`; **gap**: smoke does not check the gateway after the container restarts |
+| MCP restart › connections reopened on demand | `server.py:197-207` `get_services` | **unit** `test_sessions_share_one_set_of_connections`; **live**: after four container restarts (one `compose restart`, three `stop`/`up`), the first request opened fresh connections and `check_health` reported quote and trade `ok`; **gap**: smoke does not check the gateway after the container restarts |
 | No replay › overlapping request may fail | bounded waits: `health.py:34` (3s), `trade_service.py:36` (5s) | permissive; nothing to prove |
 | No replay › SDK replays connection state only | `trade_service.py:286-293`; SDK lines 37-55 | **unit** `test_the_sdk_reconnect_work_still_runs_and_is_reported`; order non-replay: **code** |
 | No replay › lost order response | no retry around order calls in `trade_service.py` | **code**; **gap** live |
@@ -166,7 +171,7 @@ tests container recreation or redeployment.
 
 | Requirement › scenario | Carried by | Evidence |
 | --- | --- | --- |
-| Read-only lock › on initial connection | `trade_service.py:268` | **unit** `test_connecting_locks_the_gateway` |
+| Read-only lock › on initial connection | `trade_service.py:268` | **unit** `test_connecting_locks_the_gateway`; **live**: `Locked trade gateway after connecting (READ_ONLY mode)` on every start, including once where the trade connection was published late by the background worker |
 | Read-only lock › after SDK reconnect | `trade_service.py:288-291` | **unit** `test_reconnecting_locks_the_gateway_again`, `test_the_sdk_reconnect_work_still_runs_and_is_reported`, `test_the_real_sdk_class_allows_the_hook` (real SDK class); **gap** against a live gateway |
 | Read-only lock › refused lock reported | `trade_service.py:309-314` | **unit** `test_a_refused_lock_does_not_break_the_reconnect` (reconnect path); connect path shares the function: **code** |
 | Read-only lock › writes and unlocks refused | `trading_policy.py` `check_write`, `check_unlock` | **unit** `test_read_only_refuses_every_write_tool` (asserts no SDK call), `TestWriteMatrix`, `test_unlock_permission_follows_mode` |
@@ -186,7 +191,7 @@ tests container recreation or redeployment.
 | Requirement › scenario | Carried by | Evidence |
 | --- | --- | --- |
 | Stateless › no session id issued | `server.py:262` | **manual** (`f6d8a92`). **gap**: the smoke test reads an id if one is issued and accepts either (`smoke-test.sh:113-124`), so it never asserts that none is. The `ef4acc4` table overstated this. No unit test pins `stateless_http=True` |
-| Stateless › no prior initialize needed | `server.py:262` | **smoke** `smoke-test.sh:392-398` (after the container restarts); **manual** (`f6d8a92`) |
+| Stateless › no prior initialize needed | `server.py:262` | **smoke** `smoke-test.sh:392-398` (after the container restarts); **live**: every `tools/call` was sent to a fresh process with no `initialize`; **manual** (`f6d8a92`) |
 | Stateless › foreign session id ignored | `server.py:262` | **manual** only (`f6d8a92`); smoke never sends one because none is issued |
 | Stateless › session id is not authentication | `server.py:29-46` per-request middleware | **unit** `test_streamable_http_app_rejects_missing_auth_token`; the with-session-id case: **code** |
 | Stateless › notifications ride the call | MCP SDK stateless mode | **manual** (`f6d8a92`) |
@@ -194,7 +199,7 @@ tests container recreation or redeployment.
 | Process-owned › shared across requests and clients | `server.py:121-207` | **unit** `test_sessions_share_one_set_of_connections` (lifespan level); **manual**: one gateway connection per process (`f6d8a92`) |
 | Process-owned › ending a session leaves them open | same | **unit**, same test (`close` not called) |
 | Process-owned › released once at exit | `server.py:206, 210-220` | **unit** `test_shutdown_is_idempotent` |
-| Process-owned › unreachable gateway | `server.py:157-170` | **unit** `test_startup_survives_total_gateway_failure`; `test_event_loop.py:112` |
+| Process-owned › unreachable gateway | `server.py:157-170` | **unit** `test_startup_survives_total_gateway_failure`; `test_event_loop.py:112`; **live**: a request that arrived while OpenD was still logging in got `check_health` = `disconnected` (quote `Connect timeout`, trade `not_initialized`) instead of an error, and the trade connection was published and locked moments later in the same process |
 
 ## Risks / Trade-offs
 

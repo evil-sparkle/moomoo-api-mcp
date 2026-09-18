@@ -4,12 +4,12 @@ Checked items were implemented and verified as stated. Items left unchecked
 carry the reason; several cannot be done from a machine without a Docker
 daemon and are marked so rather than assumed.
 
-**Status:** implemented on `main` (PR #9, merged 2026-09-18). CI builds the
-image and passes the smoke test, which runs a stub in place of OpenD. Not
-archived yet: 2.6, 6.2 and 6.3 need the real binary and the real deployment,
-and nothing in CI stands in for them. Archive this change before
-`update-container-restart-resilience`, whose gateway-restart requirement
-defers to `Paired Process Supervision` below.
+**Status:** implemented on `main` (PR #9, merged 2026-09-18) and verified on
+the real deployment on 2026-09-18 (2.6, 6.2, 6.3 below). CI builds the image and
+passes the smoke test, which runs a stub in place of OpenD; the live checks are
+what cover the real binary. Every task is done, so this change is ready to
+archive. Archive it before `update-container-restart-resilience`, whose
+gateway-restart requirement defers to `Paired Process Supervision` below.
 
 1. **Write the supervisor, tests first**
    - [x] 1.1 `tests/test_supervisor.py` covers the policy in `design.md` against
@@ -41,10 +41,14 @@ defers to `Paired Process Supervision` below.
    - [x] 2.4 `CMD` is the supervisor; `EXPOSE 8000` only.
    - [x] 2.5 `Dockerfile.opend` deleted, along with its `.dockerignore` entry and
      its CI matrix entry.
-   - [ ] 2.6 **Not done — needs a Docker daemon.** Confirm the built image
-     actually runs OpenD: shared libraries resolve and the binary starts. This
-     is the merge's real risk, it is not covered by CI (which stands the binary
-     in with a stub), and it should be checked before 6.2.
+   - [x] 2.6 Verified on the VPS, 2026-09-18, with the CI-published images
+     for `6d0fa91` and `9c29f6b` (identical image inputs). The real
+     moomoo OpenD 10.10.7008 starts under the supervisor, logs in, reports
+     `API Listening Address: 127.0.0.1:11111`, and serves both halves:
+     `check_health` returns `connected` with quote and trade `ok`, and
+     `get_accounts` succeeds. `API RSA Enabled: No` with a working trade call
+     confirms trade over loopback needs no protocol encryption, which the
+     cross-container arrangement did.
 
 3. **Move the OpenD launch logic into the supervisor**
    - [x] 3.1 Every login branch from the compose entrypoint — interactive,
@@ -99,12 +103,20 @@ defers to `Paired Process Supervision` below.
      verify one image. The `moomoo-opend` ECR repository is left in place until
      the last two-container image stops being a rollback target, then deleted —
      recorded in `docs/deploy-vps.md`.
-   - [ ] 6.2 **Not done — needs the real deployment.** Confirm an existing
-     `opend-data` volume is read without a new device authorization, with the
-     interactive re-login path ready. Do 2.6 first.
-   - [ ] 6.3 **Not done — needs a Docker daemon.** Measure the stop time against
-     the ~10s the server takes today, rather than assuming this changed it
-     either way.
+   - [x] 6.2 Verified on the VPS, 2026-09-18. The `opend-data` volume was
+     created on 2026-09-11 by the two-container stack; the first
+     single-container start read it and logged in with the remembered password,
+     no device-verification prompt. The same held for every later start: a
+     recreation from a new image (`deploy.sh` to `9c29f6b`), a `compose
+     restart`, and three `stop`/`up` cycles. The interactive path was not
+     needed.
+   - [x] 6.3 Measured on the VPS, 2026-09-18, with OpenD logged in: `compose
+     stop` took 0.82s, 0.93s and 1.06s, exit code 0 each time. The supervisor
+     signalled both children within 5ms of SIGTERM and none needed SIGKILL, so
+     the 10s supervisor bound and Docker's 10s grace period were never
+     approached. The ~10s stop the two-container server showed in CI does not
+     reproduce here; its cause is still unexplained (`docs/state-and-restarts.md`
+     § Known gaps). Measured, not assumed.
 
 7. **Documentation**
    - [x] 7.1 `docs/state-and-restarts.md`: topology redrawn, the state table and
