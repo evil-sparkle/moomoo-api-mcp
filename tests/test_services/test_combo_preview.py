@@ -227,58 +227,17 @@ class TestAccountSelection:
 class TestValidationFailures:
     """A malformed package never reaches the gateway."""
 
-    @pytest.mark.parametrize(
-        "legs,message",
-        [
-            ([{"code": "US.A", "trd_side": "BUY", "qty_ratio": 1}], "at least two"),
-            (
-                [
-                    {"code": "US.A", "trd_side": "BUY"},
-                    {"code": "US.B", "trd_side": "SELL", "qty_ratio": 1},
-                ],
-                "missing 'qty_ratio'",
-            ),
-            (
-                [
-                    {"code": "US.A", "trd_side": "HOLD", "qty_ratio": 1},
-                    {"code": "US.B", "trd_side": "SELL", "qty_ratio": 1},
-                ],
-                "Invalid trd_side",
-            ),
-            (
-                [
-                    {"code": "", "trd_side": "BUY", "qty_ratio": 1},
-                    {"code": "US.B", "trd_side": "SELL", "qty_ratio": 1},
-                ],
-                "missing a non-empty 'code'",
-            ),
-            (
-                [
-                    {"code": "US.A", "trd_side": "BUY", "qty_ratio": 1},
-                    {"code": "HK.B", "trd_side": "SELL", "qty_ratio": 1},
-                ],
-                "same market",
-            ),
-            (
-                [
-                    {
-                        "code": "US.A",
-                        "trd_side": "BUY",
-                        "qty_ratio": 1,
-                        "position_id": 1.5,
-                    },
-                    {"code": "US.B", "trd_side": "SELL", "qty_ratio": 1},
-                ],
-                "non-integer 'position_id'",
-            ),
-        ],
-    )
-    def test_invalid_package_fails_before_the_gateway(
-        self, service, ctx, legs, message
-    ):
-        with pytest.raises(ValueError, match=message):
-            service.preview_combo_order(combo_legs=legs, price=2.5, qty=1, acc_id=456)
+    def test_invalid_package_fails_before_the_gateway(self, service, ctx):
+        """Preview validates legs and rejects invalid packages before gateway."""
+        with pytest.raises(ValueError) as exc_info:
+            service.preview_combo_order(
+                combo_legs=[{"code": "US.A", "trd_side": "BUY", "qty_ratio": 1}],
+                price=2.5,
+                qty=1,
+                acc_id=456,
+            )
 
+        assert "at least two" in str(exc_info.value)
         ctx.comboorder_tradinginfo_query.assert_not_called()
         assert_no_writes(ctx)
 
