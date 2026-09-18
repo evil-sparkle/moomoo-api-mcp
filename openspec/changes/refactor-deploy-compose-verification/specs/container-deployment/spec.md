@@ -93,8 +93,10 @@ trading readiness.
 - **WHEN** the response is validated
 - **THEN** `protocolVersion`, `capabilities` and `serverInfo` SHALL be
   required inside the result object with appropriate types
-- **AND** `protocolVersion` SHALL be required to be a supported protocol
-  version
+- **AND** `protocolVersion` SHALL be required to be one of the protocol
+  versions MCP has issued for the initialize lifecycle
+- **AND** a protocol version from a revision without the initialize
+  exchange, or one MCP has never issued, SHALL NOT pass
 - **AND** the same field names appearing outside a result object SHALL NOT
   pass validation
 

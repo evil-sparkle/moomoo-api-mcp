@@ -384,21 +384,37 @@ class ProbeTest(unittest.TestCase):
                 self.assertNotIn("completed an MCP initialize", output)
 
     def test_the_protocol_version_must_be_a_supported_one(self):
-        """A version is a date string MCP has issued, not any nonempty string.
+        """A version is one MCP issued for the initialize lifecycle, not a date.
 
-        `2024-11-05` is a real negotiated version from before this server
-        existed; a probe must accept a healthy server speaking an older
-        supported version. `banana`, a misformatted date and non-ASCII
-        digits are not versions, and neither is a number.
+        `2024-11-05` and `2025-11-25` are real handshake versions from before
+        and after this server; a probe must accept a healthy server speaking
+        any of them. `2026-07-28` is a real revision that *removed* the
+        initialize exchange, so an initialize response claiming it is
+        semantically impossible and must not verify; `9999-99-99` and
+        `2025-13-40` are date-shaped strings MCP never issued; `banana`, a
+        misformatted date, non-ASCII digits and a number are not versions.
         """
-        older = dict(VALID_RESULT)
-        older["result"] = dict(VALID_RESULT["result"], protocolVersion="2024-11-05")
-        with ScriptedServer([json_reply(older)]) as server:
-            verified, output = run_verify(server.url)
-            self.assertTrue(verified, output)
+        for version in sorted(deploy_verify.HANDSHAKE_PROTOCOL_VERSIONS):
+            with self.subTest(accepts=version):
+                accepted = dict(VALID_RESULT)
+                accepted["result"] = dict(
+                    VALID_RESULT["result"], protocolVersion=version
+                )
+                with ScriptedServer([json_reply(accepted)]) as server:
+                    verified, output = run_verify(server.url)
+                    self.assertTrue(verified, output)
 
-        for version in ("banana", "", "2025-6-18", "٢٠٢٥-٠٦-١٨", 20250618):
-            with self.subTest(version=version):
+        for version in (
+            "2026-07-28",
+            "9999-99-99",
+            "2025-13-40",
+            "banana",
+            "",
+            "2025-6-18",
+            "٢٠٢٥-٠٦-١٨",
+            20250618,
+        ):
+            with self.subTest(rejects=version):
                 invalid = dict(VALID_RESULT)
                 invalid["result"] = dict(
                     VALID_RESULT["result"], protocolVersion=version

@@ -74,10 +74,12 @@ mandatory `compose-agreement` CI job, which never skips.
      is what proves the transport check, since parsing added while ignoring
      the exit status would leave only that case broken — plus a complete SSE
      event over an incomplete transfer.
-   - [x] 4.3 `protocolVersion` must be a supported version (an MCP date
-     string, e.g. `2024-11-05` verifies, `"banana"` does not), with
-     `protocolVersion`, `capabilities` and `serverInfo` validated inside the
-     result object only.
+   - [x] 4.3 `protocolVersion` must be one of the protocol versions MCP has
+     issued for the initialize lifecycle — an explicit allowlist, not a date
+     format: `2025-11-25` verifies, and `2026-07-28` (the revision that
+     removed the initialize exchange), `9999-99-99` and `2025-13-40` do not —
+     with `protocolVersion`, `capabilities` and `serverInfo` validated
+     inside the result object only.
    - [x] 4.4 Duplicate assignments including empty ones, against real
      Compose in the container-agreement cases: empty-then-token resolves to
      the token; token-then-empty preserves the resolved empty value (probe

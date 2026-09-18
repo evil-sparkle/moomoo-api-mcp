@@ -55,9 +55,9 @@ Successful curl transfer (exit 0)
     AND HTTP 200
     AND a complete JSON response or a complete SSE response event
     AND JSON-RPC 2.0 with the matching request id
-    AND a structurally valid initialize result: protocolVersion (a
-        supported version), capabilities and serverInfo inside the
-        result object, with the right types
+    AND a structurally valid initialize result: protocolVersion (one of
+        the known handshake versions), capabilities and serverInfo
+        inside the result object, with the right types
     AND no JSON-RPC error in that response
 ```
 
@@ -79,9 +79,16 @@ the Streamable HTTP transport the probe speaks to. A string request id means
 a response with id `1` or `true` cannot compare equal to it. The fields are
 required *inside the result object*, where the MCP lifecycle puts them — the
 same names appearing elsewhere in the response do not pass — and
-`protocolVersion` must be a supported protocol version (MCP versions are
-`YYYY-MM-DD` date strings), so an older-but-real version such as
-`2024-11-05` verifies while `"banana"` or a misformatted date does not.
+`protocolVersion` must be one of the protocol versions MCP has issued for
+the initialize lifecycle: an explicit allowlist (`2024-11-05`,
+`2025-03-26`, `2025-06-18`, `2025-11-25`), not a date format. A
+date-shaped string MCP never issued (`9999-99-99`, `2025-13-40`) does not
+pass, and neither does `2026-07-28`: that revision removed the
+initialize/initialized exchange for a stateless lifecycle, so an initialize
+*response* claiming it is semantically impossible. The allowlist also makes
+a future MCP upgrade an intentional deploy change — a server speaking a
+version not yet listed fails verification by name, rather than being
+silently accepted under an unknown protocol.
 
 For SSE, a complete response event followed by a *cleanly completed*
 transfer is required: a complete event inside a transfer curl exits nonzero
