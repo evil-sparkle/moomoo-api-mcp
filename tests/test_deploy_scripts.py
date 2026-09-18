@@ -1,8 +1,7 @@
 """Exercise deployment in disposable Git repos, with no AWS or Docker access.
 
 Docker and curl are stubs here, so these tests cover what deploy.sh decides:
-ordering, rollback, re-execution. What Compose resolves, and whether the probe
-sends what the container received, is tests/test_compose_config_resolution.py.
+ordering, rollback, re-execution.
 """
 
 import json

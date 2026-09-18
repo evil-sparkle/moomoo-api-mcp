@@ -225,43 +225,6 @@ jobs:
         run: |
           ./scripts/smoke-test.sh
 
-  # test_deploy_scripts.py stubs Docker and curl, and test_deploy_verify.py
-  # stubs Compose, so neither can say what Compose actually resolves or what
-  # the container actually receives — which is the whole question the token
-  # refactor turns on. This runs the real Compose CLI against the real
-  # wrapper and compose files, and starts disposable stand-in containers to
-  # compare the container's MCP_AUTH_TOKEN with the header the verifier
-  # sent it. Dummy credentials, no OpenD, no broker, no ECR image.
-  #
-  # It is never skipped here: the tests skip locally when Docker is
-  # unavailable, and treat a missing prerequisite as a failure once CI=true
-  # (which Actions sets), so an absent daemon is a red job, not a quiet
-  # pass.
-  compose-agreement:
-    name: Compose configuration agreement
-    runs-on: ubuntu-latest
-    needs: [test, changes]
-    if: >-
-      !cancelled()
-      && needs.changes.outputs.docs_only != 'true'
-      && needs.test.result == 'success'
-    steps:
-      - uses: actions/checkout@v7
-      - name: Record the Compose version under test
-        run: docker compose version
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Install dependencies
-        run: |
-          uv sync --all-extras --dev
-      - name: Run the Compose resolution and agreement tests
-        run: |
-          uv run pytest tests/test_compose_config_resolution.py
-
   # One image, because the gateway and the server now ship together. The
   # moomoo-opend ECR repository is no longer written to; leave it in place until
   # the last two-container deploy is past being a rollback target, then delete

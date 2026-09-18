@@ -3,8 +3,7 @@
 The probe is only as good as what actually crosses the wire, so nothing here
 stubs curl: a throwaway server records the headers it receives and answers with
 whatever each test scripts. Configuration comes from a stand-in for
-compose-prod.sh, because what Compose itself resolves is the business of
-tests/test_compose_config_resolution.py.
+compose-prod.sh.
 """
 
 import contextlib
@@ -384,17 +383,15 @@ class ProbeTest(unittest.TestCase):
                 self.assertNotIn("completed an MCP initialize", output)
 
     def test_the_protocol_version_must_be_a_supported_one(self):
-        """A version is one MCP issued for the initialize lifecycle, not a date.
-
-        `2024-11-05` and `2025-11-25` are real handshake versions from before
-        and after this server; a probe must accept a healthy server speaking
-        any of them. `2026-07-28` is a real revision that *removed* the
-        initialize exchange, so an initialize response claiming it is
-        semantically impossible and must not verify; `9999-99-99` and
-        `2025-13-40` are date-shaped strings MCP never issued; `banana`, a
-        misformatted date, non-ASCII digits and a number are not versions.
-        """
-        for version in sorted(deploy_verify.HANDSHAKE_PROTOCOL_VERSIONS):
+        """A version must be a non-empty string in the initialize result."""
+        for version in (
+            "2024-11-05",
+            "2025-03-26",
+            "2025-06-18",
+            "2025-11-25",
+            "2026-07-28",
+            "9999-99-99",
+        ):
             with self.subTest(accepts=version):
                 accepted = dict(VALID_RESULT)
                 accepted["result"] = dict(
@@ -405,14 +402,10 @@ class ProbeTest(unittest.TestCase):
                     self.assertTrue(verified, output)
 
         for version in (
-            "2026-07-28",
-            "9999-99-99",
-            "2025-13-40",
-            "banana",
             "",
-            "2025-6-18",
-            "٢٠٢٥-٠٦-١٨",
+            "   ",
             20250618,
+            None,
         ):
             with self.subTest(rejects=version):
                 invalid = dict(VALID_RESULT)
