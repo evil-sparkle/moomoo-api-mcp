@@ -222,16 +222,16 @@ and the host's filesystem permissions, not on cryptography in this repository.
 Things believed but not proven, and things left undone. Kept here so they are
 not rediscovered from scratch.
 
-- **The merged image has never run the real OpenD.** CI stands the binary in
-  with a stub, so what has been proven is the supervision policy and the
-  networking, not that an Ubuntu 18.04 build of OpenD starts under this image's
-  libraries. It is the same base the previous OpenD image used, which is why it
-  was chosen, but "same base" is an argument, not a test. Confirm on the next
-  deploy that OpenD reports login and `check_health` reaches `connected`.
-- **`-api_ip` is still unverified against the real OpenD**, but it now fails
-  safe. It is pinned to `127.0.0.1`, which is also OpenD's documented default,
-  so the gateway ends up on loopback whether the flag is honoured or ignored —
-  where the old `0.0.0.0` depended on the flag working to be reachable at all.
+- **Crash recovery is proven against CI's stub only.** The real OpenD has now
+  run in this image on the VPS (2026-09-18): it logs in with the remembered
+  token from the existing volume, reports `API Listening Address:
+  127.0.0.1:11111`, and `check_health` reaches `connected` with quote and trade
+  both `ok`. Operator stops and restarts were exercised there too. What has not
+  been done live is killing a process: the real OpenD, to watch the supervisor
+  restart it in place, or the MCP server, to watch the container restart.
+- **Whether OpenD honours `-api_ip` or merely defaults to loopback is still
+  unknown**, and no longer matters: the real gateway reports that it listens
+  on `127.0.0.1:11111`, which is the property the deployment depends on.
 - **Whether OpenD's unlock is gateway-wide or per-connection is unconfirmed.**
   The SDK points at gateway-wide — the unlock request carries no connection
   scoping, and OpenD can answer a later unlock with "already unlocked" — but
@@ -242,15 +242,13 @@ not rediscovered from scratch.
   log in, so a cold start routinely misses it. Impact is limited because each
   REAL order performs its own just-in-time unlock. Fixing it needs the trade PIN
   available to CI as a repository secret.
-- **The MCP server takes ~10s to stop** in CI, which looks like the stop grace
-  period expiring into a SIGKILL. Not reproduced outside the container: the
-  process exits in under a second as an ordinary process, as PID 1 of its own
-  namespace, and with an abandoned SSE stream open. No root cause yet. It costs
-  correctness nothing and makes every restart slower than it should be.
-
-  The supervisor now sits between it and Docker, which changes who waits for
-  whom but not the underlying cause: `SUPERVISOR_STOP_TIMEOUT_SECONDS` bounds
-  how long the supervisor waits before SIGKILL, and Docker's own grace period
-  bounds the supervisor. Whether the merged container stops faster, slower or
-  the same has not been measured — do that on the next deploy rather than
-  assuming this change fixed or worsened it.
+- **The old ~10s stop was never explained.** The two-container MCP server took
+  ~10s to stop in CI, which looked like the stop grace period expiring into a
+  SIGKILL, and it was not reproduced outside the container. Under the
+  supervisor it does not happen on the VPS: `compose stop` takes about a second
+  with OpenD logged in, exit code 0, and nothing needs SIGKILL (measured
+  2026-09-18). It has not been re-measured in CI, and the original cause is
+  still unknown. If it comes back, note that `SUPERVISOR_STOP_TIMEOUT_SECONDS`
+  and Docker's stop grace period are both 10s by default, so a child that
+  ignores SIGTERM for that long gets the supervisor itself killed (exit 137)
+  before its own SIGKILL escalation runs.
