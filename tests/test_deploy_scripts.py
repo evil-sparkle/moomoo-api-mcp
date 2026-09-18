@@ -123,7 +123,7 @@ if name == "curl":
         print("000")
         sys.exit(7)
     else:
-        print("200")
+        print(os.environ.get("CURL_TEST_STATUS", "200"))
 """
         for name in ("aws", "docker", "curl"):
             path = self.bin / name
@@ -254,14 +254,44 @@ if name == "curl":
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Deploy verified", result.stderr)
         docker = [args for name, args, _ in self.calls() if name == "docker"]
-        self.assertEqual(len(docker), 4)
+        self.assertEqual(len(docker), 3)
         self.assertEqual(docker[0][-1], "pull")
         self.assertEqual(docker[1][-3:], ["up", "-d", "--remove-orphans"])
-        self.assertIn("ps", docker[2])
-        self.assertIn("--status", docker[2])
-        self.assertIn("running", docker[2])
-        self.assertIn("--services", docker[2])
-        self.assertIn("logs", docker[3])
+        self.assertIn("logs", docker[2])
+        self.assertIn("moomoo-mcp", docker[2])
+
+    def test_verification_probes_as_an_authenticated_mcp_client(self):
+        """The verify probe sends the .env bearer token and an MCP initialize.
+
+        A bare GET answers 401 under bearer auth, which was the last log line
+        after every successful deploy and read like a failure. Probing as a
+        client reads honestly in the access log (POST /mcp 200) and lets a
+        token mismatch fail the deploy instead of decorating a success.
+        """
+        result = self.deploy(self.commit)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        curls = [args for name, args, _ in self.calls() if name == "curl"]
+        self.assertEqual(len(curls), 1)
+        args = curls[0]
+        self.assertIn("Authorization: Bearer test-only", args)
+        self.assertIn("Content-Type: application/json", args)
+        self.assertIn("Accept: application/json, text/event-stream", args)
+        bodies = [args[i + 1] for i, a in enumerate(args) if a == "-d"]
+        self.assertEqual(len(bodies), 1)
+        self.assertIn('"method":"initialize"', bodies[0])
+
+    def test_auth_refusal_fails_the_deploy_instead_of_passing(self):
+        """A 401 from the endpoint must not print "Deploy verified".
+
+        The server is up but refusing the token clients will send; the deploy
+        names MCP_AUTH_TOKEN as the thing to check and rolls back.
+        """
+        self.env["CURL_TEST_STATUS"] = "401"
+        result = self.deploy(self.commit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Deploy verification failed", result.stderr)
+        self.assertIn("MCP_AUTH_TOKEN", result.stderr)
+        self.assertNotIn("Deploy verified", result.stderr)
 
     def test_release_tagged_commit_still_deploys_commit_tag(self):
         """A commit carrying a v* git tag still deploys under its short commit."""

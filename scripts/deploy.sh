@@ -31,6 +31,17 @@ if [ "$dkr.$ecr.$domain.$suffix" != 'dkr.ecr.amazonaws.com' ] || [ -n "${extra:-
   echo 'ECR_REGISTRY must be a private ECR registry hostname.' >&2
   exit 1
 fi
+# The token the server is started with, so the verification probe can
+# authenticate the way a real client does. Only ever sent as a header, never
+# echoed; the parsing mirrors the ECR_REGISTRY block above.
+mcp_auth_token="${MCP_AUTH_TOKEN:-}"
+if [ -z "$mcp_auth_token" ] && [ -f .env ]; then
+  while IFS= read -r line; do
+    if [ "${line%%=*}" = MCP_AUTH_TOKEN ]; then
+      mcp_auth_token="${line#*=}"
+    fi
+  done < .env
+fi
 tools=(git aws docker)
 if [ "$prepare" = false ]; then
   tools+=(curl)
@@ -144,23 +155,35 @@ finish_deploy() {
     local verify_url="${DEPLOY_VERIFY_URL:-http://127.0.0.1:8000/mcp}"
     local elapsed=0
     local verified=false
-    # Note: Verification proves containers + MCP listening only, not OpenD login.
+    # A plain GET proves only that something is listening, and with bearer auth
+    # on it answers 401 — which is exactly the line an operator then finds at
+    # the bottom of a *successful* deploy's logs. Probe as a real client
+    # instead: the same authenticated initialize smoke-test.sh sends. The
+    # access log then shows POST /mcp 200 for a healthy deploy, and a 401/403
+    # stops the deploy with a diagnosis instead of decorating a success.
+    local -a probe_args=(
+      -s -o /dev/null -w '%{http_code}' --max-time 10
+      -H 'Content-Type: application/json'
+      -H 'Accept: application/json, text/event-stream'
+    )
+    if [ -n "$mcp_auth_token" ]; then
+      probe_args+=(-H "Authorization: Bearer ${mcp_auth_token}")
+    fi
+    # Note: Verification proves the MCP endpoint completes an initialize, not
+    # that OpenD is logged in to the broker.
     while :; do
-      local ps_out=""
-      ps_out="$(./scripts/compose-prod.sh ps --status running --services 2>/dev/null || true)"
-      local mcp_running=false
-      while IFS= read -r sline; do
-        if [ "$sline" = "moomoo-mcp" ]; then mcp_running=true; fi
-      done <<< "$ps_out"
-      if [ "$mcp_running" = true ]; then
-        local code
-        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$verify_url" 2>/dev/null || true)"
-        [ -z "$code" ] && code="000"
-        case "$code" in
-          000 | 5?? | ? | ?? | ????* ) ;;
-          *) verified=true; break ;;
-        esac
-      fi
+      local code
+      code="$(curl "${probe_args[@]}" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"deploy-verify","version":"0"}}}' "$verify_url" 2>/dev/null || true)"
+      [ -z "$code" ] && code="000"
+      case "$code" in
+        # Not listening yet, or a server error it may grow out of: keep polling.
+        000 | 5?? ) ;;
+        # The endpoint completed an MCP handshake.
+        200 ) verified=true; break ;;
+        # Listening but refusing the probe: a wrong MCP_AUTH_TOKEN, or a
+        # verify_url that does not speak MCP. Polling longer cannot fix either.
+        * ) break ;;
+      esac
       if [ "$timeout" = "0" ] || [ "$elapsed" -ge "$timeout" ]; then
         break
       fi
@@ -171,7 +194,10 @@ finish_deploy() {
       echo "Deploy verified: ${short} as ${image_tag}" >&2
       ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
     else
-      echo "Deploy verification failed." >&2
+      echo "Deploy verification failed (last HTTP status from ${verify_url}: ${code})." >&2
+      if [ "$code" = 401 ] || [ "$code" = 403 ]; then
+        echo "The server is up but rejected the deploy probe: MCP_AUTH_TOKEN in .env does not match what the server was started with. Clients using that token are refused the same way." >&2
+      fi
       ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
       rollback true
     fi
