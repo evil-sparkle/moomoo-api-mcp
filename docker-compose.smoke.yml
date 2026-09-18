@@ -1,56 +1,35 @@
-# Smoke-test overlay: replaces the OpenD binary with a stand-in listener, and
-# nothing else.
+# Smoke-test overlay: replaces the OpenD *binary* with a stand-in, and nothing
+# else.
 #
-# The real gateway needs an interactive device login and Moomoo's servers, so
-# it cannot run in CI. What CI does need to prove is the part that broke
-# before: that the MCP server reaches the gateway over trading-net, and that
-# restarting the gateway container leaves both that connection and the
-# published MCP endpoint intact.
+# The real gateway needs an interactive device login and Moomoo's servers, so it
+# cannot run in CI. Everything around it can: this overlay keeps the deployed
+# image, the supervisor, the ports, the volume and the restart policy exactly as
+# docker-compose.yml declares them, and only points OPEND_BINARY at a stub. So
+# the supervision policy under test is the deployed one, running in the deployed
+# image -- tests/test_compose_topology.py asserts this overlay moves nothing
+# else, or the smoke test could quietly start passing against a stack nobody
+# deploys.
 #
-# Only what runs *inside* the opend container is overridden here. The networks,
-# ports and depends_on under test stay exactly as docker-compose.yml declares
-# them — tests/test_compose_topology.py asserts that this overlay does not move
-# them, so the smoke test cannot quietly start passing against a topology that
-# is not the deployed one.
+# The stub honours the -api_ip flag it is handed rather than assuming loopback,
+# which is what lets the smoke test prove the gateway is not reachable from
+# another container.
 services:
-  opend:
-    build: !reset null
-    image: python:3.12-slim
-    # Set in the base file, and global rather than per-project: it would
-    # collide with a real stack on the same host. The project name isolates
-    # the smoke run instead.
-    container_name: !reset null
-    entrypoint:
-      - python3
-      - -u
-      - -c
-      - |
-        # Accept and log connections on the gateway port. Logging is the point:
-        # the MCP server's own SDK dialling in is what proves the bridge works,
-        # which an exec'd probe from the test would not.
-        import os
-        import signal
-        import socketserver
-
-        # PID 1 has no default SIGTERM handler, so without this the gateway
-        # keeps accepting connections for the whole ten-second stop grace
-        # period and only dies to SIGKILL — a "restart" that stays up most of
-        # the way through it.
-        signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
-
-
-        class Handler(socketserver.BaseRequestHandler):
-            def handle(self):
-                print("CONNECT", self.client_address[0], flush=True)
-
-
-        class Server(socketserver.ThreadingTCPServer):
-            allow_reuse_address = True
-            daemon_threads = True
-
-
-        print("LISTENING 0.0.0.0:11111", flush=True)
-        Server(("0.0.0.0", 11111), Handler).serve_forever()
-
   moomoo-mcp:
+    # Set in the base file, and global rather than per-project: it would collide
+    # with a real stack on the same host. The project name isolates the smoke
+    # run instead.
     container_name: !reset null
+    environment:
+      - OPEND_BINARY=/opt/opend-stub
+      # A stubbed gateway that dies is a test scenario, not a broken deployment:
+      # keep restarts quick so the assertions do not wait out a backoff.
+      - OPEND_RESTART_WINDOW_SECONDS=60
+      # Not secrets, and not real: the stub ignores them. They exist because the
+      # supervisor refuses to start a gateway it has no way to log in, and this
+      # run needs the headless branch the deployment actually takes. The hash is
+      # also the smoke test's tripwire for credential leakage -- it asserts this
+      # value never appears in the container's logs.
+      - MOOMOO_LOGIN_ACCOUNT=00000000
+      - MOOMOO_LOGIN_PWD_MD5=smoketestnotarealhash00000000000
+    volumes:
+      - ./tests/fixtures/opend_stub.py:/opt/opend-stub:ro

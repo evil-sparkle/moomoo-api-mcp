@@ -10,7 +10,7 @@ This MCP server empowers developers to build custom trading skills and strategie
 
 ## About this fork
 
-This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp). The PyPI package `moomoo-api-mcp` (what `uvx moomoo-api-mcp` and `uv tool install moomoo-api-mcp` install) is published by upstream, not by this fork; this fork does not publish to PyPI, and `.github/workflows/python-publish.yml` and `manual-release.yml` are inherited from upstream and not maintained here. What this fork builds and maintains is the container deployment — CI (`.github/workflows/ci.yml`) builds the `moomoo-api-mcp` and `moomoo-opend` images, and `docs/deploy-vps.md` deploys them. A PyPI install therefore runs upstream's release, which can differ from this fork's code — use the Docker deployment or a local checkout (`uv run moomoo-api-mcp`) to run this fork.
+This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp). The PyPI package `moomoo-api-mcp` (what `uvx moomoo-api-mcp` and `uv tool install moomoo-api-mcp` install) is published by upstream, not by this fork; this fork does not publish to PyPI, and `.github/workflows/python-publish.yml` and `manual-release.yml` are inherited from upstream and not maintained here. What this fork builds and maintains is the container deployment — CI (`.github/workflows/ci.yml`) builds the `moomoo-api-mcp` image — which carries the OpenD gateway alongside the server — and `docs/deploy-vps.md` deploys it. A PyPI install therefore runs upstream's release, which can differ from this fork's code — use the Docker deployment or a local checkout (`uv run moomoo-api-mcp`) to run this fork.
 
 ## Features
 
@@ -173,9 +173,9 @@ moomoo-api-mcp
 
 ## 🐳 Containerized Deployment (Docker Compose)
 
-Running OpenD and the MCP server via Docker isolates the OpenD gateway on an internal bridge network (`trading-net`), protects trading credentials, and persists device authorization across restarts.
+Running OpenD and the MCP server via Docker keeps the OpenD gateway off every network, protects trading credentials, and persists device authorization across restarts.
 
-Each container has its own network namespace and they reach each other by service name over `trading-net`: the MCP server connects to `opend:11111`, which is never published to the host, and publishes its own endpoint on `127.0.0.1:8000`. That separation is what lets either container restart without taking the other's networking with it.
+Both run in one container, started by a supervisor (`src/moomoo_mcp/supervisor.py`) that owns them. OpenD listens on `127.0.0.1:11111` *inside* that container, so only the MCP server sharing it can reach an API that has no authentication of its own; the server publishes its endpoint on `127.0.0.1:8000`, which is the only port the deployment exposes. The supervisor is what keeps a dead gateway from costing clients anything: it restarts OpenD in place, and takes the container down only when the server dies or the gateway cannot be recovered.
 
 For what state the stack holds, where each piece of it lives, what survives which restart, and how exposed the stored credentials are, see [`docs/state-and-restarts.md`](docs/state-and-restarts.md).
 
@@ -191,7 +191,7 @@ docker compose build
 OpenD requires an interactive verification code (SMS/2FA) on initial device registration:
 
 ```bash
-docker compose run --rm -it -e OPEND_INTERACTIVE=1 opend
+docker compose run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp
 ```
 Without `OPEND_INTERACTIVE=1`, a headless start without a remembered token exits with an error instead of hanging.
 
@@ -223,26 +223,30 @@ MOOMOO_TRADING_MODE=READ_ONLY  # READ_ONLY (default), SIMULATE, or REAL
 ### 4. Start the Stack
 
 ```bash
-# Start OpenD gateway and MCP server in background
+# Start the gateway and MCP server in background
 docker compose up -d
 
-# Check OpenD logs
-docker compose logs -f opend
-
-# Check MCP server logs
+# Both processes log to one stream; [supervisor] lines are the process policy
 docker compose logs -f moomoo-mcp
 ```
 
-### 5. Restarting a Container
+### 5. Restarting
 
-**Neither container's restart requires you to touch your client.**
+**Neither kind of restart requires you to touch your client.**
 
 ```bash
-docker compose restart opend       # clients keep working
 docker compose restart moomoo-mcp  # clients keep working
 ```
 
-**When OpenD restarts**, the MCP server stays up and the moomoo SDK reconnects by
+There is no separate command for the gateway: when OpenD dies the supervisor
+restarts it by itself, bounded by `OPEND_MAX_RESTARTS` within
+`OPEND_RESTART_WINDOW_SECONDS`, and gives up into a whole-container restart only
+if it keeps failing.
+
+**When OpenD restarts**, no client has to reconnect or re-initialize: the
+endpoint keeps answering, so `tools/list` and `check_health` keep working, while
+anything that needs the gateway is unavailable until it is back. The MCP server
+stays up and the moomoo SDK reconnects by
 itself — every six seconds, for as long as it takes — reusing the same context
 objects. On reconnect it replays the quote subscriptions it held, this server
 re-asserts the gateway lock in `READ_ONLY` mode, and a REAL deployment's startup
@@ -251,7 +255,8 @@ with a connect timeout instead of hanging (bounded at 3s), and `check_health`
 reports `disconnected` or `degraded` until OpenD answers again — it usually needs
 ~30s to log back in.
 
-**When the MCP server restarts**, the streamable-HTTP endpoint is served
+**When the container restarts** — a deploy, a settings change, or the MCP
+server process dying — the streamable-HTTP endpoint is served
 statelessly: it issues no session id, ignores any a client still holds, and treats
 each request as initialized. There is therefore no session for a restart to
 invalidate. A call in flight during the restart fails and the next one succeeds;
@@ -304,7 +309,8 @@ The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local ga
    - Ensure the listening port is set to `11111` (this is the default).
    - **Note**: The MCP server connects to `127.0.0.1:11111` by default; set
      `MOOMOO_OPEND_HOST` / `MOOMOO_OPEND_PORT` to point elsewhere. The Docker
-     Compose stack sets these to `opend:11111` for you.
+     Compose stack runs its own gateway and sets these to `127.0.0.1:11111`
+     inside the container for you.
 
 ### 2. Environment Variables
 

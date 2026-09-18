@@ -1,66 +1,17 @@
+# One container, two supervised processes.
+#
+# OpenD's API has no authentication of its own: anything that can reach port
+# 11111 can trade once the gateway is unlocked. Running the gateway and the MCP
+# server in the same container lets the gateway listen on container loopback and
+# nowhere else, so the boundary protecting it is the process boundary rather
+# than "no other container happens to be attached to this bridge".
+#
+# The two are not interchangeable in how they fail, and the supervisor
+# (moomoo_mcp/supervisor.py) is what keeps that distinction: a dead gateway is
+# restarted in place, because the MCP endpoint must keep answering and the SDK
+# reconnects underneath it; a dead server, or a gateway that will not come back,
+# exits the container for `restart: unless-stopped` below to replace whole.
 services:
-  opend:
-    build:
-      context: .
-      dockerfile: Dockerfile.opend
-    platform: linux/amd64
-    container_name: moomoo-opend
-    restart: unless-stopped
-    stdin_open: true
-    tty: true
-    volumes:
-      # Persistent volume preserving device authorization and session tokens for non-root opend user
-      - ${OPEND_DATA_DIR:-opend-data}:/home/opend/.com.moomoo.OpenD
-    working_dir: /opt/moomooOpenD
-    environment:
-      - LD_LIBRARY_PATH=/opt/moomooOpenD
-      - MOOMOO_LOGIN_ACCOUNT=${MOOMOO_LOGIN_ACCOUNT:-}
-      - MOOMOO_LOGIN_PWD_MD5=${MOOMOO_LOGIN_PWD_MD5:-}
-      - MOOMOO_LOGIN_BY_REMEMBER=${MOOMOO_LOGIN_BY_REMEMBER:-1}
-      - MOOMOO_LOGIN_REGION=${MOOMOO_LOGIN_REGION:-sg}
-      - OPEND_INTERACTIVE=${OPEND_INTERACTIVE:-0}
-      # OpenD must answer on the container's trading-net interface, not just
-      # loopback: moomoo-mcp now has a network namespace of its own. Port 11111
-      # is never published, so this listener is reachable only from containers
-      # attached to trading-net — the OpenD API has no authentication of its
-      # own, so keep it that way.
-      - OPEND_API_IP=${OPEND_API_IP:-0.0.0.0}
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        DATA_DIR="$${HOME:-/home/opend}/.com.moomoo.OpenD"
-        has_token=0
-        if [ -d "$$DATA_DIR/F3CNN/UserAccMap" ] || [ -n "$$(ls -A $$DATA_DIR/F3CNN/ftnet/auth_acc_list 2>/dev/null)" ] || [ -d "/root/.com.moomoo.OpenD/F3CNN/UserAccMap" ]; then
-          has_token=1
-        fi
-
-        COMMON_ARGS="-api_ip=$${OPEND_API_IP:-0.0.0.0} -no_monitor=1 -lang=en -login_region=$$MOOMOO_LOGIN_REGION"
-
-        if [ "$$OPEND_INTERACTIVE" = "1" ]; then
-          if [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
-            exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT
-          else
-            exec ./OpenD $$COMMON_ARGS
-          fi
-        elif [ -n "$$MOOMOO_LOGIN_PWD_MD5" ]; then
-          exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_pwd_md5=$$MOOMOO_LOGIN_PWD_MD5
-        elif [ "$$MOOMOO_LOGIN_BY_REMEMBER" = "1" ] && [ -n "$$MOOMOO_LOGIN_ACCOUNT" ] && [ "$$has_token" = "1" ]; then
-          exec ./OpenD $$COMMON_ARGS -login_account=$$MOOMOO_LOGIN_ACCOUNT -login_by_remember=1
-        elif [ -n "$$MOOMOO_LOGIN_ACCOUNT" ]; then
-          echo "ERROR: No usable headless login for $$MOOMOO_LOGIN_ACCOUNT: need MOOMOO_LOGIN_BY_REMEMBER=1 with a remembered token from the one-time interactive login. To perform one-time login: scripts/compose-prod.sh run --rm -it -e OPEND_INTERACTIVE=1 opend (or docker compose run --rm -it -e OPEND_INTERACTIVE=1 opend locally)" >&2
-          exit 1
-        else
-          # Without an account OpenD prompts on stdin forever, which under `up -d`
-          # looks "Up" while never logging in. Fail loudly instead of hanging.
-          echo "ERROR: MOOMOO_LOGIN_ACCOUNT is empty. Set it in .env; headless start also needs a remembered token from the interactive login (OPEND_INTERACTIVE=1)." >&2
-          exit 1
-        fi
-    networks:
-      - trading-net
-    # Port 11111 is NOT published to the host; it is reachable only from
-    # containers attached to trading-net.
-
   moomoo-mcp:
     platform: linux/amd64
     build:
@@ -68,9 +19,37 @@ services:
       dockerfile: Dockerfile
     container_name: moomoo-api-mcp
     restart: unless-stopped
+    # Deliberately no `init: true`. docker-init would take PID 1 and push the
+    # supervisor to PID 2, which is a different design from the one written and
+    # tested here: the supervisor installs its own signal handlers (PID 1 has no
+    # default dispositions) and reaps orphans itself. Adding an init would make
+    # both of those redundant in a way the code does not assume, and the spec
+    # would have to be rewritten around docker-init being the process manager.
+    # The one-time interactive device login reads its SMS code from this tty:
+    #   docker compose run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp
+    stdin_open: true
+    tty: true
+    volumes:
+      # The only genuinely persistent state in the stack. Path and owning uid
+      # are the ones OpenD already wrote as, so an existing volume is read
+      # rather than re-authorized over SMS.
+      - ${OPEND_DATA_DIR:-opend-data}:/home/opend/.com.moomoo.OpenD
     environment:
-      - MOOMOO_OPEND_HOST=opend
+      # Loopback inside this container. Nothing else can reach it, and the
+      # supervisor pins the gateway's own listener to the same address.
+      - MOOMOO_OPEND_HOST=127.0.0.1
       - MOOMOO_OPEND_PORT=11111
+      # --- gateway login ---
+      - MOOMOO_LOGIN_ACCOUNT=${MOOMOO_LOGIN_ACCOUNT:-}
+      - MOOMOO_LOGIN_PWD_MD5=${MOOMOO_LOGIN_PWD_MD5:-}
+      - MOOMOO_LOGIN_BY_REMEMBER=${MOOMOO_LOGIN_BY_REMEMBER:-1}
+      - MOOMOO_LOGIN_REGION=${MOOMOO_LOGIN_REGION:-sg}
+      - OPEND_INTERACTIVE=${OPEND_INTERACTIVE:-0}
+      # --- supervision policy (empty means the supervisor's own defaults) ---
+      - OPEND_MAX_RESTARTS=${OPEND_MAX_RESTARTS:-}
+      - OPEND_RESTART_WINDOW_SECONDS=${OPEND_RESTART_WINDOW_SECONDS:-}
+      - SUPERVISOR_STOP_TIMEOUT_SECONDS=${SUPERVISOR_STOP_TIMEOUT_SECONDS:-}
+      # --- MCP server ---
       - MOOMOO_SECURITY_FIRM=${MOOMOO_SECURITY_FIRM:-FUTUSG}
       - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
       - MOOMOO_TRADE_PASSWORD=${MOOMOO_TRADE_PASSWORD:-}
@@ -82,26 +61,9 @@ services:
       - FASTMCP_PORT=8000
       - MCP_TRANSPORT=${MCP_TRANSPORT:-streamable-http}
     ports:
-      # Bind MCP HTTP endpoint strictly to localhost on host machine.
-      # Published by the container that actually serves it, so restarting
-      # OpenD cannot take the endpoint away from clients.
+      # Bind the MCP HTTP endpoint strictly to localhost on the host machine.
+      # Port 11111 is published nowhere and has no line here on purpose.
       - "127.0.0.1:8000:8000"
-    networks:
-      - trading-net
-    depends_on:
-      # Ordering only. Deliberately no `restart: true`: it would restart this
-      # container whenever Compose restarts opend, ending every client session
-      # to buy nothing. The SDK re-resolves the service name on each reconnect
-      # attempt, so it follows a recreated gateway to a new address by itself,
-      # and scripts/smoke-test.sh asserts that it does.
-      opend:
-        condition: service_started
-
-networks:
-  # Not `internal: true`: OpenD needs outbound internet to reach Moomoo's
-  # servers. Isolation comes from publishing no port for 11111.
-  trading-net:
-    driver: bridge
 
 volumes:
   opend-data:

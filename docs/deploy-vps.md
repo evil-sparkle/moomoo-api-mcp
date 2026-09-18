@@ -1,6 +1,6 @@
 # Deploy moomoo-api-mcp to an Ubuntu server
 
-The GitHub Actions workflow builds and pushes `moomoo-api-mcp` + `moomoo-opend` to
+The GitHub Actions workflow builds and pushes the `moomoo-api-mcp` image to
 ECR on every `main` push. This runbook covers everything from pulling that image
 to having a running, logged-in stack on a fresh Ubuntu server (VPS or
 otherwise). Tested on Ubuntu 24.04 LTS; other Linux distributions with rootless
@@ -9,7 +9,9 @@ Docker should work but are untested.
 For what state the stack holds and what each restart costs, see
 [`state-and-restarts.md`](state-and-restarts.md).
 
-**Two images, two runtime constraints.** The MCP server is ordinary — pull and run. OpenD is not: the first start must happen interactively so you can answer the device-verification prompt and "remember the password". Until that token lands in `opend-data`, no unattended start can complete login.
+**One image, two runtime constraints.** The image carries both the OpenD gateway and the MCP server, started by a supervisor that owns them (`src/moomoo_mcp/supervisor.py`). The server half is ordinary — pull and run. OpenD is not: the first start must happen interactively so you can answer the device-verification prompt and "remember the password". Until that token lands in `opend-data`, no unattended start can complete login.
+
+**Upgrading from the two-container deployment.** The `opend-data` volume carries over untouched — same mount path, same owning uid — so no interactive re-login is needed. `docker compose up -d` replaces both old containers with the one new one; `--remove-orphans` (which `deploy.sh` already passes) clears the leftover `opend` container. The `moomoo-opend` ECR repository stops being written to: leave it until the last two-container image is past being a rollback target, then delete the repository.
 
 ---
 
@@ -159,10 +161,10 @@ This is the one non-mechanical step. The Linux OpenD build has no password flag,
 
 ```sh
 cd "$HOME/moomoo"
-./scripts/compose-prod.sh run --rm -it -e OPEND_INTERACTIVE=1 opend
+./scripts/compose-prod.sh run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp
 ```
 
-OpenD prints its banner, then asks for the device-verification code. Check the Moomoo app on your phone, enter the 6-digit code. It then prompts:
+This runs the supervisor with the gateway in interactive mode; OpenD prints its banner, then asks for the device-verification code. Check the Moomoo app on your phone, enter the 6-digit code. It then prompts:
 
 > Remember the password? (Y/n)
 
@@ -171,7 +173,7 @@ Type `Y`. OpenD logs in, the token file appears under `/home/opend/.com.moomoo.O
 Verify the token:
 
 ```sh
-./scripts/compose-prod.sh run --rm --no-deps --entrypoint /bin/sh opend -c \
+./scripts/compose-prod.sh run --rm --entrypoint /bin/sh moomoo-mcp -c \
   'ls -la "$HOME/.com.moomoo.OpenD/F3CNN/"'
 # Inspect UserAccMap/ and ftnet/auth_acc_list inside the mounted volume.
 # Presence alone does not prove login; also confirm a successful OpenD login.
@@ -188,7 +190,7 @@ cd "$HOME/moomoo"
 ./scripts/compose-prod.sh logs -f --tail=200
 ```
 
-`opend` should reach "TRC login OK" within ~30s. `moomoo-mcp` reports `MCP server listening on 0.0.0.0:8000`. Hit `http://localhost:8000/mcp` from the host (the port is bound to `127.0.0.1` only) with the `Authorization: Bearer $MCP_AUTH_TOKEN` header.
+One log stream carries both processes. OpenD should reach "TRC login OK" within ~30s, and the server reports `MCP server listening on 0.0.0.0:8000`; lines prefixed `[supervisor]` are the process policy itself, including any gateway restart. Hit `http://localhost:8000/mcp` from the host (the port is bound to `127.0.0.1` only) with the `Authorization: Bearer $MCP_AUTH_TOKEN` header.
 
 ### 9. systemd unit, so the stack survives reboots
 
@@ -251,7 +253,10 @@ tag CI writes on every main build, and confirms it on both repositories with
 deployment before checkout. It never uses `:latest` and ignores git `v*` tags,
 which are release bookmarks only. If `main` has not finished publishing both
 images, wait for CI or select an already-published commit. It does not search
-for the newest green build.
+for the newest green build. If `scripts/deploy.sh` in the target commit differs
+from the local checkout, the script automatically re-executes using the target
+commit's deploy script so updated deployment, verification, and rollback logic
+takes effect immediately.
 
 How far back you can roll back is bounded by the ECR lifecycle policy, which
 keeps every `v*`-tagged image and the 30 most recent commit builds per
@@ -277,40 +282,57 @@ cryptographic guarantee of immutable image content.
 The inspection command above also works if `OPEND_DATA_DIR` selects a bind mount.
 Do not remove this volume during ordinary deployments: it holds device tokens.
 
-## Everyday: restart one container
+## Everyday: restart the container
 
-The two containers have their own network namespaces and talk over the
-`trading-net` bridge, so they can be restarted independently.
+One container holds both processes, and the supervisor inside it — not Compose —
+decides what a restart means.
 
 ```sh
 cd "$HOME/moomoo"
-./scripts/compose-prod.sh restart opend       # gateway only
-./scripts/compose-prod.sh restart moomoo-mcp  # MCP server only
+./scripts/compose-prod.sh restart moomoo-mcp
 ```
 
-**Restarting `opend`** does not require restarting anything else and does not
-disturb MCP clients: open sessions keep serving calls across the restart. The
-moomoo SDK reconnects on its own, retrying every six
-seconds for as long as it takes, and on reconnect it replays the quote
-subscriptions it was holding, re-asserts the READ_ONLY lock, and replays a REAL
-deployment's startup unlock if one was performed (an order's just-in-time unlock
-is not replayed: it re-locks when the order finishes, which clears it).
-Tool calls made during the gap fail with a connect timeout
-and the next call succeeds; `check_health` reports `disconnected` or `degraded`
-until it is back. `opend` still needs ~30s to log in, so expect that long before
-health goes green. `moomoo-mcp` is deliberately left running throughout — its
-`depends_on` declares start ordering only — so client sessions survive. The SDK
-re-resolves `opend` on every reconnect attempt, so it follows the gateway even
-when the container is recreated on a different address; `scripts/smoke-test.sh`
-asserts exactly that.
+There is deliberately no command to restart the gateway on its own. The
+supervisor does that by itself whenever OpenD dies, without disturbing anything
+a client can see, and what an operator restarts is the container.
 
-**Restarting `moomoo-mcp`** does not disturb clients either. The endpoint is
+**When the gateway process dies**, the supervisor restarts it in place and MCP
+clients are not disturbed: open sessions keep serving calls across it. The
+moomoo SDK reconnects on its own, retrying every six seconds for as long as it
+takes, and on reconnect it replays the quote subscriptions it was holding,
+re-asserts the READ_ONLY lock, and replays a REAL deployment's startup unlock if
+one was performed (an order's just-in-time unlock is not replayed: it re-locks
+when the order finishes, which clears it). Tool calls made during the gap fail
+with a connect timeout and the next call succeeds; `check_health` reports
+`disconnected` or `degraded` until it is back. OpenD still needs ~30s to log in,
+so expect that long before health goes green. Look for `[supervisor]` lines in
+the log to see it happen. If OpenD fails repeatedly — five times in five
+minutes, by default — the supervisor stops the server and exits instead, and
+Docker replaces the whole container.
+
+**Restarting the container** costs clients one failed call. The endpoint is
 served statelessly, so there is no session for the restart to invalidate: a call
-in flight fails and the next one succeeds. OpenD keeps its login throughout, so
-no interactive step is needed.
+in flight fails and the next one succeeds. OpenD does *not* keep its login
+across this — the process is replaced — so expect the same ~30s before health
+goes green. No interactive step is needed: the device token is on the volume.
+
+**If the gateway cannot start at all** — no account set, or no remembered token
+yet — the container does *not* exit. The supervisor logs the reason and runs the
+MCP server without a gateway, so `check_health` still answers and tells you the
+gateway is unavailable. Fix `.env`, then restart the container. A malformed
+supervision setting (`OPEND_MAX_RESTARTS`, `OPEND_RESTART_WINDOW_SECONDS`,
+`SUPERVISOR_STOP_TIMEOUT_SECONDS`) is treated the other way and refuses to
+start, naming the setting, rather than running under a default you did not
+choose.
+
+That is also the cost of the single container, and it is worth stating plainly:
+**every deploy restarts OpenD**, because there is no longer a way to update the
+server without replacing the container. Two containers could be upgraded
+independently; this one cannot.
 
 Do not publish OpenD's port 11111 to get around a problem. Its API has no
-authentication; it is reachable only from `trading-net` by design.
+authentication; it listens on container loopback by design, and nothing outside
+the container is meant to reach it.
 
 ## Everyday: rotate `MCP_AUTH_TOKEN`
 
