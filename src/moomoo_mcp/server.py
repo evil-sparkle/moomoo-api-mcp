@@ -260,6 +260,7 @@ mcp = FastMCP(
     # lifespan — see app_lifespan. Reverting that would open a pair of OpenD
     # connections per tool call.
     stateless_http=True,
+    json_response=True,
     host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("FASTMCP_PORT", "8000")),
     transport_security=TransportSecuritySettings(
