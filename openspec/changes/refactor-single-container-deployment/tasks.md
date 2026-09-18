@@ -165,3 +165,15 @@ daemon and are marked so rather than assumed.
      line counting, which would have undercounted reconnections and passed for
      the wrong reason. One lock, one write; verified locally with 40 concurrent
      connections producing 40 whole lines.
+   - [x] 9.9 **CI, third run: the MCP-server kill matched nothing.** Moving the
+     server onto its console script (9.7) changed its `/proc` cmdline, and the
+     smoke test still hunted for `moomoo_mcp.server` — so nothing was signalled,
+     the container never went down, and a `|| true` turned that into a 120s
+     mystery timeout two assertions later. Finding and killing are separate
+     steps now: a pattern that matches nothing fails immediately and says so.
+     The pattern is `moomoo-api-mcp` excluding `supervisor`, because the former
+     is a substring of `moomoo-api-mcp-supervisor`. Verified against a fake
+     `/proc` carrying the container's real cmdlines.
+     Everything before this point passed, including the whole gateway half of
+     the policy: the process killed, restarted in place, the client's session
+     surviving, and the container untouched.
