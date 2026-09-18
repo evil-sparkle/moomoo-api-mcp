@@ -1,9 +1,15 @@
-"""Exercise deployment in disposable Git repos, with no AWS or Docker access."""
+"""Exercise deployment in disposable Git repos, with no AWS or Docker access.
+
+Docker and curl are stubs here, so these tests cover what deploy.sh decides:
+ordering, rollback, re-execution. What Compose resolves, and whether the probe
+sends what the container received, is tests/test_compose_config_resolution.py.
+"""
 
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +17,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = "123456789012.dkr.ecr.ap-southeast-1.amazonaws.com"
+# deploy.sh as main ran it before scripts/deploy_verify.py existed: what a host
+# still has checked out when it first deploys a commit carrying the helper.
+PRE_HELPER_DEPLOY_SH = ROOT / "tests" / "fixtures" / "deploy_sh_before_verifier.sh"
 
 
 def _env_without_git_vars():
@@ -37,7 +46,7 @@ class DeployScriptsTest(unittest.TestCase):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         (self.repo / "scripts").mkdir()
-        for name in ("deploy.sh", "compose-prod.sh"):
+        for name in ("deploy.sh", "compose-prod.sh", "deploy_verify.py"):
             shutil.copy2(ROOT / "scripts" / name, self.repo / "scripts" / name)
         for name in (
             "docker-compose.yml",
@@ -81,30 +90,24 @@ class DeployScriptsTest(unittest.TestCase):
         self.git("remote", "add", "origin", str(self.repo))
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        # Both stubs record arguments and selected inherited environment only.
-        # The curl stub mirrors the deploy probe's real wire format: the body,
-        # then the status on its own line from curl's -w. It also resolves
-        # -H @file arguments at call time (the real file is deleted by
-        # deploy.sh's EXIT trap before the test could read it) and logs the
-        # header contents and file mode as a separate "curl-header" entry.
-        stub = """#!/usr/bin/env python3
+        # The stubs record arguments and selected inherited environment only.
+        # docker answers `config` with the resolved model Compose would print,
+        # carrying DOCKER_TEST_TOKEN as the service's MCP_AUTH_TOKEN. curl
+        # mirrors the probe's wire format — the body, then the status and the
+        # content type on lines of their own from --write-out — and logs any
+        # header it was handed on stdin as a separate "curl-header" entry.
+        stub = f"""#!{sys.executable}
 import json, os, pathlib, sys
 name = pathlib.Path(sys.argv[0]).name
 VALID_INIT_RESULT = (
-    '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18",'
-    '"capabilities":{"tools":{}},"serverInfo":{"name":"moomoo-api-mcp","version":"0"}}}'
+    '{{"jsonrpc":"2.0","id":"deploy-verify","result":{{"protocolVersion":"2025-06-18",'
+    '"capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"moomoo-api-mcp","version":"0"}}}}}}'
 )
 args = sys.argv[1:]
 with open(os.environ["CALL_LOG"], "a") as log:
     log.write(json.dumps([name, args, os.environ.get("IMAGE_TAG")]) + "\\n")
-    if name == "curl":
-        for i, arg in enumerate(args):
-            if arg == "-H" and args[i + 1].startswith("@"):
-                path = pathlib.Path(args[i + 1][1:])
-                mode = format(path.stat().st_mode & 0o777, "o")
-                log.write(
-                    json.dumps(["curl-header", [path.read_text()], mode]) + "\\n"
-                )
+    if name == "curl" and "@-" in args:
+        log.write(json.dumps(["curl-header", [sys.stdin.read()], None]) + "\\n")
 if name == "aws":
     mode = os.environ.get("AWS_TEST_MODE", "ok")
     if mode == "denied":
@@ -122,6 +125,15 @@ if name == "aws":
 if name == "docker":
     if os.environ.get("DOCKER_TEST_FAIL") == "1":
         sys.exit(1)
+    if "config" in args:
+        if os.environ.get("DOCKER_TEST_FAIL_CONFIG") == "1":
+            print("invalid env file", file=sys.stderr)
+            sys.exit(15)
+        token = os.environ.get("DOCKER_TEST_TOKEN", "test-only")
+        service = {{"environment": {{"MCP_AUTH_TOKEN": token}}}}
+        print(json.dumps({{"services": {{"moomoo-mcp": service}}}}))
+    if os.environ.get("DOCKER_TEST_FAIL_LOGS") == "1" and "logs" in sys.argv:
+        sys.exit(1)
     if os.environ.get("DOCKER_TEST_FAIL_UP_ALWAYS") == "1" and "up" in sys.argv:
         sys.exit(1)
     if os.environ.get("DOCKER_TEST_FAIL_UP") == "1" and "up" in sys.argv:
@@ -133,18 +145,21 @@ if name == "docker":
         sys.exit(1)
 if name == "curl":
     if os.environ.get("CURL_TEST_FAIL") == "1":
-        # Connection refused: curl prints only -w's newline and 000.
+        # Connection refused: curl prints only --write-out, with status 000.
         sys.stdout.write("\\n000\\n")
         sys.exit(7)
     else:
         body = os.environ.get("CURL_TEST_BODY", VALID_INIT_RESULT)
         status = os.environ.get("CURL_TEST_STATUS", "200")
-        sys.stdout.write(body + "\\n" + status + "\\n")
+        sys.stdout.write(body + "\\n" + status + "\\napplication/json")
 """
         for name in ("aws", "docker", "curl"):
             path = self.bin / name
             path.write_text(stub)
             path.chmod(0o755)
+        # Empty, so a file the deploy leaves behind (a secret, say) shows up.
+        self.tmpdir = self.root / "tmp"
+        self.tmpdir.mkdir()
         self.log = self.root / "calls.jsonl"
         self.env = _env_without_git_vars()
         self.env.update(
@@ -153,6 +168,7 @@ if name == "curl":
             IMAGE_TAG="stale-shell-tag",
             CALL_LOG=str(self.log),
             DEPLOY_VERIFY_TIMEOUT="0",
+            TMPDIR=str(self.tmpdir),
         )
 
     def git(self, *args):
@@ -176,6 +192,30 @@ if name == "curl":
         if not self.log.exists():
             return []
         return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def compose_commands(self):
+        """The Compose subcommand of each docker call, in order."""
+        return [
+            args[args.index("docker-compose.prod.yml") + 1]
+            for name, args, _ in self.calls()
+            if name == "docker"
+        ]
+
+    def save_previous_deploy(self):
+        """A prior deployment's settings, for a rollback to restore."""
+        prev_env = f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG=previous-tag\n"
+        (self.repo / ".deploy.env").write_text(prev_env)
+        self.env.pop("ECR_REGISTRY")
+        return prev_env
+
+    def add_newer_commit(self):
+        """A second commit to deploy, leaving the checkout on the first."""
+        (self.repo / "extra.txt").write_text("newer commit\n")
+        self.git("add", "extra.txt")
+        self.git("commit", "-m", "newer commit")
+        newer_commit = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "--quiet", "--detach", self.commit)
+        return newer_commit
 
     def test_git_helper_ignores_inherited_git_environment(self):
         """Inherited GIT_* variables must not redirect the fixture's git calls.
@@ -247,19 +287,22 @@ if name == "curl":
             self.assertEqual(args[:2], ["ecr", "batch-get-image"])
             self.assertIn("imageTag=" + self.commit[:7], args)
         docker = [args for name, args, _ in calls if name == "docker"]
-        self.assertEqual(len(docker), 1)
-        args = docker[0]
-        self.assertEqual(args[:3], ["--context", "rootless", "compose"])
-        self.assertIn(".env", args)
-        self.assertIn(".deploy.env", args)
-        self.assertEqual(args[-1], "pull")
+        for args in docker:
+            self.assertEqual(args[:3], ["--context", "rootless", "compose"])
+            self.assertIn(".env", args)
+            self.assertIn(".deploy.env", args)
+        # The configuration is checked, then the image pulled. Nothing starts
+        # and nothing is probed.
+        self.assertEqual(self.compose_commands(), ["config", "pull"])
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
-        self.assertFalse(
-            any(
-                name == "curl" or (name == "docker" and "ps" in args)
-                for name, args, _ in calls
-            )
-        )
+        self.assertFalse(any(name == "curl" for name, _, _ in calls))
+
+    def test_prepare_stops_on_a_configuration_error_before_pulling(self):
+        self.env["DOCKER_TEST_FAIL_CONFIG"] = "1"
+        result = self.deploy("--prepare")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Configuration error", result.stderr)
+        self.assertEqual(self.compose_commands(), ["config"])
 
     def test_explicit_commit_reuses_saved_registry_and_starts(self):
         (self.repo / ".deploy.env").write_text(
@@ -269,21 +312,24 @@ if name == "curl":
         result = self.deploy(self.commit)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Deploy verified", result.stderr)
+        # Configuration is resolved before the pull, and again by verify,
+        # which reads it from nowhere else.
+        self.assertEqual(
+            self.compose_commands(), ["config", "pull", "up", "config", "logs"]
+        )
         docker = [args for name, args, _ in self.calls() if name == "docker"]
-        self.assertEqual(len(docker), 3)
-        self.assertEqual(docker[0][-1], "pull")
-        self.assertEqual(docker[1][-3:], ["up", "-d", "--remove-orphans"])
-        self.assertIn("logs", docker[2])
-        self.assertIn("moomoo-mcp", docker[2])
+        self.assertEqual(docker[2][-3:], ["up", "-d", "--remove-orphans"])
+        self.assertIn("moomoo-mcp", docker[4])
 
     def test_verification_probes_as_an_authenticated_mcp_client(self):
-        """The verify probe sends the .env bearer token and an MCP initialize.
+        """The probe sends Compose's resolved token and an MCP initialize.
 
         A bare GET answers 401 under bearer auth, which was the last log line
         after every successful deploy and read like a failure. Probing as a
         client reads honestly in the access log (POST /mcp 200) and lets a
         token mismatch fail the deploy instead of decorating a success.
         """
+        self.env["DOCKER_TEST_TOKEN"] = "resolved by compose"
         result = self.deploy(self.commit)
         self.assertEqual(result.returncode, 0, result.stderr)
         curls = [args for name, args, _ in self.calls() if name == "curl"]
@@ -291,122 +337,40 @@ if name == "curl":
         args = curls[0]
         self.assertIn("Content-Type: application/json", args)
         self.assertIn("Accept: application/json, text/event-stream", args)
-        bodies = [args[i + 1] for i, a in enumerate(args) if a == "-d"]
+        bodies = [args[i + 1] for i, a in enumerate(args) if a == "--data-binary"]
         self.assertEqual(len(bodies), 1)
         self.assertIn('"method":"initialize"', bodies[0])
-        # The token travels through a 0600 header file, never argv: the token
-        # appears in no logged command line. (The stub's curl-header entry is
-        # its record of the file's contents, not a command line.)
+        # The token travels on curl's stdin: no command line carries it, the
+        # output does not show it, and no file is created to hold it. (The
+        # stub's curl-header entry is its record of stdin, not a command line.)
         commands = [
             [name, args] for name, args, _ in self.calls() if name != "curl-header"
         ]
-        self.assertNotIn("test-only", json.dumps(commands))
-        headers = [c for c in self.calls() if c[0] == "curl-header"]
-        self.assertEqual(len(headers), 1)
-        self.assertEqual(headers[0][1], ["Authorization: Bearer test-only\n"])
-        self.assertEqual(headers[0][2], "600")
-        # The secret file must be gone once deploy.sh exits. The EXIT trap
-        # cannot delete it after finish_deploy's scope is gone; the script
-        # must remove it itself, or it survives holding the bearer token.
-        header_args = [a for a in curls[0] if a.startswith("@")]
-        self.assertEqual(len(header_args), 1)
-        self.assertFalse(Path(header_args[0][1:]).exists())
+        self.assertNotIn("resolved by compose", json.dumps(commands))
+        self.assertNotIn("resolved by compose", result.stdout + result.stderr)
+        headers = [c[1] for c in self.calls() if c[0] == "curl-header"]
+        self.assertEqual(headers, [["Authorization: Bearer resolved by compose\n"]])
+        self.assertEqual(list(self.tmpdir.iterdir()), [])
 
-    def test_env_token_parsed_with_compose_semantics(self):
-        """Quoted values, whitespace, comments, CRLF: what the container gets,
-        the probe sends.
-
-        compose-prod.sh hands .env to Compose, so the token the container
-        starts with is the Compose-resolved value. MCP_AUTH_TOKEN="abc" would
-        otherwise start the container with abc and probe with "abc" — quotes
-        and all — 401ing a healthy deploy into a rollback.
-        """
-        (self.repo / ".env").write_text(
-            '# leading comment\n\nMCP_AUTH_TOKEN = "test only"  # inline comment\r\n'
-        )
+    def test_empty_resolved_token_probes_without_authorization(self):
+        self.env["DOCKER_TEST_TOKEN"] = ""
         result = self.deploy(self.commit)
         self.assertEqual(result.returncode, 0, result.stderr)
-        headers = [c for c in self.calls() if c[0] == "curl-header"]
-        self.assertEqual(len(headers), 1)
-        self.assertEqual(headers[0][1], ["Authorization: Bearer test only\n"])
+        self.assertEqual([c for c in self.calls() if c[0] == "curl-header"], [])
 
-    def test_parameter_expansion_in_token_is_refused(self):
-        """Compose would expand ${...} in the value; deploy.sh refuses to guess.
-
-        Sending the raw ${...} bytes would 401 and roll back a healthy deploy;
-        refusing loudly leaves the operator a choice Compose also offers — a
-        literal value, or the environment, which wins in both tools.
-        """
-        (self.repo / ".env").write_text("MCP_AUTH_TOKEN=${LOCAL_TOKEN}\n")
-        result = self.deploy(self.commit)
+    def test_configuration_error_restores_state_without_restarting(self):
+        """Nothing has started yet, so the rollback touches files, not services."""
+        prev_env = self.save_previous_deploy()
+        newer_commit = self.add_newer_commit()
+        self.env["DOCKER_TEST_FAIL_CONFIG"] = "1"
+        result = self.deploy(newer_commit)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("variable reference", result.stderr)
-        self.assertIn("MCP_AUTH_TOKEN", result.stderr)
-        self.assertFalse((self.repo / ".deploy.env").exists())
-        self.assertEqual(self.calls(), [])
-
-    def test_colon_delimiter_token_is_supported(self):
-        """Docker's env-file documentation names ':' as a delimiter too.
-
-        Silently skipping the line would start the container authenticated
-        while the probe sent no token, so the colon form is honored the same
-        as '='.
-        """
-        (self.repo / ".env").write_text("MCP_AUTH_TOKEN: colon-form\n")
-        result = self.deploy(self.commit)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        headers = [c for c in self.calls() if c[0] == "curl-header"]
-        self.assertEqual(len(headers), 1)
-        self.assertEqual(headers[0][1], ["Authorization: Bearer colon-form\n"])
-
-    def test_unbraced_dollar_interpolation_is_refused(self):
-        """Compose expands $VAR, not only ${VAR}; unresolvable means refused.
-
-        Sending the raw bytes would 401 and roll back a healthy deploy.
-        """
-        (self.repo / ".env").write_text("MCP_AUTH_TOKEN=$LOCAL_TOKEN\n")
-        result = self.deploy(self.commit)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("variable reference", result.stderr)
-        self.assertIn("MCP_AUTH_TOKEN", result.stderr)
-        self.assertEqual(self.calls(), [])
-
-    def test_escaped_quote_in_single_quotes_is_refused(self):
-        """Escaped quotes inside single quotes are not resolved here.
-
-        Compose has documented them; the first-quote stop would parse
-        MCP_AUTH_TOKEN='Let\\'s-go' as something else. A backslash refuses
-        rather than risks sending a different value than the container got.
-        """
-        (self.repo / ".env").write_text("MCP_AUTH_TOKEN='Let\\'s-go'\n")
-        result = self.deploy(self.commit)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("escape sequences", result.stderr)
-        self.assertEqual(self.calls(), [])
-
-    def test_colon_value_containing_equals_is_not_truncated(self):
-        """First delimiter wins, like Compose's left-to-right scan.
-
-        MCP_AUTH_TOKEN: abc=def must resolve to abc=def: '='-first splitting
-        read the key as "MCP_AUTH_TOKEN: abc", skipped the line silently, and
-        probed without the token the container was started with. Base64
-        padding makes '=' inside token values common, not exotic.
-        """
-        (self.repo / ".env").write_text("MCP_AUTH_TOKEN: abc=def\n")
-        result = self.deploy(self.commit)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        headers = [c for c in self.calls() if c[0] == "curl-header"]
-        self.assertEqual(len(headers), 1)
-        self.assertEqual(headers[0][1], ["Authorization: Bearer abc=def\n"])
-
-    def test_equals_value_containing_colon_keeps_the_colon(self):
-        """First delimiter wins in the other direction too."""
-        (self.repo / ".env").write_text("MCP_AUTH_TOKEN=abc:def\n")
-        result = self.deploy(self.commit)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        headers = [c for c in self.calls() if c[0] == "curl-header"]
-        self.assertEqual(len(headers), 1)
-        self.assertEqual(headers[0][1], ["Authorization: Bearer abc:def\n"])
+        self.assertIn("Configuration error", result.stderr)
+        self.assertIn(f"Rolled back to {self.commit[:7]}", result.stderr)
+        self.assertEqual(self.compose_commands(), ["config"])
+        self.assertFalse(any(name == "curl" for name, _, _ in self.calls()))
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
 
     def test_200_that_is_not_an_mcp_initialize_result_fails(self):
         """HTTP 200 alone is not verification.
@@ -416,7 +380,7 @@ if name == "curl":
         success must fail the deploy, not pass it.
         """
         for body in (
-            '{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"x"}}',
+            '{"jsonrpc":"2.0","id":"deploy-verify","error":{"code":-32600}}',
             '{"ok": true}',
             '{"result":{"protocolVersion":"2025-06-18"}}',
         ):
@@ -439,14 +403,34 @@ if name == "curl":
         result = self.deploy(self.commit)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Deploy verification failed", result.stderr)
+        self.assertIn("Authentication refused", result.stderr)
         self.assertIn("MCP_AUTH_TOKEN", result.stderr)
         self.assertNotIn("Deploy verified", result.stderr)
-        # The rollback exits from inside finish_deploy, where the EXIT trap
-        # still sees header_file — this path deletes it too.
-        curls = [args for name, args, _ in self.calls() if name == "curl"]
-        header_args = [a for a in curls[0] if a.startswith("@")]
-        self.assertEqual(len(header_args), 1)
-        self.assertFalse(Path(header_args[0][1:]).exists())
+        self.assertEqual(list(self.tmpdir.iterdir()), [])
+
+    def test_failed_log_collection_does_not_prevent_rollback(self):
+        prev_env = self.save_previous_deploy()
+        newer_commit = self.add_newer_commit()
+        self.env["CURL_TEST_STATUS"] = "401"
+        self.env["DOCKER_TEST_FAIL_LOGS"] = "1"
+        result = self.deploy(newer_commit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Could not collect the moomoo-mcp logs", result.stderr)
+        self.assertIn(f"Rolled back to {self.commit[:7]}", result.stderr)
+        self.assertEqual(self.compose_commands().count("up"), 2)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
+
+    def test_too_old_host_python_fails_before_changing_anything(self):
+        fake = self.bin / "python3"
+        fake.write_text("#!/bin/sh\nexit 1\n")
+        fake.chmod(0o755)
+        result = self.deploy(self.commit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Python 3.10 or newer", result.stderr)
+        self.assertEqual(self.git("symbolic-ref", "--short", "HEAD").strip(), "main")
+        self.assertFalse((self.repo / ".deploy.env").exists())
+        self.assertEqual(self.calls(), [])
 
     def test_release_tagged_commit_still_deploys_commit_tag(self):
         """A commit carrying a v* git tag still deploys under its short commit."""
@@ -527,9 +511,7 @@ if name == "curl":
         result = self.deploy(newer_commit)
 
         self.assertNotEqual(result.returncode, 0)
-        docker = [args for name, args, _ in self.calls() if name == "docker"]
-        self.assertEqual(len(docker), 1)
-        self.assertEqual(docker[0][-1], "pull")
+        self.assertEqual(self.compose_commands(), ["config", "pull"])
 
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
         self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
@@ -663,16 +645,63 @@ if name == "curl":
             f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={newer_commit[:7]}\n",
         )
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), newer_commit)
-        calls = self.calls()
-        docker = [args for name, args, _ in calls if name == "docker"]
-        self.assertEqual(len(docker), 1)
-        self.assertEqual(docker[0][-1], "pull")
-        self.assertFalse(
-            any(
-                name == "curl" or (name == "docker" and "ps" in args)
-                for name, args, _ in calls
-            )
+        self.assertEqual(self.compose_commands(), ["config", "pull"])
+        self.assertFalse(any(name == "curl" for name, _, _ in self.calls()))
+
+    def commit_host_checkout(self, deploy_sh, helper):
+        """Commit an older host checkout, then restore the current scripts on
+        top of it as the target. Leaves the checkout on the older commit."""
+        scripts = self.repo / "scripts"
+        (scripts / "deploy.sh").write_text(deploy_sh)
+        if helper is None:
+            self.git("rm", "--quiet", "scripts/deploy_verify.py")
+        else:
+            (scripts / "deploy_verify.py").write_text(helper)
+        self.git("add", "scripts")
+        self.git("commit", "-m", "older host checkout")
+        old_commit = self.git("rev-parse", "HEAD").strip()
+        for name in ("deploy.sh", "deploy_verify.py"):
+            shutil.copy2(ROOT / "scripts" / name, scripts / name)
+        self.git("add", "scripts")
+        self.git("commit", "-m", "target with the verifier")
+        target = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "--quiet", "--detach", old_commit)
+        return target
+
+    def test_pre_helper_script_hands_over_to_the_target_helper(self):
+        """The first deploy of the helper starts from a script that has none.
+
+        The host runs the deploy.sh it has checked out — main's, from before
+        the helper existed. It re-executes the target's script from a
+        temporary file, and that script must find the helper in the target
+        checkout: next to the temporary file there is nothing to find.
+        """
+        target = self.commit_host_checkout(PRE_HELPER_DEPLOY_SH.read_text(), None)
+        self.assertFalse((self.repo / "scripts/deploy_verify.py").exists())
+
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("re-executing latest deploy script", result.stderr)
+        self.assertIn(f"Deploy verified: {target[:7]}", result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), target)
+        self.assertEqual(
+            self.compose_commands(), ["config", "pull", "up", "config", "logs"]
         )
+        headers = [c[1] for c in self.calls() if c[0] == "curl-header"]
+        self.assertEqual(headers, [["Authorization: Bearer test-only\n"]])
+
+    def test_reexec_runs_the_target_helper_not_the_old_one(self):
+        """A helper already on the host is the old commit's, and stays unused."""
+        stale = "import sys\nprint('STALE HELPER', file=sys.stderr)\nsys.exit(1)\n"
+        shebang, rest = (ROOT / "scripts/deploy.sh").read_text().split("\n", 1)
+        old_script = f'{shebang}\necho "OLD DEPLOY SCRIPT" >&2\n{rest}'
+        target = self.commit_host_checkout(old_script, stale)
+
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("re-executing latest deploy script", result.stderr)
+        self.assertNotIn("STALE HELPER", result.stderr)
+        self.assertIn(f"Deploy verified: {target[:7]}", result.stderr)
 
     def test_no_reexec_when_deploy_script_identical(self):
         """When deploy.sh is identical, deployment proceeds without re-execution."""

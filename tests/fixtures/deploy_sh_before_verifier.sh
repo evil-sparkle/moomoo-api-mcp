@@ -31,7 +31,7 @@ if [ "$dkr.$ecr.$domain.$suffix" != 'dkr.ecr.amazonaws.com' ] || [ -n "${extra:-
   echo 'ECR_REGISTRY must be a private ECR registry hostname.' >&2
   exit 1
 fi
-tools=(git aws docker python3)
+tools=(git aws docker)
 if [ "$prepare" = false ]; then
   tools+=(curl)
   case "${DEPLOY_VERIFY_TIMEOUT:-90}" in
@@ -44,12 +44,6 @@ fi
 for tool in "${tools[@]}"; do
   command -v "$tool" >/dev/null || { echo "Missing required command: $tool" >&2; exit 1; }
 done
-# scripts/deploy_verify.py runs on the host, not in the image: standard library
-# only, so any Python 3.10 or newer will do (Ubuntu 24.04 ships 3.12).
-if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
-  echo 'deploy.sh needs Python 3.10 or newer on the host as python3.' >&2
-  exit 1
-fi
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo 'Commit or stash tracked working-tree changes before deploying.' >&2
   exit 1
@@ -135,44 +129,53 @@ finish_deploy() {
   fi
 
   git checkout --quiet --detach "$commit"
-  if [ ! -f docker-compose.prod.yml ] || [ ! -x scripts/compose-prod.sh ] \
-    || [ ! -f scripts/deploy_verify.py ]; then
+  if [ ! -f docker-compose.prod.yml ] || [ ! -x scripts/compose-prod.sh ]; then
     echo 'Target commit lacks production deployment files; choose a newer commit.' >&2
     return 1
   fi
   printf 'ECR_REGISTRY=%s\nIMAGE_TAG=%s\n' "$registry" "${image_tag}" > .deploy.env
 
-  # Compose resolves the configuration; the helper only reads the result. It
-  # runs from the checkout just made, never from wherever this script was
-  # started — after a self-reexec that is a temporary file — so the helper,
-  # compose-prod.sh and the compose files all come from the target commit, with
-  # the .deploy.env just written.
-  local verify_helper="$REPO_ROOT/scripts/deploy_verify.py"
   if [ "$prepare" = false ]; then
-    # Nothing has been started yet, so there is nothing to restart either.
-    python3 "$verify_helper" check-config || rollback false
     ./scripts/compose-prod.sh pull || rollback false
     # --remove-orphans clears containers left behind by manual troubleshooting,
     # which otherwise fail the start with "container name is already in use".
     ./scripts/compose-prod.sh up -d --remove-orphans || rollback true
-    # Verified means the endpoint accepted the configured token and answered
-    # an MCP initialize with a valid result — not that OpenD is logged in to
-    # the broker.
-    if python3 "$verify_helper" verify \
-      --url "${DEPLOY_VERIFY_URL:-http://127.0.0.1:8000/mcp}" \
-      --timeout "${DEPLOY_VERIFY_TIMEOUT:-90}"; then
+    local timeout="${DEPLOY_VERIFY_TIMEOUT:-90}"
+    local verify_url="${DEPLOY_VERIFY_URL:-http://127.0.0.1:8000/mcp}"
+    local elapsed=0
+    local verified=false
+    # Note: Verification proves containers + MCP listening only, not OpenD login.
+    while :; do
+      local ps_out=""
+      ps_out="$(./scripts/compose-prod.sh ps --status running --services 2>/dev/null || true)"
+      local mcp_running=false
+      while IFS= read -r sline; do
+        if [ "$sline" = "moomoo-mcp" ]; then mcp_running=true; fi
+      done <<< "$ps_out"
+      if [ "$mcp_running" = true ]; then
+        local code
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$verify_url" 2>/dev/null || true)"
+        [ -z "$code" ] && code="000"
+        case "$code" in
+          000 | 5?? | ? | ?? | ????* ) ;;
+          *) verified=true; break ;;
+        esac
+      fi
+      if [ "$timeout" = "0" ] || [ "$elapsed" -ge "$timeout" ]; then
+        break
+      fi
+      sleep 3
+      elapsed=$((elapsed + 3))
+    done
+    if [ "$verified" = true ]; then
       echo "Deploy verified: ${short} as ${image_tag}" >&2
-      ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp \
-        || echo 'Could not collect the moomoo-mcp logs.' >&2
+      ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
     else
-      echo "Deploy verification failed for ${short}; see the reason above." >&2
-      # Diagnostics only: failing to collect them must not stop the rollback.
-      ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp \
-        || echo 'Could not collect the moomoo-mcp logs.' >&2
+      echo "Deploy verification failed." >&2
+      ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
       rollback true
     fi
   else
-    python3 "$verify_helper" check-config
     ./scripts/compose-prod.sh pull
   fi
 }
