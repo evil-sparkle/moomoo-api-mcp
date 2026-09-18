@@ -356,11 +356,13 @@ class TestStartupTradingMode:
             patch("moomoo_mcp.server.MoomooService", return_value=moomoo_service),
             patch("moomoo_mcp.server.TradeService", side_effect=make_trade_service),
             patch("moomoo_mcp.server.MarketDataService"),
+            patch("moomoo_mcp.server._auto_unlock_trade") as mock_auto_unlock,
         ):
             async with app_lifespan(MagicMock()):
                 pass
 
         assert trade_service.policy.mode is TradingMode.REAL
+        mock_auto_unlock.assert_not_called()
         trade_service.unlock_trade.assert_not_called()
 
 

@@ -356,8 +356,9 @@ async def unlock_trade(
 
     Note:
         The unlock state is maintained on the OpenD gateway, not per client session.
-        Calling this unlocks trading on OpenD until the gateway restarts or the
-        unlock expires.
+        Do not assume it remains unlocked: credential-backed REAL order operations
+        attempt to re-lock the gateway when they finish. Gateway restarts may also
+        require unlocking again.
 
         Unlocking requires MOOMOO_TRADING_MODE=REAL. In READ_ONLY or SIMULATE
         mode this tool returns an explicit policy error, and a configured trade
