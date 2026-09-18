@@ -48,7 +48,7 @@ the rootless daemon has its own storage.
 
 The credential helper obtains and caches ECR authorization tokens using the IAM
 user's credentials. No manual `docker login` is needed. The deploy wrapper uses
-`BatchGetImage` to check both images, which the pull-only IAM policy already allows.
+`BatchGetImage` to check the `moomoo-api-mcp` image, which the pull-only IAM policy already allows.
 
 ### 3. Write AWS credentials for the helper
 
@@ -107,7 +107,7 @@ cd "$HOME/moomoo"
 ```
 
 The production overlay and both scripts are versioned with the application. Use a
-commit containing these files whose two CI image builds have published successfully.
+commit containing these files whose CI image build has published successfully.
 The deployment script checks out the resolved commit before pulling its images.
 
 ### 6. Write `.env`
@@ -137,7 +137,7 @@ remembered-token path passes `-login_account` alongside `-login_by_remember=1`.
 Leaving it blank now exits the container with an explicit error rather than
 leaving OpenD waiting on a console prompt that never arrives under `up -d`.
 
-### 7. Prepare images, then perform interactive OpenD login
+### 7. Prepare image, then perform interactive OpenD login
 
 On the Terraform workstation, obtain the nonsecret registry hostname with
 `terraform output -raw ecr_registry` from `aws/ecr-pull-iam-user`.
@@ -149,7 +149,7 @@ export ECR_REGISTRY='<Terraform ecr_registry output>'
 ./scripts/deploy.sh --prepare
 ```
 
-This checks both images, checks out the full commit, writes `.deploy.env`, and
+This checks the image, checks out the full commit, writes `.deploy.env`, and
 pulls without starting services. It derives the seven-character tag from the
 full commit; you do not enter image tags. An optional commit argument selects
 an older published commit: `./scripts/deploy.sh --prepare <commit>`.
@@ -250,11 +250,11 @@ troubleshooting no longer block it with `container name is already in use`.
 When running Compose by hand rather than through the script, pass the same flag.
 
 The script fetches `main`, resolves the full commit, derives the seven-character
-tag CI writes on every main build, and confirms it on both repositories with
+tag CI writes on every main build, and confirms it on the ECR repository with
 `aws ecr batch-get-image`. AWS errors remain visible; a missing image stops the
 deployment before checkout. It never uses `:latest` and ignores git `v*` tags,
-which are release bookmarks only. If `main` has not finished publishing both
-images, wait for CI or select an already-published commit. It does not search
+which are release bookmarks only. If `main` has not finished publishing the
+image, wait for CI or select an already-published commit. It does not search
 for the newest green build. If `scripts/deploy.sh` in the target commit differs
 from the local checkout, the script automatically re-executes using the target
 commit's deploy script so updated deployment, verification, and rollback logic
@@ -264,7 +264,7 @@ How far back you can roll back is bounded by the ECR lifecycle policy, which
 keeps every `v*`-tagged image and the 30 most recent commit builds per
 repository.
 
-After start, it verifies both containers are running and the MCP endpoint
+After start, it verifies the container is running and the MCP endpoint
 answers (any non-5xx HTTP status, token not sent) within `DEPLOY_VERIFY_TIMEOUT`
 seconds (default 90; must be a whole number of seconds). On failure, or if
 `pull` or `up` fails, it restores the previous `.deploy.env` and commit
@@ -299,7 +299,7 @@ supervisor does that by itself whenever OpenD dies, without disturbing anything
 a client can see, and what an operator restarts is the container.
 
 **When the gateway process dies**, the supervisor restarts it in place and MCP
-clients are not disturbed: open sessions keep serving calls across it. The
+clients are not disturbed: the stateless HTTP endpoint keeps serving calls across it. The
 moomoo SDK reconnects on its own, retrying every six seconds for as long as it
 takes, and on reconnect it replays the quote subscriptions it was holding,
 re-asserts the READ_ONLY lock, and replays a REAL deployment's startup unlock if

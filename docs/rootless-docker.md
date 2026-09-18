@@ -2,7 +2,7 @@
 
 Docker Engine needs Linux. On this Apple Silicon Mac, Lima runs an ARM Linux
 VM with a rootless Docker daemon; Rosetta executes the x86_64 image binaries.
-Both Compose services target `linux/amd64`, matching the remote x86_64 server.
+The Compose service targets `linux/amd64`, matching the remote x86_64 server.
 The VM itself remains ARM64, so this is not a native x86_64 runtime test.
 
 ## Initial setup
@@ -55,12 +55,12 @@ separately once its runtime configuration is ready.
 The remote server needs its own rootless Docker installation. Check its
 `docker info` output for `name=rootless` using the deployment user's context.
 For CI-built ECR images, follow [the VPS deployment runbook](deploy-vps.md).
-It pulls both images using the rootless context; no build on the VPS is needed.
+It pulls the image using the rootless context; no build on the VPS is needed.
 Local images are not automatically copied to the remote server.
 
 Rootless mode controls the daemon's host privileges. UID 0 inside a container
-is mapped into an unprivileged host user's namespace; `/root` inside the OpenD
-container does not mean the Docker daemon runs as host root.
+is mapped into an unprivileged host user's namespace; `/root` inside the
+container does not mean the Docker daemon runs as host root. (The container runs unprivileged processes under UID 10001.)
 
 References: [Lima Docker template](https://github.com/lima-vm/lima/blob/master/templates/docker.yaml),
 [Lima architecture emulation](https://lima-vm.io/docs/config/multi-arch/),

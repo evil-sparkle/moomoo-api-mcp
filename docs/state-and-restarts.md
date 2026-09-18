@@ -148,7 +148,7 @@ deploy rather than during one.
 What stateless gives up is state this server does not keep: no resumable event
 stream, and no server-initiated notifications outside a request. Logging
 notifications emitted during a tool call still ride that call's own response.
-This applies to the streamable-HTTP transport; `MCP_TRANSPORT=sse` is unchanged.
+This applies to the stateless-HTTP transport; `MCP_TRANSPORT=sse` is unchanged.
 
 ## Why the gateway connections belong to the process
 
@@ -161,8 +161,8 @@ So a freshly started `moomoo-mcp` has not dialled OpenD at all and will not
 until a client sends its first request. A server nobody has called shows no
 gateway activity, and that is correct rather than broken.
 
-Because of that, the services are built once for the process and shared by every
-session, instead of being built in the lifespan. Building them per lifespan
+Because of that, the services are built once for the process and shared across all
+requests, instead of being built in the lifespan. Building them per lifespan
 opened a fresh pair of OpenD connections for every client, waited the trade
 connect timeout each time, and closed them when that client left — and under
 stateless HTTP it would have done all of that per tool call.
@@ -186,7 +186,7 @@ interleaving.
 
 Authentication is not session-based and never was: `BearerAuthMiddleware`
 compares the `Authorization` header against `MCP_AUTH_TOKEN` on every request,
-in constant time. Stateless sessions changed nothing about this.
+in constant time. Stateless HTTP changed nothing about this.
 
 ### What protects them
 
