@@ -253,7 +253,10 @@ tag CI writes on every main build, and confirms it on both repositories with
 deployment before checkout. It never uses `:latest` and ignores git `v*` tags,
 which are release bookmarks only. If `main` has not finished publishing both
 images, wait for CI or select an already-published commit. It does not search
-for the newest green build.
+for the newest green build. If `scripts/deploy.sh` in the target commit differs
+from the local checkout, the script automatically re-executes using the target
+commit's deploy script so updated deployment, verification, and rollback logic
+takes effect immediately.
 
 How far back you can roll back is bounded by the ECR lifecycle policy, which
 keeps every `v*`-tagged image and the 30 most recent commit builds per
