@@ -20,7 +20,7 @@ ARG OPEND_URL=https://github.com/evil-sparkle/moomoo-api-mcp/releases/download/$
 # Read it from the API rather than hashing a local copy -- a partial download
 # hashes cleanly and pins a corrupt artifact:
 #   gh api repos/evil-sparkle/moomoo-api-mcp/releases/tags/${OPEND_TAG} \
-#     --jq '.assets[] | select(.name | endswith("tar.gz")) | .digest'
+#     --jq '.assets[] | select(.name | startswith("moomoo_OpenD_")) | .digest | ltrimstr("sha256:")'
 ARG OPEND_SHA256=72eaa6e47b5cb8905306427b5e3679d591408243492e3e7acbc3a7d46f09a0aa
 
 # Download OpenD from GitHub Release (with fallback to Moomoo CDN) and verify SHA256 integrity
