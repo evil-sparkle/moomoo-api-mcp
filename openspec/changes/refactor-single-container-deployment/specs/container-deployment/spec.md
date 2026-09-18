@@ -20,12 +20,13 @@ reachable from any other container or network.
   deployment's container address
 - **THEN** the connection SHALL be refused because the gateway listens on loopback only
 
-#### Scenario: MCP server reaches OpenD over container loopback
+#### Scenario: MCP server reaches OpenD internally
 
-- **GIVEN** the deployment is running and the gateway has started
+- **GIVEN** the single-container deployment is running
+- **AND** OpenD is accepting connections
 - **WHEN** the MCP server connects to `127.0.0.1:11111`
-- **THEN** the connection SHALL succeed without the gateway listening on any
-  non-loopback address
+- **THEN** the connection SHALL use container loopback
+- **AND** OpenD SHALL NOT require a non-loopback listener
 
 #### Scenario: MCP endpoint published to host loopback only
 
@@ -105,14 +106,16 @@ stop signals to both processes.
 - **GIVEN** the OpenD process has exited and been restarted up to the configured bound
 - **WHEN** it exits again within the configured window
 - **THEN** the supervisor SHALL stop the MCP server cleanly
-- **AND** exit non-zero so the container runtime replaces the whole unit
+- **AND** exit non-zero so the container runtime's restart policy restarts
+  the container with fresh processes
 
 #### Scenario: MCP process death takes the container down
 
 - **GIVEN** the deployment is running
 - **WHEN** the MCP server process exits unexpectedly
 - **THEN** the supervisor SHALL stop the OpenD process cleanly
-- **AND** exit non-zero so the container runtime replaces the whole unit
+- **AND** exit non-zero so the container runtime's restart policy restarts
+  the container with fresh processes
 
 #### Scenario: A degraded broker connection is not a restart trigger
 
