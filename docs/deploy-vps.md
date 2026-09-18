@@ -22,10 +22,12 @@ For what state the stack holds and what each restart costs, see
 Use the deploy user's rootless Docker installation on Linux. If it is already
 working, skip installation. Otherwise follow [Docker's rootless setup guide](https://docs.docker.com/engine/security/rootless/),
 which creates the `rootless` context and a user `docker.service`.
-Install Git, the AWS CLI, the ECR credential helper, and current Docker Compose v2
-if missing. On Ubuntu 24.04, install `git` and `amazon-ecr-credential-helper`
-with apt, and AWS CLI v2 with `sudo snap install aws-cli --classic` (or AWS's
-official installer).
+Install Git, the AWS CLI, the ECR credential helper, current Docker Compose v2,
+and Python 3.10 or newer as `python3` (Ubuntu 24.04 ships 3.12) if missing:
+`scripts/deploy_verify.py` runs on the host, not in the image, and uses only
+the standard library. On Ubuntu 24.04, install `git`, `python3`, and
+`amazon-ecr-credential-helper` with apt, and AWS CLI v2 with
+`sudo snap install aws-cli --classic` (or AWS's official installer).
 
 Verify as the deploy user, without `sudo`:
 
@@ -192,7 +194,7 @@ cd "$HOME/moomoo"
 
 One log stream carries both processes. OpenD should reach "TRC login OK" within ~30s, and the server reports `MCP server listening on 0.0.0.0:8000`; lines prefixed `[supervisor]` are the process policy itself, including any gateway restart. Hit `http://localhost:8000/mcp` from the host (the port is bound to `127.0.0.1` only) with the `Authorization: Bearer $MCP_AUTH_TOKEN` header.
 
-The deploy script verifies the same way a client would: it sends the `MCP_AUTH_TOKEN` from `.env` as an MCP `initialize` request, so a healthy deploy logs `POST /mcp 200`. The reply must also be a JSON-RPC `initialize` result, not merely any 200 — a URL that answers 200 without speaking MCP fails the deploy. The token is resolved from `.env` with a subset of Compose's dotenv grammar — `KEY=value` (or `KEY: value`, optional `export` prefix), quotes, surrounding whitespace, CRLF, inline comments. A value the subset cannot resolve unambiguously — escape sequences, multiline quotes, variable references (`$VAR` or `${VAR}`) — is refused with an error rather than guessed at; export the variable in the environment to override, which Compose also honors. The token is passed to curl through a 0600 file, never a command line. A bare unauthenticated `GET /mcp` still answers 401 by design — that only means the endpoint is up with auth enabled. If the probe itself is refused (401/403), the deploy fails and names `MCP_AUTH_TOKEN` as the thing to check.
+The deploy script verifies the same way a client would: it sends an MCP `initialize` request authenticated with the `MCP_AUTH_TOKEN` Compose resolves for the service, so a healthy deploy logs `POST /mcp 200`. The reply must also be a JSON-RPC `initialize` result, not merely any 200 — a URL that answers 200 without speaking MCP fails the deploy. Docker Compose resolves the deployment configuration — the same env files and compose files `scripts/compose-prod.sh` starts the container with — and `scripts/deploy_verify.py` (host Python 3.10+, standard library only) reads the resolved service environment; it never parses dotenv files itself. The one translation it makes is Compose's own output escaping: `config` prints values as compose input, where a literal `$` appears as `$$`, so the printed pairs are decoded back to what the container received. The resolved configuration stays in the helper's memory — it is never printed or written anywhere, and it can carry credentials besides the token. The token is handed to curl on stdin, never a command line or file. A bare unauthenticated `GET /mcp` still answers 401 by design — that only means the endpoint is up with auth enabled. Verification confirms the endpoint accepts the configured authentication and returns a valid initialize result; it does not confirm broker login or trading readiness. If the probe is refused (401/403), the deploy fails and names `MCP_AUTH_TOKEN` as the thing to check.
 
 ### 9. systemd unit, so the stack survives reboots
 
@@ -265,16 +267,19 @@ keeps every `v*`-tagged image and the 30 most recent commit builds per
 repository.
 
 After start, it verifies the endpoint as a client would: an authenticated MCP
-`initialize` using the `MCP_AUTH_TOKEN` from `.env` (sent to curl through a
-0600 file, never a command line), retried while the status is `000` or 5xx,
-within `DEPLOY_VERIFY_TIMEOUT`
-seconds (default 90; must be a whole number of seconds). Verified means HTTP
-200 **and** a JSON-RPC `initialize` result. A refused probe (401/403) or a 200
-that is not an initialize result fails the deploy immediately. On failure, or if
-`pull` or `up` fails, it restores the previous `.deploy.env` and commit
-(restarting the previous deployment if something had been started) and exits non-zero.
-If the rollback's own restart fails, the script says so and the stack needs a
-manual `scripts/compose-prod.sh up -d`. Verification does not prove OpenD login.
+`initialize` using the `MCP_AUTH_TOKEN` Compose resolves for the service,
+retried while the endpoint is not answering yet (no response, or 5xx), within
+`DEPLOY_VERIFY_TIMEOUT` seconds (default 90; must be a whole number of
+seconds; `0` means one attempt). Verified means HTTP 200 **and** a JSON-RPC
+`initialize` result. A refused probe (401/403) or a 200 that is not an
+initialize result fails the deploy immediately. The token reaches curl on
+stdin, never a command line or file; the resolved configuration is never
+printed or written anywhere. On failure, or if the configuration cannot be
+resolved, or `pull` or `up` fails, it restores the previous `.deploy.env` and
+commit (restarting the previous deployment if something had been started) and
+exits non-zero. If the rollback's own restart fails, the script says so and the
+stack needs a manual `scripts/compose-prod.sh up -d`. Verification does not
+prove OpenD login.
 Confirm login and MCP availability after each deployment; container startup
 alone is not a successful authenticated session.
 
