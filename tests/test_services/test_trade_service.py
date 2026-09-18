@@ -1,5 +1,6 @@
 """Unit tests for TradeService."""
 
+import logging
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -119,6 +120,21 @@ class TestReadOnlyGatewayLock:
 
         assert ctx.on_api_socket_reconnected() == (RET_OK, "")
         ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+
+    def test_a_refused_lock_on_initial_connect_is_logged_and_keeps_the_connection(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        """A refused lock at connect must not fail connection or discard context."""
+        with caplog.at_level(logging.WARNING):
+            service, ctx, _ = self._connected(
+                TradingPolicy(TradingMode.READ_ONLY),
+                lock_result=(RET_ERROR, "trade svr not ready"),
+            )
+
+        ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+        assert service.trade_ctx is ctx
+        assert "Failed to lock the trade gateway after connecting" in caplog.text
+        assert "trade svr not ready" in caplog.text
 
     @pytest.mark.parametrize("mode", [TradingMode.SIMULATE, TradingMode.REAL])
     def test_other_modes_are_left_alone(self, mode):

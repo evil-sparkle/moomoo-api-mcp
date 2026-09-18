@@ -65,17 +65,22 @@ documentation-only change must not make, or a test that turns a **gap** or
       it already does after a gateway-only restart. Also assert that
       `initialize` returns no `mcp-session-id`. Today the smoke test accepts
       either.
-- [ ] 3.3 Test: a REAL-mode startup whose trade connection is not ready skips
-      auto-unlock. The nearest existing test runs in READ_ONLY.
-- [ ] 3.4 Test: the initial-connect path logs a refused READ_ONLY lock and
-      keeps the connection. Only the reconnect path is tested.
+- [x] 3.3 Test: a REAL-mode startup whose trade connection is not ready skips
+      auto-unlock. The nearest existing test runs in READ_ONLY. Pinned and
+      asserted in `TestStartupTradingMode.test_real_mode_unready_connection_skips_auto_unlock`
+      in `tests/test_server.py`.
+- [x] 3.4 Test: the initial-connect path logs a refused READ_ONLY lock and
+      keeps the connection. Only the reconnect path is tested. Pinned and
+      asserted in `TestReadOnlyGatewayLock.test_a_refused_lock_on_initial_connect_is_logged_and_keeps_the_connection`
+      in `tests/test_services/test_trade_service.py`.
 - [ ] 3.5 Runtime: order-command errors do not distinguish "outcome unknown"
       (transport lost) from "rejected by the broker". Consider a distinct error
       that tells the caller to query orders before retrying.
-- [ ] 3.6 Stale wording outside the specs: the `unlock_trade` tool docstring
+- [x] 3.6 Stale wording outside the specs: the `unlock_trade` tool docstring
       (`tools/account.py:358`) says the unlock is "maintained for the session".
       The rewritten compose tests and smoke test for the single container no
-      longer say sessions live in server memory.
+      longer say sessions live in server memory. Updated to state that unlock
+      state is maintained on the OpenD gateway.
 - [ ] 3.7 `.env.example` lists `OPEND_VERSION`, `OPEND_TAG`, `OPEND_URL` and
       `OPEND_SHA256` as optional overrides, but no Compose file forwards them as
       build args, so setting them has no effect. Either forward them or remove

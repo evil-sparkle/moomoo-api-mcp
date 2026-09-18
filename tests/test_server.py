@@ -339,6 +339,30 @@ class TestStartupTradingMode:
         assert trade_service.unlock_trade.call_count == 1
         trade_service.place_order.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_real_mode_unready_connection_skips_auto_unlock(self) -> None:
+        """A REAL-mode startup whose trade connection is not ready skips auto-unlock."""
+        moomoo_service, trade_service = self._mock_services()
+        trade_service.connect.side_effect = None
+        trade_service.trade_ctx = None
+
+        def make_trade_service(**kwargs):
+            trade_service.policy = kwargs["policy"]
+            return trade_service
+
+        env = {ENV_VAR: "REAL", "MOOMOO_TRADE_PASSWORD": "hunter2"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("moomoo_mcp.server.MoomooService", return_value=moomoo_service),
+            patch("moomoo_mcp.server.TradeService", side_effect=make_trade_service),
+            patch("moomoo_mcp.server.MarketDataService"),
+        ):
+            async with app_lifespan(MagicMock()):
+                pass
+
+        assert trade_service.policy.mode is TradingMode.REAL
+        trade_service.unlock_trade.assert_not_called()
+
 
 class TestFastMCPSecurity:
     """Tests for FastMCP HTTP/SSE authentication and transport security."""
