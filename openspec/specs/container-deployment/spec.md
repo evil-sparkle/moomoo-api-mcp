@@ -41,13 +41,18 @@ The deployment SHALL persist OpenD session tokens and device authorization state
 
 ### Requirement: Binary Download Integrity Verification
 
-The OpenD container build process SHALL cryptographically verify the SHA256 checksum of downloaded gateway binaries before extraction and execution.
+The OpenD container build process SHALL cryptographically verify the SHA256 checksum of downloaded gateway binaries before extraction and execution. The expected digest SHALL be pinned as the `OPEND_SHA256` build arg alongside the other OpenD version pins in the Dockerfile that downloads OpenD; that build arg is the single source of truth for the value, and this specification deliberately does not restate it.
 
 #### Scenario: Verify download checksum matches pinned hash
 - **GIVEN** a downloaded OpenD tarball during container image build
 - **WHEN** the sha256sum tool computes the checksum of the archive
-- **THEN** the build SHALL proceed only if the checksum matches `d38aad772b296f922e3b270119ca1abbadadc61cd3a45826e1b087a5b79069a5`
+- **THEN** the build SHALL proceed only if the checksum matches the pinned `OPEND_SHA256` build arg
 - **AND** abort immediately with an error if the checksum differs
+
+#### Scenario: Verification applies to every download source
+- **GIVEN** the primary OpenD download URL is unreachable and the build falls back to the Moomoo CDN
+- **WHEN** the fallback download completes
+- **THEN** the archive SHALL be verified against the same pinned `OPEND_SHA256` build arg before extraction
 
 ### Requirement: Non-Root Container Execution
 
