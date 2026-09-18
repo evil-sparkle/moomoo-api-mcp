@@ -87,6 +87,30 @@ trading readiness.
 - **AND** the failure SHALL suggest that the verification URL does not point
   at the MCP endpoint
 
+#### Scenario: Initialize fields are validated where the lifecycle puts them
+
+- **GIVEN** the endpoint answers HTTP 200 with a JSON or SSE-framed response
+- **WHEN** the response is validated
+- **THEN** `protocolVersion`, `capabilities` and `serverInfo` SHALL be
+  required inside the result object with appropriate types
+- **AND** `protocolVersion` SHALL be required to be a supported protocol
+  version
+- **AND** the same field names appearing outside a result object SHALL NOT
+  pass validation
+
+#### Scenario: A partial transfer never verifies
+
+- **GIVEN** the endpoint answers HTTP 200 and the captured response content
+  is a complete, valid initialize result
+- **AND** the HTTP client did not complete the transfer — a nonzero exit
+  such as a partial transfer, a timeout, or signal termination
+- **WHEN** the attempt is classified
+- **THEN** it SHALL NOT verify
+- **AND** the client's exit status SHALL be evaluated independently of the
+  HTTP status line and the captured content
+- **AND** response content from a failed transfer SHALL NOT be used
+
+
 #### Scenario: Configuration failure restores state without restarting
 
 - **GIVEN** a previous deployment is running

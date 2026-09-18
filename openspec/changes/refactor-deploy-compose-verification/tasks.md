@@ -62,11 +62,33 @@ mandatory `compose-agreement` CI job, which never skips.
      runs the resolution and agreement tests on every non-docs change.
    - [x] 3.5 `pyproject.toml`: basedpyright covers `scripts/`.
 
-4. **Docs and spec**
-   - [x] 4.1 `docs/deploy-vps.md`: Compose resolves deployment configuration,
+4. **Transfer completion (review follow-up)**
+   - [x] 4.1 An attempt verifies only on curl exit 0 + HTTP 200 + structural
+     validation; a timeout, signal termination, or any nonzero curl exit
+     never verifies. The exit status is retained and evaluated before any
+     captured content, so a 200 status line from an aborted transfer or a
+     complete valid body under an overstated Content-Length (exit 18) cannot
+     verify.
+   - [x] 4.2 Real-curl tests for both malformed and fully valid initialize
+     JSON delivered through an incomplete transfer — the valid-content case
+     is what proves the transport check, since parsing added while ignoring
+     the exit status would leave only that case broken — plus a complete SSE
+     event over an incomplete transfer.
+   - [x] 4.3 `protocolVersion` must be a supported version (an MCP date
+     string, e.g. `2024-11-05` verifies, `"banana"` does not), with
+     `protocolVersion`, `capabilities` and `serverInfo` validated inside the
+     result object only.
+   - [x] 4.4 Duplicate assignments including empty ones, against real
+     Compose in the container-agreement cases: empty-then-token resolves to
+     the token; token-then-empty preserves the resolved empty value (probe
+     unauthenticated); an exported empty value never falls back to the file
+     token.
+
+5. **Docs and spec**
+   - [x] 5.1 `docs/deploy-vps.md`: Compose resolves deployment configuration,
      the verifier reads the resolved MCP service environment and never parses
      dotenv files; host Python dependency; stdin header transport; error
      categories; verified = accepted initialize, not broker login.
-   - [x] 4.2 `openspec/changes/refactor-deploy-compose-verification/`: this
+   - [x] 5.2 `openspec/changes/refactor-deploy-compose-verification/`: this
      proposal, design, tasks, and the `container-deployment` delta adding the
      Deployment Verification requirement.
