@@ -206,7 +206,15 @@ def printable(text: str, limit: int = 60) -> str:
 
 
 def probe(url: str, token: str, limit: float) -> Attempt:
-    """POST one initialize through curl and classify what came back."""
+    """POST one initialize through curl and classify what came back.
+
+    An attempt can verify only when all of these hold: curl exits zero
+    (the transfer completed — a partial transfer, timeout or signal
+    termination exits nonzero), the HTTP status is 200, and the response
+    passes structural MCP validation. The exit status is evaluated
+    before any captured content, so valid-looking bytes from a failed
+    transfer can never verify.
+    """
     argv = [
         "curl",
         "--disable",  # must be first: never read a .curlrc
@@ -241,6 +249,10 @@ def probe(url: str, token: str, limit: float) -> Attempt:
     except OSError:
         return Attempt("000", problem="could not run curl")
     if completed.returncode != 0:
+        # The exit status is retained and evaluated independently of the
+        # captured output: curl documents exit 18 as a partial transfer, and
+        # a status line of 200 in output from an aborted transfer does not
+        # override it. Content is never read on a nonzero exit.
         return Attempt(
             "000",
             retryable=completed.returncode in RETRYABLE_CURL_EXITS,
@@ -334,8 +346,8 @@ def initialize_result_problem(message: Any) -> str | None:
     if not isinstance(result, dict):
         return "it carries no initialize result"
     version = result.get("protocolVersion")
-    if not isinstance(version, str) or not version:
-        return "the initialize result has no protocolVersion"
+    if not isinstance(version, str) or not supported_protocol_version(version):
+        return "the initialize result has no supported protocolVersion"
     if not isinstance(result.get("capabilities"), dict):
         return "the initialize result has no capabilities"
     info = result.get("serverInfo")
@@ -346,6 +358,30 @@ def initialize_result_problem(message: Any) -> str | None:
     ):
         return "the initialize result has no well-formed serverInfo"
     return None
+
+
+def supported_protocol_version(version: str) -> bool:
+    """Whether a protocolVersion is one MCP has actually issued.
+
+    MCP protocol versions are date strings — `YYYY-MM-DD` — negotiated in the
+    initialize exchange; the fields are checked inside the result object,
+    where the lifecycle puts them, not wherever their names happen to appear.
+    isdigit() alone would accept non-ASCII digits, so the check is explicit.
+    """
+    if len(version) != 10:
+        return False
+    digits = "0123456789"
+
+    def number(text: str) -> bool:
+        return bool(text) and all(character in digits for character in text)
+
+    return (
+        number(version[:4])
+        and version[4] == "-"
+        and number(version[5:7])
+        and version[7] == "-"
+        and number(version[8:])
+    )
 
 
 def verify(

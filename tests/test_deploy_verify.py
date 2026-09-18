@@ -97,13 +97,19 @@ class ScriptedServer:
                 if server.delay:
                     time.sleep(server.delay)
                 index = min(len(server.requests), len(server.replies)) - 1
-                status, content_type, body = server.replies[index]
+                reply = server.replies[index]
+                status, content_type, body = reply[:3]
+                # A fourth element overstates Content-Length by that many
+                # bytes. The handler returns and the connection closes with
+                # bytes still declared, so real curl exits 18 (partial
+                # transfer) — even when every byte of the body arrived.
+                extra = reply[3] if len(reply) > 3 else 0
                 self.send_response(status)
                 if content_type:
                     self.send_header("Content-Type", content_type)
                 if status in (301, 302):
                     self.send_header("Location", "/elsewhere")
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Length", str(len(body) + extra))
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -275,6 +281,14 @@ class ProbeTest(unittest.TestCase):
             "id": deploy_verify.REQUEST_ID,
             "result": {"protocolVersion": "2025-06-18", "capabilities": {}},
         }
+        no_capabilities = {
+            "jsonrpc": "2.0",
+            "id": deploy_verify.REQUEST_ID,
+            "result": {
+                "protocolVersion": "2025-06-18",
+                "serverInfo": {"name": "x", "version": "0"},
+            },
+        }
         error = {
             "jsonrpc": "2.0",
             "id": deploy_verify.REQUEST_ID,
@@ -286,6 +300,23 @@ class ProbeTest(unittest.TestCase):
             "json-rpc error": json_reply(error),
             "not json-rpc": json_reply({"ok": True}),
             "no serverInfo": json_reply(no_server_info),
+            "no capabilities": json_reply(no_capabilities),
+            # Field names alone are not the initialize result: the lifecycle
+            # puts protocolVersion, capabilities and serverInfo inside the
+            # result object, and validation reads them only there.
+            "fields outside the result object": json_reply(
+                {
+                    "jsonrpc": "2.0",
+                    "id": deploy_verify.REQUEST_ID,
+                    "result": None,
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "serverInfo": {"name": "x", "version": "0"},
+                }
+            ),
+            "all null at top level": json_reply(
+                {"result": None, "protocolVersion": None, "serverInfo": None}
+            ),
             "html": (200, "text/html", b"<html>result serverInfo</html>"),
             "no content type": (200, "", json.dumps(VALID_RESULT).encode()),
             "sse without the response": sse_reply({"jsonrpc": "2.0", "method": "x"}),
@@ -306,6 +337,77 @@ class ProbeTest(unittest.TestCase):
                 self.assertIn("Invalid MCP response", output)
                 self.assertIn("initialize", output)
                 self.assertNotIn(TOKEN, output)
+
+    def test_a_partial_transfer_never_verifies_even_with_valid_content(self):
+        """The transport check itself, proven with real curl.
+
+        Curl documents exit 18 as a partial transfer. In every case here the
+        connection closes with bytes still declared, so curl exits 18 —
+        while the status line says 200 and the captured bytes would parse as
+        a complete, valid initialize response. Content must not rescue the
+        failed transfer: adding JSON parsing while ignoring curl's exit
+        status would leave exactly this case broken, which is why the valid
+        content case is here and not just a truncated one.
+        """
+        complete = json.dumps(VALID_RESULT).encode()
+        truncated = complete[: len(complete) // 2]
+        cases = {
+            "valid json, transfer incomplete": (
+                200,
+                "application/json",
+                complete,
+                16,
+            ),
+            "truncated json, transfer incomplete": (
+                200,
+                "application/json",
+                truncated,
+                len(complete) - len(truncated),
+            ),
+            "complete sse event, transfer incomplete": (
+                200,
+                "text/event-stream",
+                f"event: message\ndata: {json.dumps(VALID_RESULT)}\n\n".encode(),
+                7,
+            ),
+        }
+        for name, (status, content_type, body, extra) in cases.items():
+            with (
+                self.subTest(name),
+                ScriptedServer([(status, content_type, body, extra)]) as server,
+            ):
+                verified, output = run_verify(server.url, timeout=5)
+                self.assertFalse(verified)
+                self.assertEqual(len(server.requests), 1, "never retried to success")
+                self.assertIn("curl exit 18", output)
+                self.assertIn("Verification failed", output)
+                self.assertNotIn("completed an MCP initialize", output)
+
+    def test_the_protocol_version_must_be_a_supported_one(self):
+        """A version is a date string MCP has issued, not any nonempty string.
+
+        `2024-11-05` is a real negotiated version from before this server
+        existed; a probe must accept a healthy server speaking an older
+        supported version. `banana`, a misformatted date and non-ASCII
+        digits are not versions, and neither is a number.
+        """
+        older = dict(VALID_RESULT)
+        older["result"] = dict(VALID_RESULT["result"], protocolVersion="2024-11-05")
+        with ScriptedServer([json_reply(older)]) as server:
+            verified, output = run_verify(server.url)
+            self.assertTrue(verified, output)
+
+        for version in ("banana", "", "2025-6-18", "٢٠٢٥-٠٦-١٨", 20250618):
+            with self.subTest(version=version):
+                invalid = dict(VALID_RESULT)
+                invalid["result"] = dict(
+                    VALID_RESULT["result"], protocolVersion=version
+                )
+                with ScriptedServer([json_reply(invalid)]) as server:
+                    verified, output = run_verify(server.url, timeout=5)
+                    self.assertFalse(verified)
+                    self.assertEqual(len(server.requests), 1)
+                    self.assertIn("protocolVersion", output)
 
     def test_auth_refusal_fails_at_once_with_a_diagnosis(self):
         for status in (401, 403):

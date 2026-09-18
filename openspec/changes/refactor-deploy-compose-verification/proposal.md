@@ -63,6 +63,14 @@ container with the header the verifier actually sent it.
   script runs from. Tests cover the hand-over from main's pre-helper
   `deploy.sh` (frozen as a test fixture) and from a checkout holding a stale
   helper.
+- **Transfer completion rule**: an attempt can verify only when curl
+  exits successfully, the HTTP status is 200, and the response passes
+  structural MCP validation — with the initialize fields validated inside
+  the result object and `protocolVersion` a supported version. A timeout,
+  signal termination, or nonzero curl exit never produces verification
+  success regardless of captured content; the exit status is evaluated
+  independently, so a complete, valid body delivered under an overstated
+  `Content-Length` (curl exit 18, partial transfer) cannot verify.
 - **Tests**: the stubbed deployment tests keep covering ordering, rollback
   and reexec; a new layer runs the real Compose CLI against the real wrapper
   and compose files, and — in the mandatory `compose-agreement` CI job —

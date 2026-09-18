@@ -47,17 +47,53 @@ with the parser. The helper passes `--disable` (never read a `.curlrc),
 `--proto http,https`, `--noproxy *` (the token is for the endpoint, not a
 proxy on the way to it), and no redirect following.
 
+For this bounded curl-based verifier, an attempt can succeed only when
+all of these hold:
+
+```text
+Successful curl transfer (exit 0)
+    AND HTTP 200
+    AND a complete JSON response or a complete SSE response event
+    AND JSON-RPC 2.0 with the matching request id
+    AND a structurally valid initialize result: protocolVersion (a
+        supported version), capabilities and serverInfo inside the
+        result object, with the right types
+    AND no JSON-RPC error in that response
+```
+
+A timeout, signal termination, or nonzero curl exit must never produce
+verification success, regardless of captured response content. Python
+exposes the child's exit status separately from its captured stdout, and
+the helper retains and evaluates both: the exit status is checked before
+any captured output is read, so a 200 status line printed by an aborted
+transfer — or a complete, valid body delivered under an overstated
+`Content-Length` (curl exit 18, partial transfer) — cannot verify. Adding
+response parsing while ignoring curl's exit status would preserve exactly
+that bug, which is why the test suite proves it with real curl delivering
+valid content over a failed transfer.
+
 Response validation is structural, not substring matching: a JSON-RPC
 success with the matching request id and a correctly shaped initialize
-result (`protocolVersion`, `capabilities`, `serverInfo`), over
-`application/json` or an SSE-framed stream, both supported by the
-Streamable HTTP transport the probe speaks to. A string request id means a
-response with id `1` or `true` cannot compare equal to it.
+result, over `application/json` or an SSE-framed stream, both supported by
+the Streamable HTTP transport the probe speaks to. A string request id means
+a response with id `1` or `true` cannot compare equal to it. The fields are
+required *inside the result object*, where the MCP lifecycle puts them — the
+same names appearing elsewhere in the response do not pass — and
+`protocolVersion` must be a supported protocol version (MCP versions are
+`YYYY-MM-DD` date strings), so an older-but-real version such as
+`2024-11-05` verifies while `"banana"` or a misformatted date does not.
+
+For SSE, a complete response event followed by a *cleanly completed*
+transfer is required: a complete event inside a transfer curl exits nonzero
+on does not verify. This is deliberately conservative for the finite
+deployment probe; MCP's Streamable HTTP specification has the server close
+the POST response stream after sending the JSON-RPC response.
 
 | Result | Behavior |
 |---|---|
-| Valid initialize result | Succeed |
-| Connection failure or HTTP 5xx | Retry within the deadline |
+| curl exit 0, HTTP 200, structurally valid initialize result | Succeed |
+| Not answering yet: connection failure (curl 6/7/52/55/56), timeout (28), or HTTP 5xx | Retry within the deadline |
+| Partial transfer (curl 18) or any other nonzero exit | Fail immediately; content never read |
 | HTTP 401/403 | Fail immediately, authentication diagnosis |
 | HTTP 200 with an invalid MCP result | Fail immediately |
 | Any other HTTP status | Fail immediately |

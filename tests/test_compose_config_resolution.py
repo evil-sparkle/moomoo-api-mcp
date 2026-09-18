@@ -418,6 +418,18 @@ AGREEMENT_CASES = {
         b"",
         {},
     ),
+    # Duplicates where one side is empty: the final assignment wins, and an
+    # empty final assignment is a resolved empty value, not "unset".
+    "empty assignment, then a token": (
+        b"MCP_AUTH_TOKEN=\nMCP_AUTH_TOKEN=after-empty\n",
+        b"",
+        {},
+    ),
+    "token, then an empty assignment": (
+        b"MCP_AUTH_TOKEN=real\nMCP_AUTH_TOKEN=\n",
+        b"",
+        {},
+    ),
     "export prefix": (b"export MCP_AUTH_TOKEN=export-prefixed\n", b"", {}),
     "later env file": (
         b"MCP_AUTH_TOKEN=from-dot-env\n",
