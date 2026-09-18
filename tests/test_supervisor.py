@@ -31,8 +31,11 @@ from moomoo_mcp.supervisor import (
     ChildSpec,
     GatewayLoginError,
     Supervisor,
+    SupervisorConfigError,
+    build_supervisor,
     gateway_spec,
     has_remembered_token,
+    redacted,
     server_spec,
 )
 
@@ -74,7 +77,7 @@ def supervisors():
     """Hands out supervisors and guarantees their children are not left behind."""
     made: list[Supervisor] = []
 
-    def make(gateway: ChildSpec, server: ChildSpec, **kwargs) -> Supervisor:
+    def make(gateway: ChildSpec | None, server: ChildSpec, **kwargs) -> Supervisor:
         kwargs.setdefault("gateway_restart_backoff", 0.0)
         kwargs.setdefault("poll_interval", 0.01)
         kwargs.setdefault("stop_timeout", 2.0)
@@ -291,6 +294,106 @@ class TestDegradedIsNotAFailure:
             "the supervisor imports application code, so a health probe could "
             "grow into the policy"
         )
+
+
+class TestCredentialsStayOutOfLogs:
+    """MD5 of six digits is obfuscation, not protection — and logs travel."""
+
+    def test_the_pin_hash_is_never_rendered(self):
+        line = redacted(
+            [
+                "/opt/moomooOpenD/OpenD",
+                "-api_ip=127.0.0.1",
+                "-login_account=12345678",
+                "-login_pwd_md5=d41d8cd98f00b204e9800998ecf8427e",
+            ]
+        )
+
+        assert "d41d8cd98f00b204e9800998ecf8427e" not in line
+        assert "12345678" not in line, "the account number is an identifier too"
+        assert "-login_pwd_md5=<redacted>" in line
+        assert "-api_ip=127.0.0.1" in line, "the useful part must survive"
+
+    def test_the_spawn_log_uses_it(self, tmp_path, supervisors, caplog):
+        secret = "cafebabecafebabecafebabecafebabe"
+        with caplog.at_level("INFO"):
+            supervisors(
+                ChildSpec(
+                    name=GATEWAY,
+                    argv=[sys.executable, "-c", "pass", f"-login_pwd_md5={secret}"],
+                ),
+                child(tmp_path, SERVER, STAY),
+                max_gateway_restarts=0,
+            )
+
+        assert secret not in caplog.text
+
+
+class TestAnUnstartableGatewayIsNotFatal:
+    """A container that exits here takes check_health with it, and an operator
+    asking why gets nothing. The two-container stack kept the server up."""
+
+    def test_a_supervisor_can_run_without_a_gateway(self, tmp_path, supervisors):
+        supervisor = supervisors(None, child(tmp_path, SERVER, STAY))
+
+        for _ in range(10):
+            assert supervisor.tick() is None
+            time.sleep(0.01)
+
+        assert GATEWAY not in supervisor._pids
+        assert alive(supervisor._pids[SERVER])
+
+    def test_no_usable_login_still_builds_a_running_supervisor(self):
+        supervisor = build_supervisor(
+            {"MOOMOO_LOGIN_ACCOUNT": "", "HOME": "/nonexistent"}
+        )
+
+        assert supervisor.gateway is None
+        assert supervisor.server is not None
+
+
+class TestTunablesAreValidated:
+    """Silently running under a policy nobody chose is the quiet failure."""
+
+    @pytest.mark.parametrize(
+        "value", ["nan", "inf", "-inf", "-10", "0", "not-a-number"]
+    )
+    def test_a_bad_duration_is_refused(self, value):
+        with pytest.raises(SupervisorConfigError) as excinfo:
+            build_supervisor(
+                {
+                    "MOOMOO_LOGIN_ACCOUNT": "",
+                    "SUPERVISOR_STOP_TIMEOUT_SECONDS": value,
+                }
+            )
+
+        assert "SUPERVISOR_STOP_TIMEOUT_SECONDS" in str(excinfo.value)
+
+    @pytest.mark.parametrize("value", ["-5", "1.5", "nan", "many"])
+    def test_a_bad_restart_count_is_refused(self, value):
+        with pytest.raises(SupervisorConfigError) as excinfo:
+            build_supervisor({"MOOMOO_LOGIN_ACCOUNT": "", "OPEND_MAX_RESTARTS": value})
+
+        assert "OPEND_MAX_RESTARTS" in str(excinfo.value)
+
+    def test_zero_restarts_is_a_real_choice(self):
+        supervisor = build_supervisor(
+            {"MOOMOO_LOGIN_ACCOUNT": "", "OPEND_MAX_RESTARTS": "0"}
+        )
+
+        assert supervisor.max_gateway_restarts == 0
+
+    def test_blank_means_the_default(self):
+        supervisor = build_supervisor(
+            {
+                "MOOMOO_LOGIN_ACCOUNT": "",
+                "OPEND_MAX_RESTARTS": "",
+                "OPEND_RESTART_WINDOW_SECONDS": "  ",
+            }
+        )
+
+        assert supervisor.max_gateway_restarts == 5
+        assert supervisor.gateway_restart_window == 300.0
 
 
 class TestGatewayCommandLine:

@@ -22,7 +22,9 @@ daemon and are marked so rather than assumed.
    - [x] 2.1 `Dockerfile` on `ubuntu:22.04`, with the OpenD download, `OPEND_*`
      build args, SHA256 verification and extraction moved across verbatim.
    - [x] 2.2 uv resolves the project against a downloaded interpreter;
-     `UV_PYTHON_DOWNLOADS` is `automatic`, `UV_PYTHON=3.12`,
+     `UV_PYTHON_DOWNLOADS` is `automatic`, `UV_PYTHON=3.12.13` (the exact patch
+     CI resolved, so the same commit does not build a different interpreter
+     later), the base image is pinned by digest behind an overridable build arg,
      `UV_PYTHON_PREFERENCE=only-managed` so Ubuntu's 3.10 is not picked up
      silently, and `UV_PYTHON_INSTALL_DIR=/opt/uv-python` so the service user can
      execute what the root-run build installed.
@@ -51,9 +53,10 @@ daemon and are marked so rather than assumed.
      SIGTTIN).
 
 4. **Collapse the compose files**
-   - [x] 4.1 `docker-compose.yml`: one service, `restart: unless-stopped`,
-     `init: true`, the volume at its unchanged path, `127.0.0.1:8000:8000` only,
-     `MOOMOO_OPEND_HOST=127.0.0.1`. No networks, no `depends_on`.
+   - [x] 4.1 `docker-compose.yml`: one service, `restart: unless-stopped`, the
+     volume at its unchanged path, `127.0.0.1:8000:8000` only,
+     `MOOMOO_OPEND_HOST=127.0.0.1`. No networks, no `depends_on`, and
+     deliberately no `init: true` — see 9.2.
    - [x] 4.2 `docker-compose.prod.yml`: one image reference.
    - [x] 4.3 `docker-compose.smoke.yml` points `OPEND_BINARY` at a stub and
      changes nothing else. The stub binds whatever `-api_ip` it is handed, so a
@@ -74,8 +77,12 @@ daemon and are marked so rather than assumed.
      and comes back serving.
    - [x] 5.5 Also probes from a second container on the same network: port 8000
      reachable (the control), 11111 refused.
-   - [ ] 5.6 **Not done — needs a Docker daemon.** Run the rewritten smoke test.
-     It has never been executed; CI is the first thing that will run it.
+   - [x] 5.6 Run the rewritten smoke test. Still not runnable locally (no Docker
+     daemon), but CI has now executed it once and it found a real bug — see 9.1.
+     Its next run is the first that could pass.
+   - [x] 5.7 Assert credentials never reach the container log: the overlay hands
+     the gateway a fake PIN hash and the smoke test fails if it appears in
+     `docker logs`.
 
 6. **Deploy path**
    - [x] 6.1 `scripts/deploy.sh` and `.github/workflows/ci.yml` build, tag and
@@ -103,13 +110,43 @@ daemon and are marked so rather than assumed.
      recorded as the open risk it is.
 
 8. **Verify**
-   - [x] 8.1 `uv run pytest` passes: 557 passed, 1 skipped.
+   - [x] 8.1 `uv run pytest` passes: 573 passed, 1 skipped.
    - [x] 8.2 `uv run ruff check` and `ruff format --check` are clean, and
      `basedpyright` reports 0 errors.
-   - [ ] 8.3 **Not done — needs a Docker daemon.** `scripts/smoke-test.sh`. Same
-     item as 5.6.
+   - [ ] 8.3 **Not done locally — needs a Docker daemon.** `scripts/smoke-test.sh`
+     runs in CI. First run failed on 9.1; awaiting the next.
    - [ ] 8.4 **Not done — no CLI available.** `openspec validate
      refactor-single-container-deployment --strict --no-interactive`; the
      `openspec` binary is not installed here and is not on npm under that name.
      The delta was checked by hand: 4 requirements, 15 scenarios, every
      requirement carrying at least one.
+
+9. **From CI and review** (found after the first push)
+   - [x] 9.1 **CI, container smoke test.** A missing gateway login was fatal:
+     `main` exited, Docker restarted the container, and it crash-looped without
+     ever serving the MCP endpoint. That also broke an existing `system-health`
+     requirement — MCP must remain available for health requests after a
+     downstream startup failure. An unstartable gateway is now logged and the
+     server runs without one. The smoke overlay supplies a fake login so the
+     gateway path is still the one under test.
+   - [x] 9.2 **Review: `init: true` contradicted the PID-1 design.** docker-init
+     would have taken PID 1 and made the supervisor PID 2, so its signal
+     handling and orphan reaping described a job it did not hold. Removed, so
+     the supervisor is genuinely PID 1; `tests/test_compose_topology.py` asserts
+     nothing is inserted in front of it, and the spec now says so explicitly.
+   - [x] 9.3 **Review: the supervisor logged the trade PIN hash.** `_spawn`
+     logged the whole OpenD command line, which carries `-login_pwd_md5` and
+     `-login_account`. Both are redacted now, with a unit test and a smoke-test
+     tripwire.
+   - [x] 9.4 **Review: "costs a client nothing" was too strong.** Reworded
+     everywhere to the claim that actually holds — no reconnection or
+     re-initialization is required, and calls needing the gateway fail until it
+     returns. The spec scenario says the same.
+   - [x] 9.5 **Review: tunables were unvalidated.** `nan`, `inf`, negatives,
+     zero and typo'd values now refuse to start and name the setting instead of
+     silently falling back. Note the limit honestly: this validates *values*, so
+     a misspelled variable name (`OPEND_MAX_RESTARST=10`) is still simply unseen
+     — nothing here can detect that.
+   - [x] 9.6 **Review: interpreter reproducibility.** Pinned to 3.12.13 and the
+     base image to its digest. The apt layer is still resolved at build time, so
+     this is base reproducibility, not a hermetic image.

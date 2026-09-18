@@ -96,12 +96,24 @@ you an interactive re-login; the runbook says never to add `-v` for this reason.
 
 ## What each restart costs
 
-**A gateway process dying** costs a client nothing. The supervisor restarts
-OpenD in place; the MCP server keeps running and its endpoint never stops
-answering. The SDK reconnects on its own — every six seconds, for as long as it
+**A gateway process dying** does not require a client to reconnect or
+re-initialize. That is the precise claim, and it is worth being precise: the
+supervisor restarts OpenD in place and the endpoint never stops answering, so
+`initialize` stays valid, `tools/list` works and `check_health` answers —
+`degraded`. What does not work, for the ~30s OpenD takes to log back in, is
+anything that has to reach the gateway: quotes, positions, orders. Those fail
+with a bounded connect timeout rather than hanging. The SDK reconnects on its own — every six seconds, for as long as it
 takes — and on reconnect replays the quote subscriptions it held, re-asserts the
 gateway lock in `READ_ONLY` mode, and replays a REAL deployment's startup unlock
 if one was performed. The address never moves now, because it is loopback.
+
+A gateway that cannot be started at all — no account configured, no remembered
+token — is treated the same way rather than as a fatal error: the supervisor
+says why, starts the server anyway, and `check_health` reports the gateway
+unavailable. A container that exited here would crash-loop and take the health
+endpoint with it, leaving nothing to ask. A malformed *supervision setting* is
+the opposite and does stop the container: it is never an expected state, and it
+decides how the policy behaves.
 
 That asymmetry is a policy, not a property of the packaging: restarts are
 bounded (`OPEND_MAX_RESTARTS` within `OPEND_RESTART_WINDOW_SECONDS`, with
@@ -178,6 +190,7 @@ in constant time. Stateless sessions changed nothing about this.
 
 ### What protects them
 
+
 - The login password is never stored, which is the strongest measure here.
 - OpenD runs as an unprivileged user (uid 10001), so its files are not
   root-owned.
@@ -186,6 +199,9 @@ in constant time. Stateless sessions changed nothing about this.
 - Port 11111 is published nowhere.
 - `.env` is mode 0600, git-ignored, and a `gitleaks` pre-commit hook scans for
   secrets heading into a commit.
+- The supervisor redacts `-login_pwd_md5` and `-login_account` from the command
+  line it logs, so the trade PIN hash does not end up in `docker logs` or
+  anything shipping them. `scripts/smoke-test.sh` asserts it stays that way.
 
 ### What does not
 

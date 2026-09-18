@@ -15,6 +15,7 @@ So this module is PID 1, and the policy is deliberate rather than implied:
                                replace the whole container
     server exits               stop the gateway, exit non-zero, same
     gateway up but not logged  do nothing; that is `degraded`, not a failure
+    gateway cannot be started  run the server without one, and say why
     SIGTERM / SIGINT           forward to both, wait, then SIGKILL, exit 0
 
 The asymmetry is the point. A gateway restart costs a connected client nothing
@@ -24,16 +25,22 @@ gateway hiccup would spend a client-visible outage to buy nothing. The server,
 by contrast, is stateless over HTTP and holds no session worth preserving, so
 there is nothing to gain by restarting it in place.
 
-Two things this deliberately does not do. It never reads health: a gateway that
-is running but cannot reach the broker is reported `degraded` by ``check_health``
-and left alone, because restarting it would not shorten the outage. And it never
-waits for the gateway before starting the server — the MCP lifespan runs per
-request, so a server that has not been called has not dialled the gateway and
-should still answer.
+Three things this deliberately does not do. It never reads health: a gateway
+that is running but cannot reach the broker is reported `degraded` by
+``check_health`` and left alone, because restarting it would not shorten the
+outage. It never waits for the gateway before starting the server — the MCP
+lifespan runs per request, so a server that has not been called has not dialled
+the gateway and should still answer. And it never lets a *misconfigured* gateway
+take the container down: no login to attempt is a permanent condition that
+restarting cannot fix, and exiting over it would crash-loop the container and
+take the health endpoint with it — leaving an operator with nothing to ask why.
+The server runs, ``check_health`` reports the gateway unavailable, and the
+reason is in the log.
 """
 
 import contextlib
 import logging
+import math
 import os
 import signal
 import sys
@@ -66,6 +73,27 @@ EXIT_CONFIG = 3
 
 class GatewayLoginError(Exception):
     """No usable way to log the gateway in, so starting it would only hang."""
+
+
+class SupervisorConfigError(Exception):
+    """A tunable was set to something the policy cannot be run under."""
+
+
+# Arguments that must never reach a log. The PIN hash is a credential — MD5 of
+# six digits is obfuscation, not protection — and the account number is an
+# identifier this repository keeps out of code and history by policy.
+SENSITIVE_FLAGS = ("-login_pwd_md5", "-login_account")
+
+
+def redacted(argv: list[str]) -> str:
+    """The command line, safe to log."""
+    parts = []
+    for arg in argv:
+        flag, separator, _value = arg.partition("=")
+        parts.append(
+            f"{flag}=<redacted>" if separator and flag in SENSITIVE_FLAGS else arg
+        )
+    return " ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -175,7 +203,7 @@ class Supervisor:
 
     def __init__(
         self,
-        gateway: ChildSpec,
+        gateway: ChildSpec | None,
         server: ChildSpec,
         *,
         max_gateway_restarts: int = 5,
@@ -219,10 +247,11 @@ class Supervisor:
         self._stop_signal = signum
 
     def start(self) -> None:
-        self._spawn(self.gateway)
-        # Deliberately not conditional on the gateway being up. A server that
-        # cannot reach OpenD still answers health, and its own connection is
-        # not opened until a client calls it.
+        if self.gateway is not None:
+            self._spawn(self.gateway)
+        # Deliberately not conditional on the gateway being up, or on there
+        # being one at all. A server that cannot reach OpenD still answers
+        # health, and its own connection is not opened until a client calls it.
         self._spawn(self.server)
 
     def run(self) -> int:
@@ -249,7 +278,8 @@ class Supervisor:
             return code
 
         if (
-            self._gateway_restart_due is not None
+            self.gateway is not None
+            and self._gateway_restart_due is not None
             and self._monotonic() >= self._gateway_restart_due
         ):
             self._gateway_restart_due = None
@@ -278,7 +308,7 @@ class Supervisor:
         # one-time interactive login needs OpenD to read the container's tty,
         # and a process in a background group reading a tty stops on SIGTTIN.
         self._pids[spec.name] = pid
-        logger.info("started %s as pid %d: %s", spec.name, pid, " ".join(spec.argv))
+        logger.info("started %s as pid %d: %s", spec.name, pid, redacted(spec.argv))
         return pid
 
     def _reap(self) -> int | None:
@@ -378,16 +408,43 @@ def _describe(status: int) -> str:
     return f"exited with status {os.WEXITSTATUS(status)}"
 
 
-def _number(env: dict[str, str], name: str, default: float) -> float:
-    """A tunable, or its default. A typo must not take the container down."""
+def _duration(env: dict[str, str], name: str, default: float) -> float:
+    """A positive, finite number of seconds, or its default.
+
+    Deliberately not a silent fallback. `nan`, `inf`, a negative and a typo'd
+    value each produce a policy nobody chose — an unbounded restart window, a
+    shutdown that never escalates — and this runs a trading service unattended.
+    Refusing to start is the loud failure; running under a made-up policy is the
+    quiet one.
+    """
     raw = env.get(name, "").strip()
     if not raw:
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
-        logger.warning("ignoring %s=%r: not a number", name, raw)
+        raise SupervisorConfigError(f"{name}={raw!r} is not a number") from None
+    if not math.isfinite(value) or value <= 0:
+        raise SupervisorConfigError(
+            f"{name}={raw!r} must be a finite number greater than zero"
+        )
+    return value
+
+
+def _count(env: dict[str, str], name: str, default: int) -> int:
+    """A whole number of attempts, zero or more. Zero means never restart."""
+    raw = env.get(name, "").strip()
+    if not raw:
         return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SupervisorConfigError(
+            f"{name}={raw!r} is not a whole number of attempts"
+        ) from None
+    if value < 0:
+        raise SupervisorConfigError(f"{name}={raw!r} cannot be negative")
+    return value
 
 
 def main() -> int:
@@ -397,18 +454,44 @@ def main() -> int:
         stream=sys.stdout,
     )
     try:
-        gateway = gateway_spec()
-    except GatewayLoginError as exc:
+        supervisor = build_supervisor(dict(os.environ))
+    except SupervisorConfigError as exc:
         logger.error("%s", exc)
         return EXIT_CONFIG
-    env = dict(os.environ)
+    return supervisor.run()
+
+
+def build_supervisor(env: dict[str, str]) -> Supervisor:
+    """Assemble the supervisor, tolerating a gateway that cannot be started.
+
+    A missing or unusable login is a configuration fault, and no amount of
+    restarting fixes one. Exiting over it would crash-loop the container and
+    take ``check_health`` down with it, which is the opposite of what an
+    operator needs at that moment: the old two-container stack kept the server
+    up and reported the gateway as unreachable, and that stays true here. It is
+    also a state every deployment passes through legitimately, before the
+    one-time interactive device login the runbook describes.
+
+    A malformed *tunable* is the opposite on both counts — never expected, and
+    it decides how the policy behaves — so it is raised rather than absorbed,
+    and ``main`` exits on it.
+    """
+    try:
+        gateway: ChildSpec | None = gateway_spec(env)
+    except GatewayLoginError as exc:
+        logger.error("%s", exc)
+        logger.error(
+            "starting the MCP server without a gateway; check_health will "
+            "report it unavailable until this is fixed and the container restarted"
+        )
+        gateway = None
     return Supervisor(
         gateway,
         server_spec(),
-        max_gateway_restarts=int(_number(env, "OPEND_MAX_RESTARTS", 5)),
-        gateway_restart_window=_number(env, "OPEND_RESTART_WINDOW_SECONDS", 300.0),
-        stop_timeout=_number(env, "SUPERVISOR_STOP_TIMEOUT_SECONDS", 10.0),
-    ).run()
+        max_gateway_restarts=_count(env, "OPEND_MAX_RESTARTS", 5),
+        gateway_restart_window=_duration(env, "OPEND_RESTART_WINDOW_SECONDS", 300.0),
+        stop_timeout=_duration(env, "SUPERVISOR_STOP_TIMEOUT_SECONDS", 10.0),
+    )
 
 
 if __name__ == "__main__":

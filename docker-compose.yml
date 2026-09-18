@@ -19,10 +19,12 @@ services:
       dockerfile: Dockerfile
     container_name: moomoo-api-mcp
     restart: unless-stopped
-    # Belt and braces only. docker-init reaps orphans; it does not implement the
-    # paired policy above, and a container whose supervisor merely backgrounded
-    # OpenD would look healthy with no gateway behind it.
-    init: true
+    # Deliberately no `init: true`. docker-init would take PID 1 and push the
+    # supervisor to PID 2, which is a different design from the one written and
+    # tested here: the supervisor installs its own signal handlers (PID 1 has no
+    # default dispositions) and reaps orphans itself. Adding an init would make
+    # both of those redundant in a way the code does not assume, and the spec
+    # would have to be rewritten around docker-init being the process manager.
     # The one-time interactive device login reads its SMS code from this tty:
     #   docker compose run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp
     stdin_open: true

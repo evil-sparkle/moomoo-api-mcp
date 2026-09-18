@@ -243,7 +243,10 @@ restarts it by itself, bounded by `OPEND_MAX_RESTARTS` within
 `OPEND_RESTART_WINDOW_SECONDS`, and gives up into a whole-container restart only
 if it keeps failing.
 
-**When OpenD restarts**, the MCP server stays up and the moomoo SDK reconnects by
+**When OpenD restarts**, no client has to reconnect or re-initialize: the
+endpoint keeps answering, so `tools/list` and `check_health` keep working, while
+anything that needs the gateway is unavailable until it is back. The MCP server
+stays up and the moomoo SDK reconnects by
 itself — every six seconds, for as long as it takes — reusing the same context
 objects. On reconnect it replays the quote subscriptions it held, this server
 re-asserts the gateway lock in `READ_ONLY` mode, and a REAL deployment's startup
