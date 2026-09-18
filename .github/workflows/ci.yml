@@ -40,8 +40,8 @@ jobs:
         run: |
           uv run basedpyright
       # tests/test_compose_topology.py renders docker-compose.yml through
-      # Compose itself, which is the only check covering the compose file:
-      # docker-build below builds the images without ever starting the stack.
+      # Compose itself, which is the only unit-level check covering the compose
+      # file: docker-build below builds the image without ever starting it.
       # Fail here, with an obvious message, rather than inside the suite.
       - name: Check Docker Compose is available
         run: |
@@ -50,10 +50,11 @@ jobs:
         run: |
           uv run pytest
 
-  # Unit tests read the compose file; this runs it. It stands OpenD in with a
-  # listener the runner can start, then asserts the MCP server reaches it over
-  # trading-net, the endpoint is published, and a gateway restart disturbs
-  # neither — the failure that a compose-file regression would reintroduce.
+  # Unit tests read the compose file; this runs it. It stands the OpenD binary
+  # in with a listener the runner can start, then asserts the gateway is
+  # reachable over container loopback and from nowhere else, that killing the
+  # gateway process leaves the container and a live client session untouched,
+  # and that killing the server takes the container down for Docker to replace.
   smoke:
     name: Container smoke test
     runs-on: ubuntu-latest
@@ -64,16 +65,15 @@ jobs:
         run: |
           ./scripts/smoke-test.sh
 
-  # Decide which images actually need to be rebuilt for this push. The result
-  # is consumed by docker-build per matrix entry via needs.changes.outputs.*.
-  # PRs and feature-branch pushes set all entries to true (always build, to
-  # catch Dockerfile regressions) — only main pushes honor the filter.
+  # Decide whether the image actually needs to be rebuilt for this push. The
+  # result is consumed by docker-build via needs.changes.outputs.moomoo-api-mcp.
+  # PRs and feature-branch pushes force a build (to catch Dockerfile
+  # regressions) — only main pushes honor the filter.
   changes:
     name: Detect changed image paths
     runs-on: ubuntu-latest
     outputs:
       moomoo-api-mcp: ${{ steps.filter.outputs.moomoo-api-mcp }}
-      moomoo-opend: ${{ steps.filter.outputs.moomoo-opend }}
       baseline: ${{ steps.filter.outputs.baseline }}
     steps:
       - uses: actions/checkout@v7
@@ -81,7 +81,7 @@ jobs:
           fetch-depth: 0   # so full commit history is available for baseline comparison
 
       - id: filter
-        name: Compute per-image change map
+        name: Compute the image change map
         run: |
           current="${GITHUB_SHA:-HEAD}"
           before="${{ github.event.before }}"
@@ -103,20 +103,18 @@ jobs:
             fi
           fi
 
-          # If push/PR baseline cannot be established, force full build for both images
+          # If push/PR baseline cannot be established, force a full build
           if [ "${is_valid_base}" = "false" ]; then
-            echo "No valid baseline commit available; triggering full build for both images."
+            echo "No valid baseline commit available; triggering a full build."
             echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
-            echo "moomoo-opend=true" >> "$GITHUB_OUTPUT"
             echo "baseline=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           # Propagate git diff failures instead of silently continuing
           if ! changed_raw=$(git diff --name-only "${prev}" "${current}"); then
-            echo "git diff failed between ${prev} and ${current}; triggering full build."
+            echo "git diff failed between ${prev} and ${current}; triggering a full build."
             echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
-            echo "moomoo-opend=true" >> "$GITHUB_OUTPUT"
             echo "baseline=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -124,10 +122,10 @@ jobs:
           mapfile -t changed <<< "${changed_raw}"
           echo "baseline=${prev}" >> "$GITHUB_OUTPUT"
 
-          # Declare which paths each image rebuilds on. The "needed" set has
-          # to include every Dockerfile input. OpenD's image has *no* repo
-          # files — only network-fetched release assets — so its only relevant
-          # keys are Dockerfiles themselves and the workflow.
+          # Declare which paths the image rebuilds on. The "needed" set has to
+          # include every Dockerfile input. One image now carries the gateway
+          # too, and OpenD contributes no repo files of its own — only
+          # network-fetched release assets pinned in the Dockerfile.
           needed_mcp=(
             "Dockerfile"
             "pyproject.toml"
@@ -136,26 +134,20 @@ jobs:
             "LICENSE"
             "src/"
           )
-          needed_opend=(
-            "Dockerfile.opend"
-          )
 
           mcp=false
-          opend=false
           for path in "${changed[@]}"; do
-            # Workflow + overlay changes always force both — never quietly
+            # Workflow + overlay changes always force a build — never quietly
             # skip what the deploy path depends on.
             if [ "${path}" = ".github/workflows/ci.yml" ] \
               || [ "${path}" = ".dockerignore" ] \
               || [ "${path}" = "docker-compose.yml" ] \
               || [ "${path}" = "docker-compose.prod.yml" ]; then
               mcp=true
-              opend=true
               continue
             fi
-            # Match path against needed_* entries without regex
-            matched=""
-            for needed in "${needed_mcp[@]}" "${needed_opend[@]}"; do
+            # Match path against needed_mcp entries without regex
+            for needed in "${needed_mcp[@]}"; do
               ends_in_slash=false
               [ "${needed}" != "${needed%/}" ] && ends_in_slash=true
               if [ "${ends_in_slash}" = "true" ]; then
@@ -164,39 +156,26 @@ jobs:
               else
                 [ "${path}" != "${needed}" ] && continue
               fi
-              matched="${needed}"
+              mcp=true
               break
-            done
-            if [ -z "${matched}" ]; then
-              continue
-            fi
-            for n in "${needed_mcp[@]}"; do
-              if [ "${matched}" = "${n}" ]; then
-                mcp=true
-                break
-              fi
-            done
-            for n in "${needed_opend[@]}"; do
-              if [ "${matched}" = "${n}" ]; then
-                opend=true
-                break
-              fi
             done
           done
 
-          # Honor the contract: PRs / feature branches always build both.
+          # Honor the contract: PRs / feature branches always build.
           # Only main pushes follow the filter.
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
             || [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             mcp=true
-            opend=true
           fi
 
           echo "moomoo-api-mcp=${mcp}" >> "$GITHUB_OUTPUT"
-          echo "moomoo-opend=${opend}" >> "$GITHUB_OUTPUT"
 
+  # One image, because the gateway and the server now ship together. The
+  # moomoo-opend ECR repository is no longer written to; leave it in place until
+  # the last two-container deploy is past being a rollback target, then delete
+  # it (see docs/deploy-vps.md).
   docker-build:
-    name: Build ${{ matrix.image }}
+    name: Build moomoo-api-mcp
     runs-on: ubuntu-latest
     needs: [test, changes]
     permissions:
@@ -207,14 +186,7 @@ jobs:
       # image and throw it away, which is also all the gha-ecr-push trust
       # policy permits them to do.
       PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: moomoo-api-mcp
-            dockerfile: ./Dockerfile
-          - image: moomoo-opend
-            dockerfile: ./Dockerfile.opend
+      IMAGE: moomoo-api-mcp
     steps:
       - uses: actions/checkout@v7
 
@@ -241,11 +213,11 @@ jobs:
       # tags so the deploy wrapper always finds both images at the exact same commit SHA.
       - name: Retag unchanged image in ECR
         id: retag
-        if: env.PUSH == 'true' && needs.changes.outputs[matrix.image] != 'true'
+        if: env.PUSH == 'true' && needs.changes.outputs.moomoo-api-mcp != 'true'
         run: |
           deploy_tag="${GITHUB_SHA::7}"
           audit_tag="commit-${GITHUB_SHA}"
-          repo="${{ matrix.image }}"
+          repo="${{ env.IMAGE }}"
           region="${{ vars.AWS_REGION }}"
           baseline="${{ needs.changes.outputs.baseline }}"
 
@@ -331,13 +303,13 @@ jobs:
 
       - name: Resolve image tags
         id: tags
-        if: needs.changes.outputs[matrix.image] == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
+        if: needs.changes.outputs.moomoo-api-mcp == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
         run: |
           deploy_tag="${GITHUB_SHA::7}"
           audit_tag="commit-${GITHUB_SHA}"
 
           if [ "${PUSH}" = "true" ]; then
-            image="${{ steps.ecr.outputs.registry }}/${{ matrix.image }}"
+            image="${{ steps.ecr.outputs.registry }}/${{ env.IMAGE }}"
             release_tags=""
             while IFS= read -r tag; do
               if [ "${tag}" != "${tag#v}" ]; then
@@ -351,17 +323,17 @@ jobs:
             fi
             echo "tags=${tags}" >> "$GITHUB_OUTPUT"
           else
-            echo "tags=${{ matrix.image }}:test" >> "$GITHUB_OUTPUT"
+            echo "tags=${{ env.IMAGE }}:test" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push
-        if: needs.changes.outputs[matrix.image] == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
+        if: needs.changes.outputs.moomoo-api-mcp == 'true' || env.PUSH != 'true' || steps.retag.outputs.rebuild_needed == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: ./Dockerfile
           platforms: linux/amd64
           push: ${{ env.PUSH == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          cache-from: type=gha,scope=${{ env.IMAGE }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE }}

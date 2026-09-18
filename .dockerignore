@@ -1,7 +1,6 @@
-# Only send files required by the Dockerfiles.
+# Only send files required by the Dockerfile.
 *
 !Dockerfile
-!Dockerfile.opend
 !pyproject.toml
 !uv.lock
 !README.md

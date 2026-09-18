@@ -60,12 +60,14 @@ ecr_has_tag() {
   [ -n "$got" ] && [ "$got" != None ]
 }
 
-if ecr_has_tag moomoo-api-mcp "${short}" && ecr_has_tag moomoo-opend "${short}"; then
+# One image now carries both the gateway and the server, so there is one tag to
+# confirm rather than two that had to agree.
+if ecr_has_tag moomoo-api-mcp "${short}"; then
   image_tag="${short}"
 else
   # Not necessarily "no such tag": a denied or failed probe lands here too, and
   # its AWS error is printed above. Saying "missing" would hide that.
-  echo "Aborting deploy of ${short}: could not confirm :${short} on both images (missing, or the AWS check failed — see any error above). Check that CI's main push landed for both moomoo-api-mcp and moomoo-opend." >&2
+  echo "Aborting deploy of ${short}: could not confirm moomoo-api-mcp:${short} (missing, or the AWS check failed — see any error above). Check that CI's main push landed." >&2
   exit 1
 fi
 echo "Deploying ${short} as ${image_tag}" >&2
@@ -123,13 +125,11 @@ finish_deploy() {
     while :; do
       local ps_out=""
       ps_out="$(./scripts/compose-prod.sh ps --status running --services 2>/dev/null || true)"
-      local opend_running=false
       local mcp_running=false
       while IFS= read -r sline; do
-        if [ "$sline" = "opend" ]; then opend_running=true; fi
         if [ "$sline" = "moomoo-mcp" ]; then mcp_running=true; fi
       done <<< "$ps_out"
-      if [ "$opend_running" = true ] && [ "$mcp_running" = true ]; then
+      if [ "$mcp_running" = true ]; then
         local code
         code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$verify_url" 2>/dev/null || true)"
         [ -z "$code" ] && code="000"
@@ -146,10 +146,10 @@ finish_deploy() {
     done
     if [ "$verified" = true ]; then
       echo "Deploy verified: ${short} as ${image_tag}" >&2
-      ./scripts/compose-prod.sh logs --tail=200 opend moomoo-mcp
+      ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
     else
       echo "Deploy verification failed." >&2
-      ./scripts/compose-prod.sh logs --tail=200 opend moomoo-mcp
+      ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
       rollback true
     fi
   else
