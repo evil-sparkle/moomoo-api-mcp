@@ -76,19 +76,12 @@ Response validation is structural, not substring matching: a JSON-RPC
 success with the matching request id and a correctly shaped initialize
 result, over `application/json` or an SSE-framed stream, both supported by
 the Streamable HTTP transport the probe speaks to. A string request id means
-a response with id `1` or `true` cannot compare equal to it. The fields are
-required *inside the result object*, where the MCP lifecycle puts them — the
-same names appearing elsewhere in the response do not pass — and
-`protocolVersion` must be one of the protocol versions MCP has issued for
-the initialize lifecycle: an explicit allowlist (`2024-11-05`,
-`2025-03-26`, `2025-06-18`, `2025-11-25`), not a date format. A
-date-shaped string MCP never issued (`9999-99-99`, `2025-13-40`) does not
-pass, and neither does `2026-07-28`: that revision removed the
-initialize/initialized exchange for a stateless lifecycle, so an initialize
-*response* claiming it is semantically impossible. The allowlist also makes
-a future MCP upgrade an intentional deploy change — a server speaking a
-version not yet listed fails verification by name, rather than being
-silently accepted under an unknown protocol.
+The fields are required *inside the result object*, where the MCP lifecycle
+puts them — the same names appearing elsewhere in the response do not pass —
+and `protocolVersion` must be a non-empty string. The probe confirms that
+configured authentication can access the endpoint and receive a structurally
+expected initialize response matching the request; it does not certify
+protocol version compatibility or trading availability.
 
 For SSE, a complete response event followed by a *cleanly completed*
 transfer is required: a complete event inside a transfer curl exits nonzero

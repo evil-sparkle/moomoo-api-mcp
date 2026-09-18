@@ -19,9 +19,9 @@ was read.
 
 The token reaches curl on stdin (``--header @-``), never argv or a file.
 
-Verification means the endpoint accepts the configured authentication and
-returns a valid initialize result. It says nothing about the broker login or
-whether trading works.
+Verification means the configured authentication can access the endpoint
+and receive a structurally expected initialize response matching the request.
+It does not certify protocol version compatibility or trading availability.
 
 Standard library only, Python 3.10 or newer: this runs on the host, not in the
 image.
@@ -346,8 +346,8 @@ def initialize_result_problem(message: Any) -> str | None:
     if not isinstance(result, dict):
         return "it carries no initialize result"
     version = result.get("protocolVersion")
-    if not isinstance(version, str) or not supported_protocol_version(version):
-        return "the initialize result has no supported protocolVersion"
+    if not isinstance(version, str) or not valid_protocol_version(version):
+        return "the initialize result has no valid protocolVersion"
     if not isinstance(result.get("capabilities"), dict):
         return "the initialize result has no capabilities"
     info = result.get("serverInfo")
@@ -360,12 +360,12 @@ def initialize_result_problem(message: Any) -> str | None:
     return None
 
 
-def supported_protocol_version(version: Any) -> bool:
-    """Whether protocolVersion indicates a valid MCP initialize response.
+def valid_protocol_version(version: Any) -> bool:
+    """Whether protocolVersion is a non-empty string.
 
-    Accepts any non-empty string. A deploy probe verifies that the running server
-    completed the MCP initialize handshake, avoiding brittle deploy breakages
-    when MCP protocol versions are upgraded or negotiated.
+    The probe confirms that configured authentication can access the endpoint
+    and receive a structurally expected initialize response matching the request;
+    it does not certify protocol version compatibility or trading availability.
     """
     return isinstance(version, str) and bool(version.strip())
 
