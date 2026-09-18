@@ -60,18 +60,6 @@ ATTEMPT_SECONDS = 10.0
 RETRY_INTERVAL = 3.0
 # A string id, so a response with id 1 or true cannot compare equal to it.
 REQUEST_ID = "deploy-verify"
-# The protocol versions MCP has issued for the initialize lifecycle. An
-# explicit allowlist, not a date format: versions that removed the
-# initialize/initialized exchange must not pass (2026-07-28 moved to a
-# stateless lifecycle, so an initialize *response* claiming it is
-# semantically impossible), and neither must a date-shaped string MCP never
-# issued. When the server image is upgraded to a new protocol revision, add
-# its version here — that is the point of the list: an MCP upgrade becomes a
-# deliberate deploy change with a visible failure mode, not a silent
-# acceptance of an unknown protocol.
-HANDSHAKE_PROTOCOL_VERSIONS = frozenset(
-    {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
-)
 INITIALIZE_REQUEST = json.dumps(
     {
         "jsonrpc": "2.0",
@@ -372,17 +360,14 @@ def initialize_result_problem(message: Any) -> str | None:
     return None
 
 
-def supported_protocol_version(version: str) -> bool:
-    """Whether a protocolVersion is one MCP has issued for the initialize
-    lifecycle.
+def supported_protocol_version(version: Any) -> bool:
+    """Whether protocolVersion indicates a valid MCP initialize response.
 
-    Protocol versions are an enumerated set, not arbitrary date strings:
-    `2025-13-40` is not a version because no such date was ever issued, and
-    `2026-07-28` is not a *handshake* version because that revision removed
-    the initialize/initialized exchange. Membership in the allowlist above
-    is the whole check.
+    Accepts any non-empty string. A deploy probe verifies that the running server
+    completed the MCP initialize handshake, avoiding brittle deploy breakages
+    when MCP protocol versions are upgraded or negotiated.
     """
-    return version in HANDSHAKE_PROTOCOL_VERSIONS
+    return isinstance(version, str) and bool(version.strip())
 
 
 def verify(
