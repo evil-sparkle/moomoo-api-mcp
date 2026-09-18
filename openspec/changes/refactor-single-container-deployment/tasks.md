@@ -4,6 +4,13 @@ Checked items were implemented and verified as stated. Items left unchecked
 carry the reason; several cannot be done from a machine without a Docker
 daemon and are marked so rather than assumed.
 
+**Status:** implemented on `main` (PR #9, merged 2026-09-18). CI builds the
+image and passes the smoke test, which runs a stub in place of OpenD. Not
+archived yet: 2.6, 6.2 and 6.3 need the real binary and the real deployment,
+and nothing in CI stands in for them. Archive this change before
+`update-container-restart-resilience`, whose gateway-restart requirement
+defers to `Paired Process Supervision` below.
+
 1. **Write the supervisor, tests first**
    - [x] 1.1 `tests/test_supervisor.py` covers the policy in `design.md` against
      fake child processes, not the real binaries: OpenD exit restarts OpenD
@@ -72,16 +79,16 @@ daemon and are marked so rather than assumed.
    - [x] 5.3 `scripts/smoke-test.sh` rewritten: opens a real MCP session first,
      then kills the gateway *process* inside the container and asserts the
      session survives, the endpoint keeps answering, the gateway comes back and
-     the container itself was never replaced.
-   - [x] 5.4 Also kills the MCP process and asserts the container is replaced
-     and comes back serving.
+     the container itself was never restarted.
+   - [x] 5.4 Also kills the MCP process and asserts the container restarts
+     (a new `StartedAt`; the same container id passes) and comes back serving.
    - [x] 5.5 Also probes from a second container on the same network: port 8000
      reachable (the control), 11111 refused.
    - [x] 5.6 Run the rewritten smoke test. Not runnable locally (no Docker
      daemon); CI runs it. **Passing** as of 6e1d97f, having taken four runs and
      found four real bugs on the way (9.1, 9.7, 9.8, 9.9). Every assertion now
      executes, including the two that had never run before that commit: the
-     container being replaced when the server dies, and a client calling
+     container restarting when the server dies, and a client calling
      successfully afterwards.
    - [x] 5.7 Assert credentials never reach the container log: the overlay hands
      the gateway a fake PIN hash and the smoke test fails if it appears in
@@ -118,11 +125,13 @@ daemon and are marked so rather than assumed.
      `basedpyright` reports 0 errors.
    - [x] 8.3 `scripts/smoke-test.sh` passes in CI (not runnable locally — no
      Docker daemon). Same item as 5.6.
-   - [ ] 8.4 **Not done — no CLI available.** `openspec validate
-     refactor-single-container-deployment --strict --no-interactive`; the
-     `openspec` binary is not installed here and is not on npm under that name.
-     The delta was checked by hand: 4 requirements, 15 scenarios, every
-     requirement carrying at least one.
+   - [x] 8.4 `openspec validate --all --strict --no-interactive` passes: 24
+     passed, 0 failed. The CLI is the npm package `@fission-ai/openspec` (the
+     unscoped `openspec` name is not it), pinned at 1.13.1 and run by CI's
+     `openspec` job. The first real run failed this change: the MODIFIED
+     `Isolated OpenD Gateway Network` block had renamed the canonical scenario
+     `MCP server reaches OpenD internally`, and archive refuses to drop one. The
+     title is kept and its body rewritten for loopback.
 
 9. **From CI and review** (found after the first push)
    - [x] 9.1 **CI, container smoke test.** A missing gateway login was fatal:

@@ -154,6 +154,22 @@ jobs:
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
           echo "moomoo-api-mcp=${mcp}" >> "$GITHUB_OUTPUT"
 
+  # Specs are prose, so docs_only does not skip this job: an openspec/ edit is
+  # exactly the change it exists to check. The CLI version is pinned so CI and
+  # a local run (see openspec/project.md) validate against the same rules.
+  # Structure only: --strict cannot tell whether a spec still matches the code.
+  openspec:
+    name: Validate OpenSpec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Validate every spec and active change
+        run: |
+          npx -y @fission-ai/openspec@1.13.1 validate --all --strict --no-interactive
+
   test:
     name: Run Tests and Lint
     runs-on: ubuntu-latest
