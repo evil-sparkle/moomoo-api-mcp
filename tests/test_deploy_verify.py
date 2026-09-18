@@ -154,6 +154,30 @@ class ResolveTokenTest(unittest.TestCase):
                 command = fake_compose(json.dumps(model(token)))
                 self.assertEqual(deploy_verify.resolve_token(command), token)
 
+    def test_compose_dollar_escaping_is_decoded(self):
+        """config output doubles every literal $; the container got single.
+
+        Compose prints its configuration as compose input, where a literal
+        `$` must be escaped: the container holds `literal $X` while the JSON
+        the helper reads says `literal $$X`. Sending the printed form 401s a
+        healthy deploy whose token contains a dollar, so the pairs are
+        decoded back to what the container received. A lone `$` — which
+        Compose's escaper never prints — passes through unchanged.
+        """
+        cases = {
+            "a$$b": "a$b",
+            "$$": "$",
+            "$$$$$$": "$$$",
+            "$${x}": "${x}",
+            "$$word": "$word",
+            "plain": "plain",
+            "$": "$",
+        }
+        for escaped, decoded in cases.items():
+            with self.subTest(printed=escaped):
+                command = fake_compose(json.dumps(model(escaped)))
+                self.assertEqual(deploy_verify.resolve_token(command), decoded)
+
     def test_explicit_empty_token_means_no_authentication(self):
         command = fake_compose(json.dumps(model("")))
         self.assertEqual(deploy_verify.resolve_token(command), "")

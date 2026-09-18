@@ -109,8 +109,10 @@ def say(message: str) -> None:
 def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
     """Return the token Compose resolves for the service; "" means no auth.
 
-    The value is used exactly as resolved: no quote stripping, trimming or
-    expansion, because Compose has already done all of that.
+    The value is used exactly as Compose resolved it: no quote stripping,
+    trimming or interpolation, because Compose has already done all of that.
+    The one translation is Compose's own output escaping (see
+    decode_compose_dollars), which is how the resolved value is printed.
     """
     try:
         completed = subprocess.run(list(command), capture_output=True, check=False)
@@ -141,8 +143,33 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
             f"{TOKEN_VARIABLE} for {SERVICE} resolves to no value. Set it to the "
             "token, or to an empty string to run without authentication."
         )
+    token = decode_compose_dollars(token)
     check_header_safe(token)
     return token
+
+
+def decode_compose_dollars(value: str) -> str:
+    """Decode the dollar escaping Compose applies to the values it prints.
+
+    `config` output is itself a compose file, so a resolved value containing
+    a literal `$` is printed as `$$` — every dollar is doubled, including a
+    `$` followed by `{` or a word. The container receives the unescaped
+    value, so the pairs are decoded back to single dollars to match it. This
+    is the escaping of Compose's output format, not dotenv grammar: nothing
+    else about the value is interpreted.
+
+    A lone `$` (which Compose's escaper never prints) passes through.
+    """
+    pieces: list[str] = []
+    index = 0
+    while index < len(value):
+        if value[index] == "$" and value[index + 1 : index + 2] == "$":
+            pieces.append("$")
+            index += 2
+        else:
+            pieces.append(value[index])
+            index += 1
+    return "".join(pieces)
 
 
 def check_header_safe(token: str) -> None:
