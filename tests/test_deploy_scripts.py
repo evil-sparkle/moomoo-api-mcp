@@ -82,11 +82,29 @@ class DeployScriptsTest(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         # Both stubs record arguments and selected inherited environment only.
+        # The curl stub mirrors the deploy probe's real wire format: the body,
+        # then the status on its own line from curl's -w. It also resolves
+        # -H @file arguments at call time (the real file is deleted by
+        # deploy.sh's EXIT trap before the test could read it) and logs the
+        # header contents and file mode as a separate "curl-header" entry.
         stub = """#!/usr/bin/env python3
 import json, os, pathlib, sys
 name = pathlib.Path(sys.argv[0]).name
+VALID_INIT_RESULT = (
+    '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18",'
+    '"capabilities":{"tools":{}},"serverInfo":{"name":"moomoo-api-mcp","version":"0"}}}'
+)
+args = sys.argv[1:]
 with open(os.environ["CALL_LOG"], "a") as log:
-    log.write(json.dumps([name, sys.argv[1:], os.environ.get("IMAGE_TAG")]) + "\\n")
+    log.write(json.dumps([name, args, os.environ.get("IMAGE_TAG")]) + "\\n")
+    if name == "curl":
+        for i, arg in enumerate(args):
+            if arg == "-H" and args[i + 1].startswith("@"):
+                path = pathlib.Path(args[i + 1][1:])
+                mode = format(path.stat().st_mode & 0o777, "o")
+                log.write(
+                    json.dumps(["curl-header", [path.read_text()], mode]) + "\\n"
+                )
 if name == "aws":
     mode = os.environ.get("AWS_TEST_MODE", "ok")
     if mode == "denied":
@@ -113,17 +131,15 @@ if name == "docker":
             sys.exit(1)
     if os.environ.get("DOCKER_TEST_FAIL_PULL") == "1" and "pull" in sys.argv:
         sys.exit(1)
-    if "ps" in sys.argv:
-        if os.environ.get("DOCKER_PS_MISSING") == "1":
-            print("")
-        else:
-            print("moomoo-mcp\\n")
 if name == "curl":
     if os.environ.get("CURL_TEST_FAIL") == "1":
-        print("000")
+        # Connection refused: curl prints only -w's newline and 000.
+        sys.stdout.write("\\n000\\n")
         sys.exit(7)
     else:
-        print(os.environ.get("CURL_TEST_STATUS", "200"))
+        body = os.environ.get("CURL_TEST_BODY", VALID_INIT_RESULT)
+        status = os.environ.get("CURL_TEST_STATUS", "200")
+        sys.stdout.write(body + "\\n" + status + "\\n")
 """
         for name in ("aws", "docker", "curl"):
             path = self.bin / name
@@ -273,12 +289,76 @@ if name == "curl":
         curls = [args for name, args, _ in self.calls() if name == "curl"]
         self.assertEqual(len(curls), 1)
         args = curls[0]
-        self.assertIn("Authorization: Bearer test-only", args)
         self.assertIn("Content-Type: application/json", args)
         self.assertIn("Accept: application/json, text/event-stream", args)
         bodies = [args[i + 1] for i, a in enumerate(args) if a == "-d"]
         self.assertEqual(len(bodies), 1)
         self.assertIn('"method":"initialize"', bodies[0])
+        # The token travels through a 0600 header file, never argv: the token
+        # appears in no logged command line. (The stub's curl-header entry is
+        # its record of the file's contents, not a command line.)
+        commands = [
+            [name, args] for name, args, _ in self.calls() if name != "curl-header"
+        ]
+        self.assertNotIn("test-only", json.dumps(commands))
+        headers = [c for c in self.calls() if c[0] == "curl-header"]
+        self.assertEqual(len(headers), 1)
+        self.assertEqual(headers[0][1], ["Authorization: Bearer test-only\n"])
+        self.assertEqual(headers[0][2], "600")
+
+    def test_env_token_parsed_with_compose_semantics(self):
+        """Quoted values, whitespace, comments, CRLF: what the container gets,
+        the probe sends.
+
+        compose-prod.sh hands .env to Compose, so the token the container
+        starts with is the Compose-resolved value. MCP_AUTH_TOKEN="abc" would
+        otherwise start the container with abc and probe with "abc" — quotes
+        and all — 401ing a healthy deploy into a rollback.
+        """
+        (self.repo / ".env").write_text(
+            '# leading comment\n\nMCP_AUTH_TOKEN = "test only"  # inline comment\r\n'
+        )
+        result = self.deploy(self.commit)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        headers = [c for c in self.calls() if c[0] == "curl-header"]
+        self.assertEqual(len(headers), 1)
+        self.assertEqual(headers[0][1], ["Authorization: Bearer test only\n"])
+
+    def test_parameter_expansion_in_token_is_refused(self):
+        """Compose would expand ${...} in the value; deploy.sh refuses to guess.
+
+        Sending the raw ${...} bytes would 401 and roll back a healthy deploy;
+        refusing loudly leaves the operator a choice Compose also offers — a
+        literal value, or the environment, which wins in both tools.
+        """
+        (self.repo / ".env").write_text("MCP_AUTH_TOKEN=${LOCAL_TOKEN}\n")
+        result = self.deploy(self.commit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("parameter expansion", result.stderr)
+        self.assertIn("MCP_AUTH_TOKEN", result.stderr)
+        self.assertFalse((self.repo / ".deploy.env").exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_200_that_is_not_an_mcp_initialize_result_fails(self):
+        """HTTP 200 alone is not verification.
+
+        smoke-test.sh once caught a server answering 200 while serving an
+        empty tool list; here, a 200 whose body is not a JSON-RPC initialize
+        success must fail the deploy, not pass it.
+        """
+        for body in (
+            '{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"x"}}',
+            '{"ok": true}',
+            '{"result":{"protocolVersion":"2025-06-18"}}',
+        ):
+            with self.subTest(body=body):
+                self.env["CURL_TEST_BODY"] = body
+                self.log.unlink(missing_ok=True)
+                result = self.deploy(self.commit)
+                self.assertNotEqual(result.returncode, 0, body)
+                self.assertIn("Deploy verification failed", result.stderr)
+                self.assertIn("initialize", result.stderr)
+                self.assertNotIn("Deploy verified", result.stderr)
 
     def test_auth_refusal_fails_the_deploy_instead_of_passing(self):
         """A 401 from the endpoint must not print "Deploy verified".
