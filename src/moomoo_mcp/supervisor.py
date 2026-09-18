@@ -185,12 +185,19 @@ def gateway_spec(environ: dict[str, str] | None = None) -> ChildSpec:
 
 
 def server_spec(environ: dict[str, str] | None = None) -> ChildSpec:
-    """Run the MCP server out of this same interpreter's environment."""
+    """Run the MCP server's console script, out of this same venv.
+
+    Deliberately not ``python -m moomoo_mcp.server``. That loads server.py a
+    second time, as ``__main__``, with its own FastMCP instance — while the tool
+    modules it imports at the bottom do ``from moomoo_mcp.server import mcp``
+    and register against the *other* instance. The served one then has no tools
+    at all, and the failure is silent: the endpoint answers, sessions open, and
+    ``tools/list`` returns ``[]``. CI's smoke test caught it; nothing in the unit
+    suite would have.
+    """
     env = dict(os.environ if environ is None else environ)
-    return ChildSpec(
-        name=SERVER,
-        argv=[env.get("MCP_PYTHON", sys.executable), "-m", "moomoo_mcp.server"],
-    )
+    default = str(Path(sys.executable).with_name("moomoo-api-mcp"))
+    return ChildSpec(name=SERVER, argv=[env.get("MCP_SERVER_BINARY", default)])
 
 
 class Supervisor:

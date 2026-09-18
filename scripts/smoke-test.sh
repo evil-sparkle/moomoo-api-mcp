@@ -124,10 +124,33 @@ session_id_from() {
 }
 
 # Proof the session still works: a tool this server defines comes back in the
-# listing. A dead or forgotten session answers with an error instead.
+# listing, and the response is not a JSON-RPC error. A dead or forgotten session
+# answers with an error instead.
+#
+# Three things, because this assertion has already earned its keep: the reply is
+# a tool listing, it is not a JSON-RPC error, and this server's own tool is in
+# it. The last one is what caught the supervisor launching the server as
+# `python -m`, which served an empty tool list behind a perfectly healthy
+# endpoint -- HTTP 200, sessions opening, and `{"tools":[]}` inside.
+#
+# The tool name is matched on its own rather than as `"name":"check_health"`:
+# the response arrives as an SSE data line and the SDK's spacing is not this
+# repository's to pin. The `"tools"` and `"error"` checks are what keep that
+# from being a weaker test than the one it replaces.
+LAST_TOOLS_BODY=""
 session_still_lists_tools() {
-  mcp_request "$1" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' |
-    grep -q '"name":"check_health"'
+  LAST_TOOLS_BODY="$(mcp_request "$1" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')"
+  printf '%s' "${LAST_TOOLS_BODY}" | grep -q '"error"' && return 1
+  printf '%s' "${LAST_TOOLS_BODY}" | grep -q '"tools"' || return 1
+  printf '%s' "${LAST_TOOLS_BODY}" | grep -q 'check_health'
+}
+
+# What the server actually said, so a failure here is diagnosable from the log
+# rather than from a second CI run.
+show_last_tools_response() {
+  echo "    the server answered:" >&2
+  printf '%s\n' "${LAST_TOOLS_BODY}" | head -c 2000 >&2
+  echo >&2
 }
 
 gateway_has_connections() {
@@ -320,6 +343,7 @@ echo "==> the client's session survived the gateway restart"
 if ! session_still_lists_tools "${session}"; then
   echo "FAILED: the MCP session opened before the gateway died no longer works," \
     "so a gateway restart forces every client to reconnect." >&2
+  show_last_tools_response
   exit 1
 fi
 
@@ -350,6 +374,7 @@ echo "==> the client keeps calling without re-initializing"
 if ! session_still_lists_tools "${session}"; then
   echo "FAILED: a call that worked before the server died no longer does, so" \
     "every client has to reconnect when the container is replaced." >&2
+  show_last_tools_response
   exit 1
 fi
 

@@ -512,7 +512,24 @@ class TestRememberedToken:
 
 
 class TestServerCommandLine:
-    def test_the_server_runs_as_a_module_of_this_interpreter(self):
-        spec = server_spec({"MCP_PYTHON": "/app/.venv/bin/python"})
+    def test_the_server_runs_its_console_script(self):
+        spec = server_spec({"MCP_SERVER_BINARY": "/app/.venv/bin/moomoo-api-mcp"})
 
-        assert spec.argv == ["/app/.venv/bin/python", "-m", "moomoo_mcp.server"]
+        assert spec.argv == ["/app/.venv/bin/moomoo-api-mcp"]
+
+    def test_it_defaults_to_the_script_beside_this_interpreter(self):
+        spec = server_spec({})
+
+        assert spec.argv == [str(Path(sys.executable).with_name("moomoo-api-mcp"))]
+
+    def test_the_server_is_never_launched_as_a_module(self):
+        """`python -m moomoo_mcp.server` loads server.py a second time as
+        __main__, with its own FastMCP instance, while the tool modules it
+        imports register against the one under its real name. The served
+        instance then has no tools — and nothing about it looks broken: the
+        endpoint answers, sessions open, and `tools/list` returns `[]`.
+
+        CI's smoke test caught this in the container. Here so it cannot come
+        back as a "tidier" way to invoke the server.
+        """
+        assert "-m" not in server_spec({}).argv
