@@ -192,7 +192,7 @@ cd "$HOME/moomoo"
 
 One log stream carries both processes. OpenD should reach "TRC login OK" within ~30s, and the server reports `MCP server listening on 0.0.0.0:8000`; lines prefixed `[supervisor]` are the process policy itself, including any gateway restart. Hit `http://localhost:8000/mcp` from the host (the port is bound to `127.0.0.1` only) with the `Authorization: Bearer $MCP_AUTH_TOKEN` header.
 
-The deploy script verifies the same way a client would: it sends the `MCP_AUTH_TOKEN` from `.env` as an MCP `initialize` request, so a healthy deploy logs `POST /mcp 200`. A bare unauthenticated `GET /mcp` still answers 401 by design — that only means the endpoint is up with auth enabled. If the probe itself is refused (401/403), the deploy fails and names `MCP_AUTH_TOKEN` as the thing to check.
+The deploy script verifies the same way a client would: it sends the `MCP_AUTH_TOKEN` from `.env` as an MCP `initialize` request, so a healthy deploy logs `POST /mcp 200`. The reply must also be a JSON-RPC `initialize` result, not merely any 200 — a URL that answers 200 without speaking MCP fails the deploy. The token is resolved from `.env` with Compose's own semantics (quotes, whitespace, inline comments), and is passed to curl through a 0600 file, never a command line. A bare unauthenticated `GET /mcp` still answers 401 by design — that only means the endpoint is up with auth enabled. If the probe itself is refused (401/403), the deploy fails and names `MCP_AUTH_TOKEN` as the thing to check.
 
 ### 9. systemd unit, so the stack survives reboots
 

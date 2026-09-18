@@ -31,16 +31,109 @@ if [ "$dkr.$ecr.$domain.$suffix" != 'dkr.ecr.amazonaws.com' ] || [ -n "${extra:-
   echo 'ECR_REGISTRY must be a private ECR registry hostname.' >&2
   exit 1
 fi
+# Resolve one variable from an env file the way Docker Compose does, so the
+# verification probe authenticates with the same bytes the container was
+# started with. compose-prod.sh passes --env-file .env to Compose, and a naive
+# "everything after the first =" is not that: MCP_AUTH_TOKEN="abc" starts the
+# container with abc but would send "abc" — quotes included — as a bearer
+# token, 401 the healthy deploy and roll it back. Handled here, without
+# patterns beyond the shell's own: CRLF, surrounding whitespace, single and
+# double quotes, and inline comments on unquoted values.
+#
+# Not reimplemented: Compose's parameter expansion (${...}) in unquoted and
+# double-quoted values. Guessing at it wrong sends bytes the container never
+# saw, so an unresolvable value is refused instead, and exporting
+# MCP_AUTH_TOKEN in the environment is the escape hatch — Compose also lets
+# the real environment win over env files.
+parse_env_token() {
+  local file="$1" name="$2" raw line key value dq='"' sq="'" tab
+  tab="$(printf '\t')"
+  [ -f "$file" ] || return 0
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    line="${raw%$'\r'}"
+    # Compose trims whitespace around the key and off the value.
+    while :; do
+      case "$line" in
+        ' '*) line="${line# }" ;;
+        "$tab"*) line="${line#"$tab"}" ;;
+        *) break ;;
+      esac
+    done
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    if [ "$key" = "$line" ]; then
+      continue  # no '=' on the line: not an assignment
+    fi
+    while :; do
+      case "$key" in
+        ' '*) key="${key# }" ;;
+        "$tab"*) key="${key#"$tab"}" ;;
+        *" ") key="${key% }" ;;
+        *"$tab") key="${key%$tab}" ;;
+        *) break ;;
+      esac
+    done
+    if [ "$key" != "$name" ]; then
+      continue
+    fi
+    while :; do
+      case "$value" in
+        ' '*) value="${value# }" ;;
+        "$tab"*) value="${value#"$tab"}" ;;
+        *) break ;;
+      esac
+    done
+    case "$value" in
+      # Quoted: keep everything inside the quotes, drop the rest — which is
+      # where an inline comment after the closing quote lives.
+      "${dq}"*"${dq}"*)
+        value="${value#"$dq"}"
+        value="${value%%"$dq"*}"
+        ;;
+      "${sq}"*"${sq}"*)
+        value="${value#"$sq"}"
+        value="${value%%"$sq"*}"
+        ;;
+      *)
+        # Unquoted: whitespace followed by # begins an inline comment.
+        case "$value" in
+          *' #'*) value="${value%%' #'*}" ;;
+        esac
+        while :; do
+          case "$value" in
+            *" ") value="${value% }" ;;
+            *"$tab") value="${value%$tab}" ;;
+            *) break ;;
+          esac
+        done
+        ;;
+    esac
+    case "$value" in
+      *'${'*)
+        echo "deploy.sh cannot resolve the parameter expansion in $name=${value}... (from $file). Set a literal value, or export $name in the environment." >&2
+        exit 1
+        ;;
+    esac
+    printf '%s' "$value"
+    return 0
+  done < "$file"
+}
+
 # The token the server is started with, so the verification probe can
 # authenticate the way a real client does. Only ever sent as a header, never
-# echoed; the parsing mirrors the ECR_REGISTRY block above.
+# echoed. Resolution order matches Compose: the environment first, then the
+# env files compose-prod.sh passes, later file winning.
 mcp_auth_token="${MCP_AUTH_TOKEN:-}"
-if [ -z "$mcp_auth_token" ] && [ -f .env ]; then
-  while IFS= read -r line; do
-    if [ "${line%%=*}" = MCP_AUTH_TOKEN ]; then
-      mcp_auth_token="${line#*=}"
+if [ -z "$mcp_auth_token" ]; then
+  for env_file in .env .deploy.env; do
+    resolved_token="$(parse_env_token "$env_file" MCP_AUTH_TOKEN)"
+    if [ -n "$resolved_token" ]; then
+      mcp_auth_token="$resolved_token"
     fi
-  done < .env
+  done
 fi
 tools=(git aws docker)
 if [ "$prepare" = false ]; then
@@ -92,6 +185,31 @@ ecr_has_tag() {
     --repository-name "$image" --image-ids "imageTag=$tag" \
     --query 'images[0].imageId.imageDigest' --output text)"
   [ -n "$got" ] && [ "$got" != None ]
+}
+
+# What a successful initialize must look like: a JSON-RPC success carrying the
+# result fields the MCP spec requires. Checked by substring, deliberately —
+# the reply may be JSON or SSE-framed and both contain the same markers,
+# while a JSON-RPC error carries "error" and a non-MCP endpoint answering 200
+# carries neither "result" nor "serverInfo". A bare HTTP 200 proves nothing:
+# smoke-test.sh once caught a server answering 200 with an empty tool list.
+initialize_result_ok() {
+  local body="$1"
+  case "$body" in
+    *'"error"'*) return 1 ;;
+  esac
+  case "$body" in
+    *'"result"'*) ;;
+    *) return 1 ;;
+  esac
+  case "$body" in
+    *'"protocolVersion"'*) ;;
+    *) return 1 ;;
+  esac
+  case "$body" in
+    *'"serverInfo"'*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # One image now carries both the gateway and the server, so there is one tag to
@@ -159,27 +277,48 @@ finish_deploy() {
     # on it answers 401 — which is exactly the line an operator then finds at
     # the bottom of a *successful* deploy's logs. Probe as a real client
     # instead: the same authenticated initialize smoke-test.sh sends. The
-    # access log then shows POST /mcp 200 for a healthy deploy, and a 401/403
-    # stops the deploy with a diagnosis instead of decorating a success.
+    # access log then shows POST /mcp 200 for a healthy deploy, and a refused
+    # probe stops the deploy with a diagnosis instead of decorating a success.
+    # A 200 alone is still not verification: the reply must be an MCP
+    # initialize result, which is what initialize_result_ok demands.
     local -a probe_args=(
-      -s -o /dev/null -w '%{http_code}' --max-time 10
+      -s --max-time 10 -w '\n%{http_code}'
       -H 'Content-Type: application/json'
       -H 'Accept: application/json, text/event-stream'
     )
+    local header_file=""
     if [ -n "$mcp_auth_token" ]; then
-      probe_args+=(-H "Authorization: Bearer ${mcp_auth_token}")
+      # The bearer token never goes in curl's argv, where ps-style inspection
+      # would read it: curl takes the header from a 0600 file instead.
+      header_file="$(mktemp "${TMPDIR:-/tmp}/deploy-verify.XXXXXX")"
+      chmod 600 "$header_file"
+      printf 'Authorization: Bearer %s\n' "$mcp_auth_token" > "$header_file"
+      probe_args+=(-H "@${header_file}")
+      # The EXIT trap may fire after finish_deploy's scope is gone (normal
+      # return) or from inside it (rollback's exit), hence the :- default.
+      trap 'rm -f "${header_file:-}"' EXIT
     fi
+    local initialize_request='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"deploy-verify","version":"0"}}}'
     # Note: Verification proves the MCP endpoint completes an initialize, not
     # that OpenD is logged in to the broker.
     while :; do
-      local code
-      code="$(curl "${probe_args[@]}" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"deploy-verify","version":"0"}}}' "$verify_url" 2>/dev/null || true)"
+      local response body code
+      # curl prints the body, then the status on its own line (-w).
+      response="$(curl "${probe_args[@]}" -d "$initialize_request" "$verify_url" 2>/dev/null || true)"
+      [ -z "$response" ] && response="000"
+      code="${response##*$'\n'}"
+      body="${response%$'\n'*}"
       [ -z "$code" ] && code="000"
       case "$code" in
         # Not listening yet, or a server error it may grow out of: keep polling.
         000 | 5?? ) ;;
-        # The endpoint completed an MCP handshake.
-        200 ) verified=true; break ;;
+        # The endpoint completed an MCP initialize handshake.
+        200 )
+          if initialize_result_ok "$body"; then
+            verified=true
+          fi
+          break
+          ;;
         # Listening but refusing the probe: a wrong MCP_AUTH_TOKEN, or a
         # verify_url that does not speak MCP. Polling longer cannot fix either.
         * ) break ;;
@@ -195,9 +334,14 @@ finish_deploy() {
       ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
     else
       echo "Deploy verification failed (last HTTP status from ${verify_url}: ${code})." >&2
-      if [ "$code" = 401 ] || [ "$code" = 403 ]; then
-        echo "The server is up but rejected the deploy probe: MCP_AUTH_TOKEN in .env does not match what the server was started with. Clients using that token are refused the same way." >&2
-      fi
+      case "$code" in
+        401 | 403)
+          echo "The server is up but rejected the deploy probe: MCP_AUTH_TOKEN in .env does not match what the server was started with. Clients using that token are refused the same way." >&2
+          ;;
+        200)
+          echo "The endpoint answered 200 but not with an MCP initialize result; DEPLOY_VERIFY_URL may not point at the MCP endpoint." >&2
+          ;;
+      esac
       ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp
       rollback true
     fi
