@@ -433,6 +433,67 @@ if name == "curl":
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("Deploy verified", result.stderr)
 
+    def test_reexec_when_deploy_script_differs_in_target_commit(self):
+        """Re-execute target deploy.sh when it differs in the target commit."""
+        deploy_script = self.repo / "scripts/deploy.sh"
+        original_content = deploy_script.read_text()
+        marker = 'echo "REEXEC_MARKER_TEST_OK" >&2\n'
+        deploy_script.write_text(marker + original_content)
+        self.git("add", "scripts/deploy.sh")
+        self.git("commit", "-m", "update deploy script with marker")
+        newer_commit = self.git("rev-parse", "HEAD").strip()
+
+        # Detach working tree back to original commit, simulating an older host checkout
+        self.git("checkout", "--quiet", "--detach", self.commit)
+        self.assertNotIn("REEXEC_MARKER_TEST_OK", deploy_script.read_text())
+
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("re-executing latest deploy script", result.stderr)
+        self.assertIn("REEXEC_MARKER_TEST_OK", result.stderr)
+        self.assertIn(f"Deploy verified: {newer_commit[:7]}", result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), newer_commit)
+        reexec_leftovers = list((self.repo / "scripts").glob(".deploy.reexec*"))
+        self.assertEqual(reexec_leftovers, [])
+
+    def test_reexec_preserves_prepare_flag(self):
+        """Self-reexec preserves command line flags like --prepare."""
+        deploy_script = self.repo / "scripts/deploy.sh"
+        original_content = deploy_script.read_text()
+        marker = 'echo "REEXEC_PREPARE_MARKER" >&2\n'
+        deploy_script.write_text(marker + original_content)
+        self.git("add", "scripts/deploy.sh")
+        self.git("commit", "-m", "update deploy script for prepare test")
+        newer_commit = self.git("rev-parse", "HEAD").strip()
+
+        self.git("checkout", "--quiet", "--detach", self.commit)
+
+        result = self.deploy("--prepare")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("re-executing latest deploy script", result.stderr)
+        self.assertIn("REEXEC_PREPARE_MARKER", result.stderr)
+        self.assertEqual(
+            (self.repo / ".deploy.env").read_text(),
+            f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={newer_commit[:7]}\n",
+        )
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), newer_commit)
+        calls = self.calls()
+        docker = [args for name, args, _ in calls if name == "docker"]
+        self.assertEqual(len(docker), 1)
+        self.assertEqual(docker[0][-1], "pull")
+        self.assertFalse(
+            any(
+                name == "curl" or (name == "docker" and "ps" in args)
+                for name, args, _ in calls
+            )
+        )
+
+    def test_no_reexec_when_deploy_script_identical(self):
+        """When deploy.sh is identical, deployment proceeds without re-execution."""
+        result = self.deploy(self.commit)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("re-executing latest deploy script", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

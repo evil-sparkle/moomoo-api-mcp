@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Usage: deploy.sh [--prepare] [commit]
 set -euo pipefail
-cd "$(dirname "$0")/.."
+ORIGINAL_ARGS=("$@")
+
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+cd "$REPO_ROOT"
 prepare=false
 if [ "${1:-}" = "--prepare" ]; then
   prepare=true
@@ -48,6 +51,26 @@ fi
 git fetch --quiet origin main
 commit="$(git rev-parse --verify --end-of-options "${1:-origin/main}^{commit}")"
 short="${commit:0:7}"
+
+if [ "${DEPLOY_REEXEC:-0}" != "1" ]; then
+  if git cat-file -e "${commit}:scripts/deploy.sh" 2>/dev/null; then
+    if ! git diff --quiet "${commit}" -- scripts/deploy.sh 2>/dev/null; then
+      echo "scripts/deploy.sh has changed in ${short}; re-executing latest deploy script..." >&2
+      reexec_file="$(mktemp "${TMPDIR:-/tmp}/deploy.XXXXXX")"
+      trap 'rm -f "${reexec_file}"' EXIT INT TERM
+      git show "${commit}:scripts/deploy.sh" > "${reexec_file}"
+      chmod +x "${reexec_file}"
+      export DEPLOY_REEXEC=1
+      export REPO_ROOT
+      if [ "${#ORIGINAL_ARGS[@]}" -eq 0 ]; then
+        "${reexec_file}"
+      else
+        "${reexec_file}" "${ORIGINAL_ARGS[@]}"
+      fi
+      exit $?
+    fi
+  fi
+fi
 
 # CI tags every main build with its short commit, so the image matches the source
 # about to be checked out; git v* tags are bookmarks and are deliberately ignored here.
