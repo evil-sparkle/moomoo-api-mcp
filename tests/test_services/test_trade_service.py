@@ -87,6 +87,7 @@ class TestReadOnlyGatewayLock:
         service, ctx, _ = self._connected(TradingPolicy(TradingMode.READ_ONLY))
 
         ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+        ctx.close.assert_not_called()
         assert service.trade_ctx is ctx
 
     def test_reconnecting_locks_the_gateway_again(self):
@@ -132,6 +133,7 @@ class TestReadOnlyGatewayLock:
             )
 
         ctx.unlock_trade.assert_called_once_with(is_unlock=False)
+        ctx.close.assert_not_called()
         assert service.trade_ctx is ctx
         assert "Failed to lock the trade gateway after connecting" in caplog.text
         assert "trade svr not ready" in caplog.text
