@@ -39,10 +39,10 @@ fi
 # token, 401 the healthy deploy and roll it back.
 #
 # What is implemented is a subset of Compose's dotenv grammar: CRLF, comment
-# lines, surrounding whitespace, an optional export prefix, the '=' and ':'
-# delimiters, single and double quotes on one line, and " #" inline comments
-# on unquoted values. Everything in that subset resolves to the same bytes
-# Compose resolves.
+# lines, surrounding whitespace, an optional export prefix, the first '=' or
+# ':' on a line as the delimiter, single and double quotes on one line, and
+# " #" inline comments on unquoted values. Everything in that subset resolves
+# to the same bytes Compose resolves.
 #
 # What is deliberately NOT implemented is refused, never guessed at, because
 # guessing wrong sends bytes the container never saw:
@@ -85,21 +85,19 @@ parse_env_token() {
         *) break ;;
       esac
     done
-    key="${line%%=*}"
-    value="${line#*=}"
-    if [ "$key" = "$line" ]; then
-      # No '='. Docker's env-file documentation also names ':' as a
-      # delimiter, and a silently skipped MCP_AUTH_TOKEN is the worst
-      # outcome here: the container would start authenticated while the
-      # probe sent no token. So honor the colon form too; if this Compose
-      # rejects colon lines outright, compose fails the deploy first, at
-      # `up`, and the resolution below never runs.
-      key="${line%%:*}"
-      value="${line#*:}"
-      if [ "$key" = "$line" ]; then
+    # First '=' or ':' wins, whichever comes first: Compose's dotenv parser
+    # scans left to right and stops at either (and a bearer token may contain
+    # '=', as Base64 padding does — MCP_AUTH_TOKEN: abc=def is 'abc=def').
+    key="${line%%[=:]*}"
+    rest="${line#"$key"}"
+    case "$rest" in
+      [=:]*)
+        value="${rest#?}"
+        ;;
+      *)
         continue  # no delimiter on the line: not an assignment
-      fi
-    fi
+        ;;
+    esac
     while :; do
       case "$key" in
         ' '*) key="${key# }" ;;

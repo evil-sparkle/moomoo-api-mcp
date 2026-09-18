@@ -384,6 +384,30 @@ if name == "curl":
         self.assertIn("escape sequences", result.stderr)
         self.assertEqual(self.calls(), [])
 
+    def test_colon_value_containing_equals_is_not_truncated(self):
+        """First delimiter wins, like Compose's left-to-right scan.
+
+        MCP_AUTH_TOKEN: abc=def must resolve to abc=def: '='-first splitting
+        read the key as "MCP_AUTH_TOKEN: abc", skipped the line silently, and
+        probed without the token the container was started with. Base64
+        padding makes '=' inside token values common, not exotic.
+        """
+        (self.repo / ".env").write_text("MCP_AUTH_TOKEN: abc=def\n")
+        result = self.deploy(self.commit)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        headers = [c for c in self.calls() if c[0] == "curl-header"]
+        self.assertEqual(len(headers), 1)
+        self.assertEqual(headers[0][1], ["Authorization: Bearer abc=def\n"])
+
+    def test_equals_value_containing_colon_keeps_the_colon(self):
+        """First delimiter wins in the other direction too."""
+        (self.repo / ".env").write_text("MCP_AUTH_TOKEN=abc:def\n")
+        result = self.deploy(self.commit)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        headers = [c for c in self.calls() if c[0] == "curl-header"]
+        self.assertEqual(len(headers), 1)
+        self.assertEqual(headers[0][1], ["Authorization: Bearer abc:def\n"])
+
     def test_200_that_is_not_an_mcp_initialize_result_fails(self):
         """HTTP 200 alone is not verification.
 
