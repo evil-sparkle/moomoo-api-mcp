@@ -150,3 +150,18 @@ daemon and are marked so rather than assumed.
    - [x] 9.6 **Review: interpreter reproducibility.** Pinned to 3.12.13 and the
      base image to its digest. The apt layer is still resolved at build time, so
      this is base reproducibility, not a hermetic image.
+   - [x] 9.7 **CI, second run: the container served zero tools.** The supervisor
+     launched the server as `python -m moomoo_mcp.server`, which loads server.py
+     a second time as `__main__` with its own FastMCP instance, while the tool
+     modules it imports at the bottom register against the instance under the
+     real module name. The served one had none. Nothing looked wrong — endpoint
+     up, sessions opening, `tools/list` returning `[]` — and no unit test would
+     have seen it. It runs the console script now, as the image it replaces did.
+     Verified locally by launching the resolved argv and counting what the
+     server advertises: 0 tools before, 32 after.
+   - [x] 9.8 **CI, second run: the gateway stub interleaved its output.** The
+     stand-in printed from per-connection threads without a lock, so CI logged
+     `CONNECT 127.0.0.1CONNECT` / ` 127.0.0.1`. That corrupts the smoke test's
+     line counting, which would have undercounted reconnections and passed for
+     the wrong reason. One lock, one write; verified locally with 40 concurrent
+     connections producing 40 whole lines.

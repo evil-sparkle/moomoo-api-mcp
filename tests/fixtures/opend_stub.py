@@ -17,8 +17,21 @@ import os
 import signal
 import socketserver
 import sys
+import threading
 
 PID_FILE = "/tmp/opend-stub.pid"
+
+# ThreadingTCPServer handles each connection on its own thread, and print() is
+# not atomic: CI caught it emitting "CONNECT 127.0.0.1CONNECT\n 127.0.0.1",
+# which would make the smoke test's line counting undercount reconnections and
+# pass for the wrong reason. One lock, one write, one whole line.
+_OUTPUT_LOCK = threading.Lock()
+
+
+def say(line: str) -> None:
+    with _OUTPUT_LOCK:
+        sys.stdout.write(f"{line}\n")
+        sys.stdout.flush()
 
 
 def listen_address(argv: list[str]) -> tuple[str, int]:
@@ -31,7 +44,7 @@ def listen_address(argv: list[str]) -> tuple[str, int]:
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
-        print("CONNECT", self.client_address[0], flush=True)
+        say(f"CONNECT {self.client_address[0]}")
 
 
 class Server(socketserver.ThreadingTCPServer):
@@ -48,7 +61,7 @@ def main() -> None:
         handle.write(str(os.getpid()))
 
     host, port = listen_address(sys.argv[1:])
-    print(f"LISTENING {host}:{port}", flush=True)
+    say(f"LISTENING {host}:{port}")
     Server((host, port), Handler).serve_forever()
 
 
