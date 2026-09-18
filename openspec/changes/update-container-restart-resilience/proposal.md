@@ -102,9 +102,10 @@ never extracted.
   once the gateway exhausts its retry budget. `Recovery From a Gateway Restart`
   is now scoped to in-place restarts within that budget and defers to
   `Paired Process Supervision` beyond it.
-- Ordering: `refactor-single-container-deployment` is implemented on `main`
-  (PR #9), and this change now names its `Paired Process Supervision`
-  requirement. Archive that change first, so the requirement exists in the
-  canonical spec before this one refers to it.
+- Ordering: this change names `Paired Process Supervision`, which
+  `refactor-single-container-deployment` added. That change is implemented on
+  `main` (PR #9), was verified on the live deployment, and was archived on
+  2026-09-19 (`changes/archive/2026-09-19-refactor-single-container-deployment`), so the requirement is now in the canonical
+  `container-deployment` spec.
 - Follow-up work found while drafting (runtime or docs changes, deliberately
   kept out of this documentation-only change) is listed in `tasks.md` § 3.

@@ -7,7 +7,7 @@ read as if it covered the MCP transport.
 
 | State | Owner | Lifetime | Survives gateway restart | Survives MCP restart | Spec home |
 | --- | --- | --- | --- | --- | --- |
-| OpenD device authorization, remembered login | `opend-data` volume | until `down -v` | yes | yes | `container-deployment` › Session State Persistence (being modified by `refactor-single-container-deployment`; untouched here) |
+| OpenD device authorization, remembered login | `opend-data` volume | until `down -v` | yes | yes | `container-deployment` › Session State Persistence (as modified by the archived `refactor-single-container-deployment`; untouched here) |
 | OpenD live broker login | OpenD process | OpenD process | no, re-logs in (~30s) | no: an MCP exit restarts the whole container, gateway included | none; observed only |
 | OpenD unlock state | OpenD process, plus the SDK's cached copy in the MCP process | see § Reconnect replay | no, returns locked unless the SDK replays an unlock | no: the restarted gateway starts locked | `trade-unlock` |
 | MCP transport session | nobody: stateless | none | n/a | n/a | `transport-sessions` (new) |
@@ -127,7 +127,7 @@ deployed single-container image, with the OpenD binary replaced by
 speaks no OpenD protocol. **manual**: measured by hand once, per the commit
 message, not automated. **live**: observed on the production deployment
 against the real OpenD and broker, in READ_ONLY mode, on 2026-09-18 (recorded
-in `refactor-single-container-deployment` tasks 2.6, 6.2, 6.3); one-off
+in the archived `refactor-single-container-deployment` tasks 2.6, 6.2, 6.3); one-off
 observations, not automated. **code**: follows from reading the code; no test.
 **gap**: not demonstrated anywhere.
 
