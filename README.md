@@ -256,8 +256,8 @@ reports `disconnected` or `degraded` until OpenD answers again — it usually ne
 ~30s to log back in.
 
 **When the container restarts** — a deploy, a settings change, or the MCP
-server process dying — the stateless-HTTP endpoint is served
-statelessly: it issues no session id, ignores any a client still holds, and treats
+server process dying — the Streamable HTTP endpoint runs in
+stateless mode: it issues no session id, ignores any a client still holds, and treats
 each request as initialized. There is therefore no session for a restart to
 invalidate. A call in flight during the restart fails and the next one succeeds;
 nothing needs reconfiguring. (A stateful server answers the next call with 404
@@ -322,7 +322,7 @@ To enable **REAL account** access, you must securely provide your credentials.
 | `MOOMOO_TRADE_PASSWORD`     | Your trading password (plain text)                                    | `123456`      |
 | `MOOMOO_TRADE_PASSWORD_MD5` | MD5 hash of 6-digit trade PIN (alternative to plain text)             | `e10adc...`   |
 | `MOOMOO_SECURITY_FIRM`      | Your broker region (e.g., FUTUSG, FUTUINC)                            | `FUTUSG`      |
-| `MCP_TRANSPORT`             | Optional: Transport mode (`streamable-http` [stateless HTTP], `sse`, `stdio`) | `streamable-http` |
+| `MCP_TRANSPORT`             | Optional: Transport mode (`streamable-http` [stateless, JSON responses], `sse`, `stdio`) | `streamable-http` |
 | `MCP_AUTH_TOKEN`            | Optional: Bearer token secret required for MCP HTTP/SSE clients       | `secret-token`|
 | `MOOMOO_MAX_ORDER_QTY`      | Optional: Safety cap on maximum quantity/shares per order             | `500`         |
 | `MOOMOO_MAX_ORDER_NOTIONAL` | Optional: Safety cap on maximum estimated notional ($) per order      | `25000`       |
@@ -402,9 +402,9 @@ Add the server to your `claude_desktop_config.json`:
 }
 ```
 
-#### Option C: Containerized Deployment (Docker Stateless HTTP)
+#### Option C: Containerized Deployment (Streamable HTTP — stateless, JSON responses)
 
-When running the server via Docker Compose (`MCP_TRANSPORT=streamable-http`), the server listens for stateless HTTP requests (with JSON responses) on `http://127.0.0.1:8000/mcp`.
+When running the server via Docker Compose (`MCP_TRANSPORT=streamable-http`), the server uses MCP Streamable HTTP in stateless mode and returns JSON responses at `http://127.0.0.1:8000/mcp`.
 
 If `MCP_AUTH_TOKEN` is configured, client requests must provide the bearer token in the `Authorization` header:
 

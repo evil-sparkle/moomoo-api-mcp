@@ -148,7 +148,7 @@ deploy rather than during one.
 What stateless gives up is state this server does not keep: no resumable event
 stream, and no server-initiated notifications outside a request. Logging
 notifications emitted during a tool call still ride that call's own response.
-This applies to the stateless-HTTP transport; `MCP_TRANSPORT=sse` is unchanged.
+This applies to the Streamable HTTP transport when configured statelessly; `MCP_TRANSPORT=sse` is unchanged.
 
 ## Why the gateway connections belong to the process
 
@@ -165,7 +165,7 @@ Because of that, the services are built once for the process and shared across a
 requests, instead of being built in the lifespan. Building them per lifespan
 opened a fresh pair of OpenD connections for every client, waited the trade
 connect timeout each time, and closed them when that client left — and under
-stateless HTTP it would have done all of that per tool call.
+stateless Streamable HTTP it would have done all of that per tool call.
 
 Sharing has a second effect worth knowing about: there is one gateway behind
 those connections and one unlock state on it, so the just-in-time unlock
@@ -186,7 +186,7 @@ interleaving.
 
 Authentication is not session-based and never was: `BearerAuthMiddleware`
 compares the `Authorization` header against `MCP_AUTH_TOKEN` on every request,
-in constant time. Stateless HTTP changed nothing about this.
+in constant time. Stateless mode changed nothing about this.
 
 ### What protects them
 

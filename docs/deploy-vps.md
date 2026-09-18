@@ -108,7 +108,7 @@ cd "$HOME/moomoo"
 
 The production overlay and both scripts are versioned with the application. Use a
 commit containing these files whose CI image build has published successfully.
-The deployment script checks out the resolved commit before pulling its images.
+The deployment script checks out the resolved commit before pulling the image.
 
 ### 6. Write `.env`
 
@@ -266,7 +266,7 @@ After start, it verifies the container is running and the MCP endpoint
 answers (any non-5xx HTTP status, token not sent) within `DEPLOY_VERIFY_TIMEOUT`
 seconds (default 90; must be a whole number of seconds). On failure, or if
 `pull` or `up` fails, it restores the previous `.deploy.env` and commit
-(restarting previous images if something had been started) and exits non-zero.
+(restarting the previous deployment if something had been started) and exits non-zero.
 If the rollback's own restart fails, the script says so and the stack needs a
 manual `scripts/compose-prod.sh up -d`. Verification does not prove OpenD login.
 Confirm login and MCP availability after each deployment; container startup
@@ -297,7 +297,7 @@ supervisor does that by itself whenever OpenD dies, without disturbing anything
 a client can see, and what an operator restarts is the container.
 
 **When the gateway process dies**, the supervisor restarts it in place and MCP
-clients are not disturbed: the stateless HTTP endpoint keeps serving calls across it. The
+clients are not disturbed: the stateless Streamable HTTP endpoint keeps serving calls across it. The
 moomoo SDK reconnects on its own, retrying every six seconds for as long as it
 takes, and on reconnect it replays the quote subscriptions it was holding,
 re-asserts the READ_ONLY lock, and replays a REAL deployment's startup unlock if
