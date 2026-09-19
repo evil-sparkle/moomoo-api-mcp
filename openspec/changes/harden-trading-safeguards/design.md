@@ -1,0 +1,471 @@
+# Design
+
+## Context
+
+See `proposal.md` for the motivation. The design depends on these facts about the
+current code and the SDK. They were checked against `main` at `f0ae2ef` and against
+`moomoo-api` in the dev venv.
+
+- **Limits are checked early but not reliably.** `TradingPolicy.check_order_limits`
+  runs before the gateway call. It skips the notional check when the price is
+  missing or `<= 0`. It has no multiplier or currency. `from_env` accepts `nan` and
+  `inf`, because `float("nan") <= 0` is false.
+- **`modify_order` passes a zero quantity.** It sends `qty=0` to the limit check
+  when only the price changes. It has no view of the existing order.
+- **REAL writes can reach the wrong account.** Tools default `trd_env="REAL"`, while
+  service methods default `"SIMULATE"`. `acc_id == 0` resolves through
+  `_find_best_account`, which returns the first account in the environment whose
+  `trdmarket_auth` contains the market.
+- **The SDK already handles what startup auto-unlock did.**
+  - `OpenSecTradeContext.unlock_trade` fetches the account list itself
+    (`_check_acc_id`), so the startup `get_accounts()` before unlock is redundant.
+  - The SDK caches a successful unlock in `_ctx_unlock`. `on_api_socket_reconnected`
+    replays that unlock after every reconnect.
+  - A lock (`is_unlock=False`) clears the cache.
+  - So startup auto-unlock leaves the gateway unlocked across reconnects. The JIT
+    relock clears that state, but only when a write happens.
+- **JIT relock failures are swallowed.** `_jit_trade_unlock` reads credentials from
+  `os.environ` on every call. It swallows a relock failure with `logger.error`. The
+  receipt is not lost today, because the exception is caught inside `finally`.
+  Nothing stops the next write.
+- **Response conversion can fail after a successful write.** Write methods convert
+  the SDK response (`as_frame(...).to_dict`) inside the unlock block. A conversion
+  error after `RET_OK` escapes as an ordinary exception, and `ret != RET_OK` becomes
+  `RuntimeError("place_order failed: …")`. Neither tells the caller whether the
+  request may have been sent, or whether the gateway acknowledged it.
+- **Configuration errors surface late.** `TradingPolicy.from_env()` runs in
+  `_build_services()`, lazily on the first request. A configuration error therefore
+  surfaces on the first tool call, not at process start.
+- **Market snapshots carry what the notional check needs.**
+  `get_market_snapshot` needs no subscription. It returns `sec_type`
+  (`STOCK`, `ETF`, `DRVT`, `WARRANT`, `FUTURE`, …), `last_price`, `lot_size`, and,
+  for options, `option_contract_size` and `option_contract_multiplier`.
+- **`order_list_query` can target one order.** It accepts `order_id`.
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- Every order-mutating path goes through one pre-dispatch sequence, in this order:
+  1. validate;
+  2. resolve the account;
+  3. check the halt;
+  4. assess limits;
+  5. unlock, dispatch and relock.
+
+  Every refusal happens before the single SDK write call.
+- The policy stays pure and unit-testable. Gathering the facts it needs, such as
+  instrument data and the existing order, is the trade service's job.
+- Configuration is parsed and validated once, at process start, before any
+  transport is served.
+
+**Non-Goals:**
+
+- Aggregate exposure across working orders and positions, and maximum-loss
+  modelling.
+- Persisting the halt across restarts. The persistent operator pause belongs to
+  Stage 4.
+- Operation IDs or duplicate suppression. That is Stage 2. This change only makes
+  the dispatch boundary visible in errors.
+- Restructuring `TradeService` beyond what these paths need.
+
+## Decisions
+
+### 1. One settings object, loaded before serving
+
+Add `moomoo_mcp/settings.py` with `load_settings(environ) -> Settings`. The frozen
+dataclass holds:
+
+- the OpenD host and port;
+- the `TradingPolicy`, including its limits and the REAL account allowlist;
+- the stored trade credential, which is plain text or MD5, with plain text taking
+  precedence;
+- the security firm, validated against `SecurityFirm`;
+- the transport;
+- the auth token and the unauthenticated-HTTP opt-out.
+
+`main()` calls it first, so invalid configuration exits before anything listens.
+`_build_services()` reuses the loaded settings and no longer reads `os.environ`
+itself. `TradeService` receives the credential in its constructor, replacing the
+`os.environ` reads inside `_jit_trade_unlock`.
+
+- *Alternative:* keep `from_env()` inside `_build_services`. It was rejected
+  because configuration errors would still appear only on the first tool call. The
+  supervisor would then keep a server running whose every request fails.
+- *Consequence:* a configuration error makes the MCP process exit. The supervisor
+  then stops OpenD, and `restart: unless-stopped` restarts the container repeatedly.
+  The log line names the variable. This is the intended fail-closed behaviour, and
+  the deploy runbook documents it.
+
+### 2. Limit configuration and currency
+
+- **Validation.** `TradingPolicy.__post_init__` validates `max_order_qty` and each
+  notional cap with `math.isfinite(x) and x > 0`. Direct construction is therefore
+  covered too, not only `from_env`.
+- **Format.** The caps come from a new variable,
+  `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`. The policy field `max_order_notional`
+  becomes `Mapping[str, float]`, keyed by an upper-case currency.
+- **Legacy variable.** `load_settings` reads `MOOMOO_MAX_ORDER_NOTIONAL` only to
+  classify it:
+  - Absent: nothing happens.
+  - Present alongside the new variable: it is ignored, and a single INFO log line
+    says so.
+  - Present alone: `TradingModeConfigError` naming the new variable.
+
+  The value is never parsed as a limit.
+- **Parsing.** Parse with `split(",")`, then `partition(":")`, with explicit
+  checks: a three-letter alphabetic code (`isalpha()`) and no duplicates. No regex.
+- **Currency.** Currency comes from the market prefix, through a fixed table:
+  - `US` → `USD`
+  - `HK` → `HKD`
+  - `SH`, `SZ` → `CNY`
+  - `SG` → `SGD`
+  - `JP` → `JPY`
+
+  Any other prefix is unsupported while a cap is configured.
+
+- *Alternative:* keep one unit-less cap and ignore currency. It was rejected because
+  a 25,000 cap means roughly 7.8× different exposure in USD and in HKD.
+- *Alternative:* a single cap plus a `…_CURRENCY` variable. It was rejected because
+  it cannot express a second market without another format change later.
+- *Alternative:* reuse `MOOMOO_MAX_ORDER_NOTIONAL` with the new format. It was
+  rejected for rollback reasons. The previous image parses that variable with
+  `float()` and fails on `USD:…`. A rollback would then require editing `.env` under
+  pressure. With a new name, one `.env` serves both images: the old image enforces
+  its unit-less cap, and the new one enforces currency caps.
+- *Alternative:* use a currency field from the snapshot. It was not chosen because
+  that field's presence is unverified. Task 1.1 checks it. If a reliable field
+  exists, it takes precedence over the table. That does not change the approach.
+
+### 3. Notional assessment: the policy decides, the service gathers facts
+
+The policy gets a pure method:
+
+```
+assess_order(operation, OrderFacts) -> None   # raises TradingPolicyError
+```
+
+`OrderFacts` carries:
+
+- the order type and side;
+- the quantity;
+- the price and trigger price;
+- the legs, each with a ratio and its `InstrumentFacts`.
+
+`InstrumentFacts` holds the code, currency, `sec_type`, contract size, and the
+snapshot's `last_price`, `bid_price` and `ask_price`.
+
+`TradeService` builds `OrderFacts`. It receives `instrument_lookup`, a callable
+`codes -> list[snapshot dict]`, wired in `server.py` to the shared quote context's
+`get_market_snapshot`. The lookup is called only when a notional cap is configured.
+
+The rules are listed below. They are also specified in `trading-policy`.
+
+- **Multiplier.** `STOCK` and `ETF` use a multiplier of 1. `DRVT` uses
+  `option_contract_size`, which must be finite and greater than 0. Every other
+  `sec_type` is refused.
+- **Order classes.** Two frozensets live in `services/validation.py` and are shared
+  with Decision 4:
+  - `FIXED_LIMIT_TYPES`: `NORMAL`, `ABSOLUTE_LIMIT`, `SPECIAL_LIMIT`,
+    `SPECIAL_LIMIT_ALL`, `AUCTION_LIMIT`, `STOP_LIMIT` and `LIMIT_IF_TOUCHED`.
+  - `NO_FIXED_LIMIT_TYPES`: `MARKET`, `AUCTION`, `STOP`, `MARKET_IF_TOUCHED`,
+    `TRAILING_STOP` and `TRAILING_STOP_LIMIT`.
+
+  While a cap is configured, a type in neither set is refused. A new SDK order type
+  is therefore refused until someone classifies it.
+- **Market reference `M`.** The largest finite, positive value among `last_price`,
+  `bid_price` and `ask_price`, as returned. It is `None` when there is none. No
+  staleness threshold applies.
+- **Reference price for a single-leg order.**
+
+  | Side | Class | Reference | `M` required |
+  | --- | --- | --- | --- |
+  | BUY | fixed-limit | `price` | no |
+  | SELL | fixed-limit | `max(price, M)` | yes |
+  | any | no-fixed-limit | `max(M, aux_price if > 0, price if > 0)` | yes |
+
+  Why each row takes that value:
+  - **BUY fixed-limit.** The limit is an upper bound on the fill price, so it is
+    exact and needs no market data. A BUY limit below the market is judged on what
+    it can actually cost.
+  - **SELL fixed-limit.** The fill is at the limit or better, so the limit is a
+    lower bound, and the market reference supplies the upper side.
+  - **No-fixed-limit.** There is no bound, so the estimate takes the market and any
+    trigger or price the caller supplied. Adding a candidate can only raise the
+    estimate. The rule never lowers it below `M`.
+- **Combo.** `|price| × qty × contract size`. All legs must be `DRVT` with equal
+  contract sizes, and the order type must be in `FIXED_LIMIT_TYPES`. A combo without
+  a fixed limit is refused, because no net package reference price is available.
+- **Modification.** The same table applies to the merged order. The side, order type
+  and trigger price come from the existing order, and a fresh snapshot is taken.
+- **Quantity cap.** It applies to `qty × max(qty_ratio)` and needs no instrument
+  data.
+
+- *Alternative:* inject `MarketDataService` into `TradeService`. It was rejected
+  because it couples two services for one read. A callable keeps tests trivial.
+- *Alternative:* fetch the snapshot on every order, for validation. It was rejected
+  because it adds latency and a quote dependency when no cap is configured.
+- *Alternative:* use `option_contract_multiplier`. It was deferred, because task 1.1
+  confirms which field equals 100 for US equity options. The choice is one constant.
+
+### 4. Numeric validation of order values
+
+Order values are validated before the account lookup:
+
+- A quantity must be a positive `int`; `bool` is refused.
+- Floats must satisfy `math.isfinite`.
+- Single-leg prices, `aux_price` and trail values must be `>= 0`.
+- `price > 0` is required for `FIXED_LIMIT_TYPES` (Decision 3).
+  `TRAILING_STOP_LIMIT` is deliberately excluded, because its limit follows the
+  trail and a zero `price` is valid.
+- A combo price must be finite, with its sign untouched.
+
+This is the existing `stop_order_types` and `trailing_order_types` check, extended
+and moved into a single `validate_order_values` in `services/validation.py`.
+
+### 5. Modifications assess the resulting order
+
+For `NORMAL` and `ENABLE`, `modify_order` calls `order_list_query(order_id=…,
+trd_env, acc_id, refresh_cache=True)`. It then:
+
+1. merges the requested quantity and price over the existing values;
+2. takes the code, order type, trigger price and legs from the order;
+3. runs the same validation and assessment as a placement.
+
+An order that is not found, or has unreadable fields, is refused as not sent.
+
+- `CANCEL`, `DISABLE` and `DELETE` skip the assessment.
+- `cancel_order` is unchanged, apart from routing and the dispatch boundary.
+- *Alternative:* require callers to supply both fields. It was rejected because it
+  shifts the check onto the agent, and the value that matters is the broker's
+  current order, not the agent's memory of it.
+- *Risk:* a GTC order from a previous day might not appear in `order_list_query`.
+  The refusal is fail-closed. Task 1.2 verifies this in SIMULATE.
+
+### 6. Account routing
+
+- **Resolution.** `_resolve_account(trd_env, market | None, acc_id)` replaces
+  `_find_best_account`.
+- **Explicit accounts.** An explicit REAL `acc_id` is checked against the allowlist
+  without any gateway call.
+- **`acc_id == 0`.** Eligible accounts are those from `get_acc_list` whose
+  environment matches. When a market is known (placement or preview), they must also
+  be authorized for it. In REAL, they must also be allowlisted.
+  - Exactly one eligible account: it is used.
+  - Zero, or more than one: the request is refused. Candidates are listed by their
+    last four digits only.
+- **Modify and cancel.** These have no market, so `acc_id == 0` resolves only when
+  the environment has one eligible account.
+- **Results.** Every write result gains `acc_id` and `trd_env`. `acc_id` is
+  serialized as a string by the existing `serialize_identifiers`.
+- **Required `trd_env`.** Tools and service write methods lose the `trd_env`
+  default. In the service, `trd_env` becomes keyword-only (`*, trd_env: str`) to
+  avoid reordering positional parameters.
+- **Read tools.** Read tools keep their REAL default, which is the user's stated
+  preference. A wrong-environment read cannot move money.
+- **Preview.** `preview_combo_order` uses the same resolver, so it previews the
+  account the placement would reach.
+
+### 7. One unlock lifecycle, with a dispatch helper
+
+Replace the `_jit_trade_unlock` context manager with `_dispatch_write(trd_env,
+operation, call) -> (records, relock_error)`. It runs these steps:
+
+1. Take `_jit_lock`.
+2. If REAL and a credential is configured, unlock. A failure raises
+   `OrderNotSentError`.
+3. Call the SDK write. This is the dispatch boundary.
+4. If there is a credential, relock in `finally`. On failure, record the error and
+   set the halt.
+5. Convert the response.
+
+The dispatch boundary is where the SDK write call starts. What happens after it
+decides the outcome:
+
+| What happened after the boundary | Outcome | Raised or returned |
+| --- | --- | --- |
+| `ret == RET_OK` and the response converts | acknowledged | the receipt |
+| `ret == RET_OK` and conversion raises | acknowledged, receipt unreadable | `OrderReceiptUnreadableError` |
+| `ret != RET_OK` | outcome unknown | `OrderOutcomeUnknownError` |
+| the SDK call raises | outcome unknown | `OrderOutcomeUnknownError` |
+
+A non-OK return counts as outcome unknown, because matching the gateway's error text
+would be neither reliable nor regex-free. Only `RET_OK` counts as an
+acknowledgement. No message says the request "reached" the gateway or the broker.
+Unknown-outcome messages say the request "may have been sent".
+
+- **Receipt with a relock failure.** On an acknowledged write whose relock fails,
+  the write method returns the receipt plus `gateway_relock_error` and
+  `execution_halted: true`.
+- **Error with a relock failure.** When the write raised, the relock failure is
+  appended to the error's message.
+- **Lock at rest.** `_enforce_gateway_lock` runs when the mode is `READ_ONLY`, or
+  when the mode is `REAL` and a credential is configured.
+  - On the reconnect path, it uses `_jit_lock.acquire(blocking=False)`. If a write
+    holds the lock, it skips the lock request, and the write's relock covers it.
+    The SDK has already replayed the cached unlock that the in-flight write needs.
+- **Startup.** `_auto_unlock_trade` and its call in `_build_services` are deleted.
+- **`unlock_trade`.** The public method refuses when a credential is configured,
+  with the "writes unlock just in time" explanation. The JIT path uses a private
+  `_unlock_gateway`. `tools/account.py` drops its environment fallback and its
+  `"none"`/`"null"` string handling. It requires an explicit password or hash.
+
+- *Alternative:* keep startup unlock and remove JIT. It was rejected because the
+  gateway would then stay unlocked for the life of the process. That is exactly the
+  exposure the lock guards against.
+- *Alternative:* keep manual unlock alongside a credential. It was rejected because
+  one call would silently undo lock-at-rest until the next write.
+
+### 8. Execution state: `ARMED` / `HALTED`
+
+`_ExecutionState` in `TradeService` is guarded by its own `threading.Lock`. It holds
+`halted_since` (an ISO time, or `None`) and `last_lock_error`. It exists only in
+REAL mode with a credential. In any other configuration it stays `ARMED`, because
+nothing can halt it.
+
+| From | Event | To | Recorded |
+| --- | --- | --- | --- |
+| `ARMED` | JIT relock fails | `HALTED` | `halted_since = now`, `last_lock_error` |
+| `HALTED` | JIT relock fails (after a permitted cancellation) | `HALTED` | `last_lock_error` only |
+| `HALTED` | `lock_trade` fails | `HALTED` | `last_lock_error` only |
+| `HALTED` | `lock_trade` succeeds | `ARMED` | both cleared |
+| `ARMED` | `lock_trade` succeeds or fails | `ARMED` | nothing |
+
+These events are not transitions:
+
+- a successful JIT relock;
+- a lock at rest on connect or reconnect, whether it succeeds or fails;
+- `check_health`.
+
+- **Lock-only recovery.** `lock_trade` is the only transition to `ARMED`, and it is
+  the only lock request that is not paired with an unlock the server made itself.
+  - A JIT relock that succeeds after a cancellation only undoes that cancellation's
+    own unlock. It says nothing about why the earlier relock failed.
+  - A reconnect lock happens without anyone seeing the halt.
+  - Requiring an explicit call makes recovery a visible, logged action by an
+    operator or agent.
+- **Serialization.** The public `lock_trade` takes `_jit_lock` in blocking mode. It
+  therefore never locks the gateway inside another write's unlock window, and it
+  cannot report a clear while a cancellation's relock is still pending. It returns
+  `{status: "locked", execution_halted, halt_cleared}`.
+- **Gate.** The pre-dispatch sequence reads the state for REAL `place_order`,
+  `place_combo_order`, and `modify_order` `NORMAL`/`ENABLE`. `HALTED` raises a
+  `TradingPolicyError` naming the halt and `lock_trade`. `_not_sent` wraps it as
+  `OrderNotSentError`.
+- **Report.** `HealthCheck.result()` adds `execution_halted`, `halted_since` and
+  `halt_error` (= `last_lock_error`). It reads memory only, with no probe.
+
+In-memory is sufficient here. A new process starts `ARMED` and locks at rest on
+connect. This is not an operator pause. A persistent pause is a separate, later
+capability, and nothing here anticipates its storage.
+
+### 9. Error types at the dispatch boundary
+
+Add `services/order_errors.py` with three exception types, one for each outcome
+that is not a clean receipt:
+
+- **`OrderNotSentError(RuntimeError)`** covers every refusal before the boundary,
+  whatever its cause: policy, validation, limits, account, halt, not connected, or
+  unlock failure. Its message states that no order was sent. `__cause__` keeps the
+  original `TradingPolicyError` or `ValueError`.
+- **`OrderOutcomeUnknownError(RuntimeError)`** is raised when the call started and
+  no acknowledgement was received. Its message says the request may have been sent,
+  that the outcome is unknown, and that `get_orders` must be checked before any
+  retry. It includes the gateway message.
+- **`OrderReceiptUnreadableError(RuntimeError)`** is raised when the gateway
+  acknowledged the request but its response could not be read. Its message says the
+  gateway acknowledged the request, that the order identifier is unknown, and that
+  the request must not be resent. It points to `get_orders`.
+
+Write methods wrap their pre-dispatch phase once, with a
+`_not_sent(operation)` context manager, so individual checks keep raising their
+natural types.
+
+- *Alternative:* append "no order was sent" to each existing message. It was
+  rejected because it is easy to miss one path, and callers cannot branch on it.
+- *Alternative:* one post-boundary error type. It was rejected because an
+  acknowledged request and an unknown outcome call for different operator actions:
+  the first means find the order, the second means establish whether one exists.
+- *Cost:* tests that expect `TradingPolicyError` from write methods change to expect
+  `OrderNotSentError`, with a cause of `TradingPolicyError`. `check_write` itself
+  and the unlock refusal still raise `TradingPolicyError`.
+
+### 10. HTTP authentication at startup
+
+`main()` refuses `sse` and `streamable-http` when `auth_token` is blank, unless both
+of these hold:
+
+- `MCP_ALLOW_UNAUTHENTICATED_HTTP == "1"`;
+- `settings.policy.mode is READ_ONLY`.
+
+The opt-out logs a warning. The HTTP path always uses the `create_*_app` +
+`uvicorn.run` route. The no-token branch runs `mcp.run(transport=...)` only under
+the opt-out. `stdio` is unaffected.
+
+## Risks / Trade-offs
+
+- **[Risk]** Some REAL reads (`accinfo_query`, `acctradinginfo_query`,
+  `comboorder_tradinginfo_query`) may require an unlocked gateway once startup
+  unlock is gone.
+  → **Mitigation:** task 1.3 checks each read against the live gateway while locked
+  before the removal ships. The existing `unlock_trade` docstring already says "many
+  gateways serve these without any unlock". If one does fail, that read also goes
+  through `_dispatch_write`-style JIT unlock. That is a scoped addition, not a
+  change of approach.
+- **[Risk]** For SELL fixed-limit and no-fixed-limit orders, the reference price
+  depends on a snapshot that may be delayed, depending on quote permissions. A stale
+  `M` can understate the value when the market has risen.
+  → **Mitigation:** BUY fixed-limit orders, the common case, do not use `M` at all.
+  For the other rows, `M` is only one candidate in a maximum, alongside any price or
+  trigger the caller supplied. A staleness threshold can be added later without
+  changing the table. The limitation is stated in the spec.
+- **[Trade-off]** A SELL fixed-limit order, or an order without a fixed limit, on an
+  instrument with no positive `last_price`, `bid_price` or `ask_price` is refused
+  while a cap is configured. An illiquid option with no quotes is an example.
+  → **Mitigation:** this is intended fail-closed behaviour. The error names the
+  missing market reference, and the operator can place the order with no cap
+  configured.
+- **[Risk]** The market-prefix currency table misprices HK dual-counter (RMB/USD)
+  securities.
+  → **Mitigation:** documented. The snapshot currency field is preferred if task 1.1
+  confirms one exists.
+- **[Trade-off]** A combo cap on premium is not a cap on maximum loss.
+  → **Mitigation:** it is named "package premium" in the errors, tool docs and spec.
+  Max-loss is a later change.
+- **[Risk]** An extra gateway read per modification (`order_list_query`) adds
+  latency and one more failure mode.
+  → **Mitigation:** acceptable. A failure refuses the modification as not sent.
+- **[Risk]** Breaking configuration makes the live container crash-loop after an
+  upgrade if `.env` is not migrated first.
+  → **Mitigation:** follow the migration plan order, and treat the log line naming
+  the variable as the signal.
+- **[Trade-off]** Required `trd_env` adds friction for the agent.
+  → **Mitigation:** it is intended. The tool call now records the environment
+  explicitly.
+
+## Migration Plan
+
+1. Before deploying, edit the VPS `.env`:
+   - Set `MOOMOO_REAL_ACC_IDS=<your REAL acc_id>`. Get it from `get_accounts`.
+   - Add `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:<amount>`, plus any other traded
+     currencies. Leave the existing `MOOMOO_MAX_ORDER_NOTIONAL` in place for the old
+     image.
+   - Confirm `MCP_AUTH_TOKEN` is set. The runbook already requires it.
+2. Add `MOOMOO_REAL_ACC_IDS`, `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` and
+   `MCP_ALLOW_UNAUTHENTICATED_HTTP` to the `docker-compose.yml` environment
+   passthrough. They default to empty. Keep `MOOMOO_MAX_ORDER_NOTIONAL` passed
+   through.
+3. Deploy through the normal path. `deploy_verify.py` proves that authenticated
+   `initialize` works.
+4. Call `check_health` and confirm `execution_halted: false`.
+5. Place and cancel a SIMULATE order.
+6. Optionally, place and cancel a minimal REAL limit order far from the market. This
+   step is operator-run.
+7. **Rollback:** redeploy the previous image tag with no `.env` edit. The old image
+   ignores `MOOMOO_REAL_ACC_IDS` and `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`, and
+   enforces its unit-less `MOOMOO_MAX_ORDER_NOTIONAL` as before. The old image also
+   restores startup auto-unlock. That is expected behaviour for that version.
+8. Update the ZeroClaw agent prompt or skills, if they call write tools without
+   `trd_env`, and teach it that `lock_trade` is how an operator clears a halt.
+9. After Stage 1 has been stable for a while, remove `MOOMOO_MAX_ORDER_NOTIONAL`
+   from `.env`, which ends rollback compatibility for that setting.
