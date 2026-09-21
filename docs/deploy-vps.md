@@ -125,19 +125,66 @@ MOOMOO_LOGIN_REGION=sg                         # match your account region
 
 # Trading safety
 MOOMOO_TRADING_MODE=READ_ONLY
-MOOMOO_TRADE_PASSWORD_MD5=                     # blank until you intend to place orders; unlock_trade wants this
+MOOMOO_TRADE_PASSWORD_MD5=                     # blank until you intend to place orders
+MOOMOO_REAL_ACC_IDS=                           # required once MOOMOO_TRADING_MODE=REAL
 MOOMOO_MAX_ORDER_QTY=1000
-MOOMOO_MAX_ORDER_NOTIONAL=10000
+MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:10000
+MOOMOO_MAX_ORDER_NOTIONAL=10000                # legacy, rollback-only; see below
 
 # MCP transport
 MCP_TRANSPORT=streamable-http
 MCP_AUTH_TOKEN=                                # generate: openssl rand -hex 32
 ```
 
+`MCP_AUTH_TOKEN` is not optional on this transport. The server refuses to start
+without it, because an unauthenticated HTTP endpoint exposes every tool,
+including the order-mutating ones, to anything that can reach the port.
+
+`MOOMOO_MAX_ORDER_NOTIONAL` is **legacy and rollback-only**. This image never
+applies it as a limit; the previous image does. Keeping it here beside
+`MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` is what lets one `.env` serve both, so
+a rollback needs no edit under pressure. Set on its own it is a startup error.
+
 `MOOMOO_LOGIN_ACCOUNT` is required even with `MOOMOO_LOGIN_BY_REMEMBER=1`: the
 remembered-token path passes `-login_account` alongside `-login_by_remember=1`.
 Leaving it blank now exits the container with an explicit error rather than
 leaving OpenD waiting on a console prompt that never arrives under `up -d`.
+
+### Migrating an existing deployment
+
+Configuration is validated at startup, before anything listens, so a variable
+this version rejects stops the process rather than failing requests one at a
+time. Edit `.env` **before** deploying the new image:
+
+1. Set `MOOMOO_REAL_ACC_IDS` to the REAL account identifiers writes may target.
+   Get them from `get_accounts`. Required in `REAL` mode.
+2. Add `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:<amount>`, plus any other
+   currency you trade, if you use a notional cap. Leave the legacy
+   `MOOMOO_MAX_ORDER_NOTIONAL` in place.
+3. Confirm `MCP_AUTH_TOKEN` is set.
+4. Deploy through the normal path, then call `check_health` and confirm
+   `execution_halted: false`.
+5. Place and cancel a SIMULATE order.
+
+**The crash-loop signal.** If `.env` was not migrated, the MCP process exits,
+the supervisor stops OpenD, and `restart: unless-stopped` restarts the
+container repeatedly. The log line names the variable:
+
+```
+Refusing to start: MOOMOO_REAL_ACC_IDS is required when MOOMOO_TRADING_MODE is REAL...
+```
+
+Read that line rather than the restart count; it says exactly what to add.
+
+**Rollback needs no `.env` edit.** Redeploy the previous image tag. It ignores
+`MOOMOO_REAL_ACC_IDS` and `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`, and enforces
+its own unit-less `MOOMOO_MAX_ORDER_NOTIONAL` as before. It also restores
+startup auto-unlock, which is that version's behaviour.
+
+Two tool-facing changes the agent needs to know about: the write tools now
+require `trd_env`, and `modify_order`/`cancel_order` resolve the account before
+dispatch, so a call that relied on the gateway's own default for `acc_id="0"`
+must name an account when more than one is eligible.
 
 ### 7. Prepare image, then perform interactive OpenD login
 
@@ -312,10 +359,13 @@ a client can see, and what an operator restarts is the container.
 **When the gateway process dies**, the supervisor restarts it in place and MCP
 clients are not disturbed: the stateless Streamable HTTP endpoint keeps serving calls across it. The
 moomoo SDK reconnects on its own, retrying every six seconds for as long as it
-takes, and on reconnect it replays the quote subscriptions it was holding,
-re-asserts the READ_ONLY lock, and replays a REAL deployment's startup unlock if
-one was performed (an order's just-in-time unlock is not replayed: it re-locks
-when the order finishes, which clears it). Tool calls made during the gap fail
+takes, and on reconnect it replays the quote subscriptions it was holding and
+re-asserts the gateway lock at rest — in `READ_ONLY`, and in `REAL` with a
+stored trade credential. Nothing unlocks on that path: an order's just-in-time
+unlock is not replayed, because the order re-locks when it finishes, and the
+re-lock clears the SDK's cached unlock. If a write is in flight and holding the
+gateway unlocked, the reconnect skips its lock request rather than locking
+underneath it. Tool calls made during the gap fail
 with a connect timeout and the next call succeeds; `check_health` reports
 `disconnected` or `degraded` until it is back. OpenD still needs ~30s to log in,
 so expect that long before health goes green. Look for `[supervisor]` lines in

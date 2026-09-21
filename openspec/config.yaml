@@ -43,13 +43,16 @@ context: |
   `src/moomoo_mcp/`:
 
   - `server.py`: the FastMCP instance, the process-owned gateway connections
-    (`get_services`, `close_services`), startup auto-unlock, bearer-token
-    middleware, and the transport entry point `main`.
+    (`get_services`, `close_services`), bearer-token middleware, and the
+    transport entry point `main`. Nothing unlocks at startup.
+  - `settings.py`: every environment variable this process reads, parsed and
+    validated once before a transport is chosen, so an invalid value exits
+    before anything listens.
   - `supervisor.py`: the container's PID 1. It starts OpenD and the MCP server
     and applies the recovery policy. It imports no application code.
   - `services/`: SDK wrappers. `base_service.py` (quote connection, health
-    aggregation), `trade_service.py` (trade connection, READ_ONLY lock on connect
-    and reconnect, just-in-time unlock), `trading_policy.py` (the
+    aggregation), `trade_service.py` (trade connection, lock at rest on connect
+    and reconnect, just-in-time unlock, the ARMED/HALTED execution state), `trading_policy.py` (the
     `MOOMOO_TRADING_MODE` gate), `market_data_service.py`, `health.py` (bounded
     probes), `sdk_response.py` (narrowing `(ret, data)`), `validation.py`,
     `clock.py`.
@@ -72,8 +75,9 @@ context: |
   - **Streamable HTTP is stateless.** No MCP session id is issued or required
     (`stateless_http=True` in `server.py`). Authentication is separate: when
     `MCP_AUTH_TOKEN` is set, bearer authentication is enforced on every request,
-    independently of session state. Without a token, HTTP currently runs
-    unauthenticated. Do not treat statelessness as authentication.
+    independently of session state. An HTTP transport refuses to start without
+    a token, outside an explicit `MCP_ALLOW_UNAUTHENTICATED_HTTP=1` opt-out in
+    READ_ONLY mode. Do not treat statelessness as authentication.
   - **The OpenD gateway may be absent.** A failed connection is logged and the
     server keeps serving, so `check_health` stays callable.
   - **Blocking SDK calls leave the event loop.** Tools start blocking work with
