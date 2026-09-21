@@ -17,6 +17,7 @@ async def place_order(
     price: float,
     qty: int,
     trd_side: str,
+    trd_env: str,
     order_type: str = "NORMAL",
     time_in_force: str = "DAY",
     adjust_limit: float = 0,
@@ -24,7 +25,6 @@ async def place_order(
     trail_type: str | None = None,
     trail_value: float | None = None,
     trail_spread: float | None = None,
-    trd_env: str = "REAL",
     acc_id: str = "0",
     remark: str = "",
 ) -> dict:
@@ -36,7 +36,7 @@ async def place_order(
     type, and time in force. Orders placed in REAL environment will use real money.
 
     IMPORTANT FOR AI AGENTS:
-    - Default is REAL account as per user preference.
+    - trd_env is REQUIRED and has no default. State the environment every time.
     - ALWAYS confirm with user before placing orders.
 
     TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
@@ -44,7 +44,31 @@ async def place_order(
     trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
     error; the request is never rerouted to a different environment. Call
     check_health to see the configured mode.
-    - For SIMULATE environment, explicitly set trd_env='SIMULATE'.
+
+    ACCOUNT: acc_id='0' resolves an account only when exactly one is eligible —
+    matching the environment, authorized for the market, and, in REAL, on the
+    configured allowlist. Zero or several eligible accounts is a refusal that
+    lists the candidates by their last four digits; name one with acc_id.
+
+    LIMITS: when a notional cap is configured, the order is valued as
+    reference price x quantity x contract multiplier, in the instrument's own
+    currency, and an order that CANNOT be valued is REFUSED rather than let
+    through. The reference price is the limit price for a BUY limit order; every
+    other order uses the larger of its own prices and the market, and is refused
+    when no market price is available.
+
+    HALT: if a re-lock after an earlier order failed, execution is HALTED and
+    this call is refused. Cancellations stay allowed. lock_trade is the only way
+    to clear a halt.
+
+    THREE OUTCOMES: an error says which one happened.
+    - "no order was sent": refused before anything was dispatched. Safe to fix
+      and retry.
+    - "may have been sent ... outcome is unknown": the request went out and
+      nothing acknowledged it. An order MAY exist. Check get_orders BEFORE any
+      retry. Never resend blindly.
+    - "acknowledged ... do not resend": the gateway took the request and its
+      receipt could not be read. An order DOES exist; find it with get_orders.
 
     Args:
         code: Stock code (e.g., 'US.AAPL', 'HK.00700').
@@ -75,13 +99,15 @@ async def place_order(
             TRAILING_STOP_LIMIT). Values: 'RATIO' or 'AMOUNT'.
         trail_value: Trailing value (ratio or amount) for trailing stop types.
         trail_spread: Optional trailing spread for trailing stop limit types.
-        trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
-        acc_id: Account ID from get_accounts(). Required if multiple accounts exist.
+        trd_env: Trading environment - 'REAL' or 'SIMULATE'. REQUIRED.
+        acc_id: Account ID from get_accounts(), or '0' to resolve one when
+            exactly one account is eligible.
         remark: Optional order note/remark.
 
     Returns:
-        Dictionary with order details including order_id, order_status,
-        time_in_force, etc.
+        Dictionary with order details including order_id, order_status and
+        time_in_force, plus the acc_id and trd_env the order was submitted
+        against.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
     return serialize_identifiers(
@@ -111,9 +137,9 @@ async def place_combo_order(
     combo_legs: list[dict],
     price: float,
     qty: int,
+    trd_env: str,
     order_type: str = "NORMAL",
     time_in_force: str = "DAY",
-    trd_env: str = "REAL",
     acc_id: str = "0",
     remark: str = "",
 ) -> dict:
@@ -136,7 +162,7 @@ async def place_combo_order(
     leave a naked short call.
 
     IMPORTANT FOR AI AGENTS:
-    - Default is REAL account as per user preference.
+    - trd_env is REQUIRED and has no default. State the environment every time.
     - ALWAYS confirm with user before placing orders.
 
     TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
@@ -144,7 +170,39 @@ async def place_combo_order(
     trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
     error; the request is never rerouted to a different environment. Call
     check_health to see the configured mode.
-    - For SIMULATE environment, explicitly set trd_env='SIMULATE'.
+
+    ACCOUNT: acc_id='0' resolves an account only when exactly one is eligible —
+    matching the environment, authorized for the market, and, in REAL, on the
+    configured allowlist. Zero or several eligible accounts is a refusal that
+    lists the candidates by their last four digits; name one with acc_id.
+
+    LIMITS: the quantity cap applies to the LARGEST LEG quantity
+    (qty x qty_ratio), not the package count. The notional cap applies to the
+    PACKAGE PREMIUM: |net price| x qty x the legs' common contract multiplier.
+
+    PREMIUM IS NOT MAXIMUM LOSS. A short package can lose far more than the
+    premium it collects; capping premium bounds what the package costs to open,
+    not what it can cost to hold.
+
+    While a notional cap is configured, these combos are REFUSED:
+    - combos whose premium cannot be computed;
+    - combos whose legs have differing contract multipliers or contract sizes;
+    - combos that include a stock leg;
+    - combos using an order type outside the fixed-limit class, such as MARKET,
+      because there is no net package price to measure.
+
+    HALT: if a re-lock after an earlier order failed, execution is HALTED and
+    this call is refused. Cancellations stay allowed. lock_trade is the only way
+    to clear a halt.
+
+    THREE OUTCOMES: an error says which one happened.
+    - "no order was sent": refused before anything was dispatched. Safe to fix
+      and retry.
+    - "may have been sent ... outcome is unknown": the request went out and
+      nothing acknowledged it. An order MAY exist. Check get_orders BEFORE any
+      retry. Never resend blindly.
+    - "acknowledged ... do not resend": the gateway took the request and its
+      receipt could not be read. An order DOES exist; find it with get_orders.
 
     Args:
         combo_legs: The strategy's legs, at least two, all in the same market.
@@ -169,8 +227,9 @@ async def place_combo_order(
         order_type: Order type. 'NORMAL' is a limit order; 'MARKET' is also
             supported but is rarely appropriate for a multi-leg option package.
         time_in_force: 'DAY' (default) or 'GTC'.
-        trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
-        acc_id: Account ID from get_accounts(). Resolved automatically if omitted.
+        trd_env: Trading environment - 'REAL' or 'SIMULATE'. REQUIRED.
+        acc_id: Account ID from get_accounts(), or '0' to resolve one when
+            exactly one account is eligible.
         remark: Optional order note/remark.
 
     Returns:
@@ -214,6 +273,10 @@ async def preview_combo_order(
     impact of the exact package you are about to propose. Pass the same legs,
     price, quantity, and account you intend to submit — a preview of a different
     package describes a different trade.
+
+    It resolves the account exactly as place_combo_order does, so it previews
+    the account the placement would reach, and refuses where the placement would
+    refuse rather than previewing an account the order could not use.
 
     Args:
         combo_legs: Same format as place_combo_order. Each leg is a dict:
@@ -270,10 +333,10 @@ async def modify_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,
     modify_order_op: str,
+    trd_env: str,
     qty: int | None = None,
     price: float | None = None,
     adjust_limit: float = 0,
-    trd_env: str = "REAL",
     acc_id: str = "0",
 ) -> dict:
     """Modify an existing order.
@@ -283,7 +346,7 @@ async def modify_order(
     parameters (price, qty) to the user for verification.
 
     IMPORTANT FOR AI AGENTS:
-    - Default is REAL account as per user preference.
+    - trd_env is REQUIRED and has no default. State the environment every time.
     - ALWAYS confirm with user before modifying orders.
 
     TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
@@ -291,6 +354,31 @@ async def modify_order(
     trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
     error; the request is never rerouted to a different environment. Call
     check_health to see the configured mode.
+
+    ACCOUNT: acc_id='0' resolves an account only when exactly one is eligible
+    for the environment, and, in REAL, on the configured allowlist. Zero or
+    several eligible accounts is a refusal that lists the candidates by their
+    last four digits; name one with acc_id.
+
+    LIMITS: 'NORMAL' and 'ENABLE' are checked as the order that WOULD RESULT,
+    not as the fields you sent. The existing order is fetched, your changes are
+    merged over it, and the whole order is valued. Changing only the price of a
+    100-share order therefore checks 100 x the new price. An order that cannot
+    be found is refused. 'CANCEL', 'DISABLE' and 'DELETE' reduce exposure and
+    are not checked against limits.
+
+    HALT: if a re-lock after an earlier order failed, execution is HALTED and
+    'NORMAL' and 'ENABLE' are refused. 'CANCEL', 'DISABLE' and 'DELETE' stay
+    allowed. lock_trade is the only way to clear a halt.
+
+    THREE OUTCOMES: an error says which one happened.
+    - "no order was sent": refused before anything was dispatched. Safe to fix
+      and retry.
+    - "may have been sent ... outcome is unknown": the request went out and
+      nothing acknowledged it. The change MAY have taken effect. Check
+      get_orders BEFORE any retry. Never resend blindly.
+    - "acknowledged ... do not resend": the gateway took the request and its
+      receipt could not be read. Find the order with get_orders.
 
     Args:
         order_id: Order ID to modify. Get from get_orders().
@@ -303,11 +391,13 @@ async def modify_order(
         qty: New quantity (optional, for NORMAL operation).
         price: New price (optional, for NORMAL operation).
         adjust_limit: Adjust limit percentage (0-100). Default 0.
-        trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
-        acc_id: Account ID from get_accounts().
+        trd_env: Trading environment - 'REAL' or 'SIMULATE'. REQUIRED.
+        acc_id: Account ID from get_accounts(), or '0' to resolve one when
+            exactly one account is eligible.
 
     Returns:
-        Dictionary with modified order details.
+        Dictionary with the modified order's details, plus the acc_id and
+        trd_env the modification was submitted against.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
     return serialize_identifiers(
@@ -328,7 +418,7 @@ async def modify_order(
 async def cancel_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,
-    trd_env: str = "REAL",
+    trd_env: str,
     acc_id: str = "0",
 ) -> dict:
     """Cancel an existing order.
@@ -338,7 +428,7 @@ async def cancel_order(
     for verification before cancellation.
 
     IMPORTANT FOR AI AGENTS:
-    - Default is REAL account as per user preference.
+    - trd_env is REQUIRED and has no default. State the environment every time.
     - ALWAYS confirm with user before cancelling orders.
 
     TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
@@ -346,6 +436,23 @@ async def cancel_order(
     trd_env='SIMULATE', and REAL allows both. A refusal is an explicit policy
     error; the request is never rerouted to a different environment. Call
     check_health to see the configured mode.
+
+    ACCOUNT: acc_id='0' resolves an account only when exactly one is eligible
+    for the environment, and, in REAL, on the configured allowlist. Zero or
+    several eligible accounts is a refusal that lists the candidates by their
+    last four digits; name one with acc_id.
+
+    HALT: cancellation stays ALLOWED while execution is halted. Reducing
+    exposure is exactly what an operator needs during a halt.
+
+    THREE OUTCOMES: an error says which one happened.
+    - "no order was sent": refused before anything was dispatched. Safe to fix
+      and retry.
+    - "may have been sent ... outcome is unknown": the request went out and
+      nothing acknowledged it. The order MAY have been cancelled. Check
+      get_orders BEFORE any retry. Never resend blindly.
+    - "acknowledged ... do not resend": the gateway took the request and its
+      receipt could not be read. Check get_orders for the order's state.
 
     Args:
         order_id: Order ID to cancel. Get from get_orders().

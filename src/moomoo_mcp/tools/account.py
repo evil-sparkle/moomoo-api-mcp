@@ -322,79 +322,52 @@ async def unlock_trade(
     password: str | None = None,
     password_md5: str | None = None,
 ) -> dict[str, Any]:
-    """Unlock trade to access REAL account data.
+    """Unlock the gateway by hand. Only for deployments that store no credential.
 
     Unlocking is about the GATEWAY's trading lock. It is a separate thing from
     this server's trading mode, and from whether you can read account data.
 
-    DO NOT call this pre-emptively. It is denied unless MOOMOO_TRADING_MODE is
-    REAL — the default is READ_ONLY — so calling it "just in case" before a read
-    produces a policy error for a read that would have succeeded on its own.
+    DO NOT call this pre-emptively.
+
+    - When this server stores a trade credential, this tool is REFUSED. The
+      server manages the lock itself: it keeps the gateway locked at rest and
+      unlocks only for the instant one order is dispatched. A manual unlock
+      would leave the gateway unlocked indefinitely and undo that.
+    - Unlocking requires MOOMOO_TRADING_MODE=REAL. The default is READ_ONLY, so
+      calling this "just in case" before a read produces a policy error for a
+      read that would have succeeded on its own.
+    - There is no environment fallback. Supply a password or a hash explicitly.
 
     Workflow for accessing REAL account data:
     1. Call the read you actually want (get_assets, get_positions,
        get_account_summary, get_max_tradable, get_cash_flow) with
        trd_env='REAL'. Many gateways serve these without any unlock.
-    2. Only if that read fails asking for trading to be unlocked, call
-       unlock_trade(). It tries MOOMOO_TRADE_PASSWORD, then
-       MOOMOO_TRADE_PASSWORD_MD5, from the environment.
-    3. If the environment holds no usable credential, call
+    2. Only if that read fails asking for trading to be unlocked, and only if
+       this server stores no credential, call
        unlock_trade(password='your_trading_password').
-    4. Retry the read.
+    3. Retry the read.
 
     SIMULATE accounts never need unlocking.
 
     Args:
-        password: Plain text trade password (the password you set in Moomoo app).
-            If not provided, will look for MOOMOO_TRADE_PASSWORD env var.
-        password_md5: MD5 hash of trade password (alternative to password).
-            If not provided, will look for MOOMOO_TRADE_PASSWORD_MD5 env var.
-            Provide either password or password_md5, not both.
+        password: Plain text trade password (the password you set in the Moomoo
+            app). Required unless password_md5 is given.
+        password_md5: MD5 hash of the trade password, as an alternative to
+            password. Provide one or the other, not both.
 
     Returns:
         Success status dictionary with {'status': 'unlocked'}.
 
     Note:
-        The unlock state is maintained on the OpenD gateway, not per client session.
-        Do not assume it remains unlocked: credential-backed REAL order operations
-        attempt to re-lock the gateway when they finish. Gateway restarts may also
-        require unlocking again.
+        A manual unlock PERSISTS. The gateway stays unlocked until lock_trade is
+        called or the gateway restarts, and the SDK replays the unlock after
+        every reconnect. Nothing re-locks it on your behalf on this path, so
+        call lock_trade when you are done.
 
-        Unlocking requires MOOMOO_TRADING_MODE=REAL. In READ_ONLY or SIMULATE
-        mode this tool returns an explicit policy error, and a configured trade
-        password does not change that. Call check_health to see the configured
-        mode.
+        Call check_health to see the configured mode.
     """
-    import os
-
-    # Helper to check if value is effectively empty or "None" string
-    def is_empty_or_none(val: str | None) -> bool:
-        if val is None:
-            return True
-        if not isinstance(val, str):
-            return False
-        val_str = val.strip()
-        return not val_str or val_str.lower() in ("none", "null")
-
-    # Check if inputs are effectively empty
-    pwd_is_empty = is_empty_or_none(password)
-    md5_is_empty = is_empty_or_none(password_md5)
-
-    # If no valid args provided, try env vars
-    if pwd_is_empty and md5_is_empty:
-        password = os.environ.get("MOOMOO_TRADE_PASSWORD")
-        password_md5 = os.environ.get("MOOMOO_TRADE_PASSWORD_MD5")
-        await ctx.info("Attempting to unlock using environment variables")
-    else:
-        # If one is empty but provided as "None" string, ensure it's None for
-        # the service call
-        if pwd_is_empty:
-            password = None
-        if md5_is_empty:
-            password_md5 = None
-        await ctx.info("Attempting to unlock using provided credentials")
-
     trade_service = ctx.request_context.lifespan_context.trade_service
+    await ctx.info("Attempting to unlock using the supplied credentials")
     await run_blocking(
         trade_service.unlock_trade, password=password, password_md5=password_md5
     )
@@ -402,8 +375,9 @@ async def unlock_trade(
     return {
         "status": "unlocked",
         "message": (
-            "You can now access REAL account data by setting "
-            "trd_env='REAL' in other tools"
+            "You can now access REAL account data by setting trd_env='REAL' in "
+            "other tools. This unlock PERSISTS: the gateway stays unlocked until "
+            "lock_trade is called or the gateway restarts."
         ),
     }
 
@@ -412,15 +386,34 @@ async def unlock_trade(
 async def lock_trade(
     ctx: Context[ServerSession, AppContext],
 ) -> dict[str, Any]:
-    """Lock trade operations on OpenD gateway.
+    """Lock the gateway, and clear an execution halt.
 
-    Can be called at any time to return the OpenD gateway to a locked state.
-    Safe to call in any mode (READ_ONLY, SIMULATE, REAL).
+    This is also the ONLY way to clear an execution halt. The server halts when
+    a re-lock after an order fails, because the gateway may then still be
+    unlocked: while halted it refuses new placements, combo placements and
+    NORMAL/ENABLE modifications, and allows cancellations.
+
+    A successful call locks the gateway and clears the halt. A REFUSED call
+    leaves the halt exactly as it was — it never reports a clear it did not
+    achieve. If the lock keeps failing, the gateway may be unable to resolve the
+    REAL account its lock path requires, and an operator has to fix that before
+    execution can resume.
+
+    It waits for any order already in flight to finish, so it never locks the
+    gateway underneath a write.
 
     Returns:
-        Status dictionary with {'status': 'locked'}.
+        Status dictionary with:
+        - status: 'locked'.
+        - execution_halted: whether execution is still halted afterwards.
+        - halt_cleared: whether this call cleared a halt that was in effect.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    await run_blocking(trade_service.lock_trade)
+    result = await run_blocking(trade_service.lock_trade)
     await ctx.info("Trade locked successfully on OpenD gateway")
-    return {"status": "locked", "message": "Trading on OpenD is now locked"}
+    return {
+        "status": "locked",
+        "message": "Trading on OpenD is now locked",
+        "execution_halted": result.get("execution_halted", False),
+        "halt_cleared": result.get("halt_cleared", False),
+    }
