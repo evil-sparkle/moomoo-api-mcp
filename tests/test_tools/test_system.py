@@ -47,6 +47,41 @@ class TestCheckHealthTool:
         )
 
     @pytest.mark.asyncio
+    async def test_the_execution_halt_crosses_the_mcp_boundary(
+        self, call_tool, mock_moomoo_service
+    ):
+        """check_health is how an operator learns execution is halted, and how
+        they learn that lock_trade is what clears it."""
+        stub_health(
+            mock_moomoo_service,
+            {
+                **HEALTHY,
+                "execution_halted": True,
+                "halted_since": "2026-09-21T12:00:00Z",
+                "halt_error": "lock refused",
+            },
+        )
+
+        result = await call_tool("check_health")
+
+        assert result.json["execution_halted"] is True
+        assert result.json["halted_since"] == "2026-09-21T12:00:00Z"
+        assert result.json["halt_error"] == "lock refused"
+        # A halt is not a connectivity problem; the status still follows the
+        # probes.
+        assert result.json["status"] == "connected"
+
+    @pytest.mark.asyncio
+    async def test_an_armed_service_reports_not_halted(
+        self, call_tool, mock_moomoo_service
+    ):
+        stub_health(mock_moomoo_service, {**HEALTHY, "execution_halted": False})
+
+        result = await call_tool("check_health")
+
+        assert result.json["execution_halted"] is False
+
+    @pytest.mark.asyncio
     async def test_degraded_status_identifies_failing_service(
         self, call_tool, mock_moomoo_service
     ):

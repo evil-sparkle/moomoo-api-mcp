@@ -118,6 +118,117 @@ async def test_order_reads_forward_string_account_id(call_tool, mock_trade_servi
         assert called.call_args.kwargs["acc_id"] == LARGE_ACC_ID
 
 
+class TestRequiredTradingEnvironment:
+    """Every write tool states its environment; nothing infers one.
+
+    The service methods used to default to SIMULATE while the tools defaulted
+    to REAL, so an omitted `trd_env` meant different things at different
+    layers. A required argument removes the question.
+    """
+
+    WRITE_TOOLS = ["place_order", "place_combo_order", "modify_order", "cancel_order"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
+    async def test_the_schema_marks_trd_env_required(self, tool_name):
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        schema = tools[tool_name].inputSchema
+
+        assert "trd_env" in schema["properties"]
+        assert "trd_env" in schema.get("required", [])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
+    async def test_the_schema_offers_no_default(self, tool_name):
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        schema = tools[tool_name].inputSchema
+
+        assert "default" not in schema["properties"]["trd_env"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
+    async def test_the_docstring_no_longer_says_default_is_real(self, tool_name):
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        description = tools[tool_name].description or ""
+
+        assert "Default REAL" not in description
+        assert "Default is REAL account" not in description
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
+    async def test_the_docstring_explains_the_three_outcomes(self, tool_name):
+        """An agent that cannot tell them apart will retry a sent order."""
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        description = tools[tool_name].description or ""
+
+        assert "no order was sent" in description
+        assert "may have been sent" in description
+        assert "do not resend" in description.lower()
+        assert "get_orders" in description
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
+    async def test_the_docstring_explains_account_resolution(self, tool_name):
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        description = tools[tool_name].description or ""
+
+        assert "exactly one is eligible" in description
+        assert "last four digits" in description
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
+    async def test_the_docstring_documents_the_halt(self, tool_name):
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        description = tools[tool_name].description or ""
+
+        assert "lock_trade" in description
+        assert "halt" in description.lower()
+
+    @pytest.mark.asyncio
+    async def test_the_combo_docstring_says_premium_is_not_max_loss(self):
+        """A short package can lose far more than the premium it collects."""
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        description = tools["place_combo_order"].description or ""
+
+        assert "PREMIUM IS NOT MAXIMUM LOSS" in description
+        assert "stock leg" in description
+
+    @pytest.mark.asyncio
+    async def test_the_place_order_docstring_states_the_reference_price_rule(self):
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        description = tools["place_order"].description or ""
+
+        assert "CANNOT be valued is REFUSED" in description
+        assert "the limit price for a BUY limit order" in description
+
+    @pytest.mark.asyncio
+    async def test_the_lock_trade_docstring_describes_halt_recovery(self):
+        from moomoo_mcp.server import mcp
+
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        description = tools["lock_trade"].description or ""
+
+        assert "ONLY way to clear an execution halt" in description
+        assert "halt_cleared" in description
+        assert "execution_halted" in description
+
+
 class TestPolicyThroughMcpDispatch:
     """Policy refusals must surface through actual MCP tool calls too."""
 

@@ -336,6 +336,71 @@ class TestHealthReportsTradingMode:
         assert health["trading_mode"] == "READ_ONLY"
 
 
+class TestHealthReportsExecutionHalt:
+    """Health is where an operator finds out that execution is halted.
+
+    It reads memory: no probe, no gateway request, and reading it never clears
+    the halt. The halt is reported alongside the probes rather than folded into
+    `status`, because a halted server whose gateway is perfectly reachable is
+    still connected, and collapsing the two would hide which problem it has.
+    """
+
+    def test_an_armed_service_reports_not_halted(self, services):
+        moomoo_service, trade_service = services
+
+        health = moomoo_service.check_health(trade_service=trade_service)
+
+        assert health["execution_halted"] is False
+        assert "halted_since" not in health
+
+    def test_a_halted_service_reports_the_halt_and_its_cause(self, services):
+        moomoo_service, trade_service = services
+        trade_service._execution.record_relock_failure("lock refused")
+
+        health = moomoo_service.check_health(trade_service=trade_service)
+
+        assert health["execution_halted"] is True
+        assert health["halted_since"]
+        assert health["halt_error"] == "lock refused"
+
+    def test_the_connectivity_status_still_follows_the_probes_alone(self, services):
+        moomoo_service, trade_service = services
+        before = moomoo_service.check_health(trade_service=trade_service)["status"]
+        trade_service._execution.record_relock_failure("lock refused")
+
+        after = moomoo_service.check_health(trade_service=trade_service)["status"]
+
+        assert after == before
+
+    def test_checking_health_does_not_clear_the_halt(self, services):
+        moomoo_service, trade_service = services
+        trade_service._execution.record_relock_failure("lock refused")
+
+        moomoo_service.check_health(trade_service=trade_service)
+        second = moomoo_service.check_health(trade_service=trade_service)
+
+        assert second["execution_halted"] is True
+        assert trade_service.execution_state["execution_halted"] is True
+
+    def test_a_halt_keeps_its_original_start_time(self, services):
+        _, trade_service = services
+        trade_service._execution.record_relock_failure("first failure")
+        started = trade_service.execution_state["halted_since"]
+
+        trade_service._execution.record_relock_failure("second failure")
+
+        state = trade_service.execution_state
+        assert state["halted_since"] == started
+        assert state["halt_error"] == "second failure"
+
+    def test_health_without_a_trade_service_reports_not_halted(self, services):
+        moomoo_service, _ = services
+
+        health = moomoo_service.check_health()
+
+        assert health["execution_halted"] is False
+
+
 class TestConnectDoesNotBlockStartup:
     """The SDK retries a refused connection forever instead of raising."""
 
