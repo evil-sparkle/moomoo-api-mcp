@@ -45,8 +45,13 @@ current code and the SDK. They were checked against `main` at `f0ae2ef` and agai
     no `sec_type`, `stock_type` or `security_type` field. Classification comes from
     `get_stock_basicinfo`, which returns `stock_type`.
   - It does **not** return a currency field.
-  - `bid_price` and `ask_price` are the string `'N/A'` when the gateway omits them,
-    so quote fields are not reliably numeric.
+  - `bid_price`, `ask_price` **and `option_contract_multiplier`** are the string
+    `'N/A'` when the gateway omits them, so quote fields are not reliably numeric.
+    Normalization covers all three, not only the two price fields (task 1.1).
+  - `option_contract_size` is copied out of an optional proto field with no
+    `HasField` guard, so an omitted value arrives as `0.0` and cannot be told apart
+    from a real zero (task 1.1). A non-positive multiplier is therefore treated as
+    absent, never as zero.
 - **`order_list_query` can target one order.** It accepts `order_id`.
 
 ## Goals / Non-Goals
@@ -221,6 +226,14 @@ The rules are listed below. They are also specified in `trading-policy`.
     Equality with 100 is a coincidence of common US contracts, not a definition, and
     choosing on that basis would silently misprice any instrument with a non-standard
     multiplier.
+  - **Narrowed by task 1.1, not yet closed.** The SDK's own field table describes
+    `option_contract_size` as 每份合约数 (units of the underlying per contract) and
+    `option_contract_multiplier` as 合约乘数，指数期权特有字段 (contract multiplier,
+    *a field specific to index options*). On that evidence the monetary multiplier
+    for a US equity option is `option_contract_size`, and
+    `option_contract_multiplier` would be `'N/A'` for one. The independent
+    cross-check task 1.1 requires — against a position's own market value — still
+    needs an account, so the field is not yet chosen. See `verification.md`.
   - Until task 1.1 resolves it, an option is not assessable and is refused while a
     cap is configured.
   - Any classification other than `STOCK`, `ETF` or `DRVT` is refused.
