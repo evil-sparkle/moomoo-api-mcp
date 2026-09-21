@@ -213,7 +213,7 @@ class HealthCheck:
                 self.trade_future, self.remaining()
             )
 
-        return {
+        result = {
             "status": aggregate_status(quote_result, trade_result),
             "host": f"{self.service.host}:{self.service.port}",
             "checked_at": utc_now_iso(),
@@ -224,3 +224,19 @@ class HealthCheck:
             ),
             "gateway_version": quote_result.get("gateway_version"),
         }
+
+        # The execution halt is read from memory, with no gateway request, and
+        # reading it never clears it. It is reported alongside the probes rather
+        # than folded into `status`: a halted server whose gateway is perfectly
+        # reachable is still connected, and collapsing the two would hide which
+        # of the two problems an operator actually has.
+        execution = (
+            self.trade_service.execution_state
+            if self.trade_service is not None
+            else {"execution_halted": False, "halted_since": None, "halt_error": None}
+        )
+        result["execution_halted"] = execution["execution_halted"]
+        if execution["execution_halted"]:
+            result["halted_since"] = execution["halted_since"]
+            result["halt_error"] = execution["halt_error"]
+        return result

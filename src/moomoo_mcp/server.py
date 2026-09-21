@@ -15,12 +15,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from moomoo_mcp.services.base_service import MoomooService
+from moomoo_mcp.services.instruments import InstrumentAdapter
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
-from moomoo_mcp.services.trading_policy import (
-    TradingMode,
-    TradingPolicy,
-    TradingPolicyError,
+from moomoo_mcp.services.trading_policy import TradingModeConfigError
+from moomoo_mcp.settings import (
+    Settings,
+    check_transport_authentication,
+    load_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,91 +69,41 @@ class AppContext:
     market_data_service: MarketDataService
 
 
-def _auto_unlock_trade(trade_service: TradeService) -> None:
-    """Attempt to auto-unlock trade using environment variables.
-
-    Reads MOOMOO_TRADE_PASSWORD (plain text, preferred) or MOOMOO_TRADE_PASSWORD_MD5.
-    Logs status and handles failures gracefully without crashing.
-
-    Only a REAL-mode deployment unlocks. A configured password does not promote
-    the mode, and a failed unlock leaves the policy untouched — it never
-    triggers a retry or an order.
-    """
-    password = os.environ.get("MOOMOO_TRADE_PASSWORD")
-    password_md5 = os.environ.get("MOOMOO_TRADE_PASSWORD_MD5")
-
-    mode = trade_service.policy.mode.value
-    if not password and not password_md5:
-        logger.info(
-            "No trade password configured (MOOMOO_TRADE_PASSWORD or "
-            f"MOOMOO_TRADE_PASSWORD_MD5 not set). Trading mode: {mode}."
-        )
-        return
-
-    try:
-        trade_service.policy.check_unlock()
-    except TradingPolicyError as e:
-        logger.info(
-            f"A trade password is configured, but not unlocking: {e} "
-            "Trading mode is unchanged."
-        )
-        return
-
-    try:
-        # Must fetch account list before unlock to initialize account context
-        accounts = trade_service.get_accounts()
-        logger.info(f"Found {len(accounts)} trading account(s)")
-
-        if password:
-            trade_service.unlock_trade(password=password)
-            logger.info("Trade unlocked successfully. REAL account access enabled.")
-        else:
-            trade_service.unlock_trade(password_md5=password_md5)
-            logger.info(
-                "Trade unlocked successfully (via MD5). REAL account access enabled."
-            )
-    except RuntimeError as e:
-        logger.warning(
-            f"Failed to unlock trade: {e}. "
-            "REAL account access will not be available. "
-            "Use unlock_trade tool to retry manually."
-        )
-
-
 # The gateway connections belong to the process, not to a session. Built once,
 # under a lock, and handed to every session that follows.
 _services: AppContext | None = None
 _services_lock = threading.Lock()
 
 
-def _build_services() -> AppContext:
+def _build_services(settings: Settings | None = None) -> AppContext:
     """Open this process's connections to OpenD.
 
     Read the note on ``app_lifespan`` before moving anything back inline: this
     runs once per process, not once per session.
+
+    Args:
+        settings: The already-validated configuration. Loaded here when absent,
+            which is the path direct library use and the tests take; ``main()``
+            loads it earlier so a bad value exits before anything listens.
     """
-    # Read OpenD connection settings from environment
-    opend_host = os.environ.get("MOOMOO_OPEND_HOST", "127.0.0.1")
-    opend_port_raw = os.environ.get("MOOMOO_OPEND_PORT", "11111")
-    opend_port = int(opend_port_raw) if opend_port_raw.isdigit() else 11111
-    logger.info(f"Connecting to OpenD at {opend_host}:{opend_port}")
+    resolved = settings if settings is not None else load_settings()
+    logger.info(f"Connecting to OpenD at {resolved.opend_host}:{resolved.opend_port}")
+    logger.info(f"Trading mode: {resolved.policy.mode.value}")
+    if resolved.security_firm:
+        logger.info(f"Using security firm: {resolved.security_firm}")
 
-    # Parsed before anything connects: an unknown mode is a configuration error,
-    # not something to recover from by picking a permissive default.
-    policy = TradingPolicy.from_env()
-    logger.info(f"Trading mode: {policy.mode.value}")
-
-    # Read security firm from env (e.g. FUTUSG for SG, FUTUSECURITIES for HK)
-    security_firm = os.environ.get("MOOMOO_SECURITY_FIRM")
-    if security_firm:
-        logger.info(f"Using security firm: {security_firm}")
-
-    moomoo_service = MoomooService(host=opend_host, port=opend_port)
+    moomoo_service = MoomooService(host=resolved.opend_host, port=resolved.opend_port)
     trade_service = TradeService(
-        host=opend_host,
-        port=opend_port,
-        security_firm=security_firm,
-        policy=policy,
+        host=resolved.opend_host,
+        port=resolved.opend_port,
+        security_firm=resolved.security_firm,
+        policy=resolved.policy,
+        trade_password=resolved.trade_password,
+        trade_password_md5=resolved.trade_password_md5,
+        # Reads the shared quote context through a callable, not the object:
+        # the connection is opened lazily and replaced on reconnect, so holding
+        # the instance would pin whichever one existed at wiring time.
+        instrument_lookup=InstrumentAdapter(lambda: moomoo_service.quote_ctx),
     )
 
     try:
@@ -165,17 +117,15 @@ def _build_services() -> AppContext:
             except Exception as exc:  # noqa: BLE001 - startup must stay available
                 logger.error(
                     f"Failed to initialize the {name} connection to OpenD at "
-                    f"{opend_host}:{opend_port}: {exc}. "
+                    f"{resolved.opend_host}:{resolved.opend_port}: {exc}. "
                     "The server will start; use check_health to diagnose."
                 )
 
-        # READ_ONLY locking is not done here: the trade service asserts the lock
-        # itself on every connection and every SDK reconnect, which also covers
-        # a connection that only arrives after startup has moved on, and a
-        # gateway that restarts later.
-        if policy.mode is TradingMode.REAL and trade_service.trade_ctx is not None:
-            # Auto-unlock trade if password is configured in environment
-            _auto_unlock_trade(trade_service)
+        # Nothing unlocks at startup. The trade service asserts the lock at rest
+        # itself, on every connection and every SDK reconnect, and REAL writes
+        # unlock just in time for one order. A startup unlock would be a second
+        # unlock path that the SDK then replays after every reconnect, leaving
+        # the gateway unlocked for the life of the process.
 
         # Create market data service using the shared quote context
         market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
@@ -308,42 +258,48 @@ def create_streamable_http_app(auth_token: str | None = None):
 
 
 def main():
-    """Entry point for the MCP server."""
-    transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()
-    auth_token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
+    """Entry point for the MCP server.
 
-    valid_transports = ("stdio", "sse", "streamable-http")
-    if transport not in valid_transports:
-        raise ValueError(
-            f"Invalid MCP_TRANSPORT={transport!r}. "
-            f"Valid options: {list(valid_transports)}."
-        )
+    Configuration is loaded and validated first, before a transport is chosen
+    and before anything listens. A bad value therefore exits the process with a
+    message naming the variable, rather than surfacing on whichever tool call
+    first happened to need it.
+    """
+    try:
+        settings = load_settings()
+        check_transport_authentication(settings)
+    except TradingModeConfigError as exc:
+        # Deliberately fatal. The supervisor stops OpenD and the container
+        # restarts, which produces a crash loop whose log line names the
+        # variable — the signal the deploy runbook tells an operator to look
+        # for. Serving with a configuration this server rejected would be the
+        # worse failure: every request would fail, quietly, one at a time.
+        logger.error(f"Refusing to start: {exc}")
+        raise SystemExit(1) from exc
+
+    transport = settings.transport
 
     if transport in ("sse", "streamable-http"):
         host = os.environ.get("FASTMCP_HOST", "127.0.0.1")
         port = int(os.environ.get("FASTMCP_PORT", "8000"))
         endpoint = "/mcp" if transport == "streamable-http" else "/sse"
 
-        if auth_token:
+        if settings.auth_token:
             logger.info(
                 f"Enabling bearer token authentication for {transport} transport."
             )
-            logger.info(
-                f"Serving MCP {transport} endpoint at http://{host}:{port}{endpoint}"
-            )
-            import uvicorn
+        logger.info(
+            f"Serving MCP {transport} endpoint at http://{host}:{port}{endpoint}"
+        )
 
-            if transport == "streamable-http":
-                app = create_streamable_http_app(auth_token=auth_token)
-            else:
-                app = create_sse_app(auth_token=auth_token)
+        import uvicorn
 
-            uvicorn.run(app, host=host, port=port)
+        if transport == "streamable-http":
+            app = create_streamable_http_app(auth_token=settings.auth_token)
         else:
-            logger.info(
-                f"Serving MCP {transport} endpoint without authentication at http://{host}:{port}{endpoint}"
-            )
-            mcp.run(transport=transport)
+            app = create_sse_app(auth_token=settings.auth_token)
+
+        uvicorn.run(app, host=host, port=port)
     else:
         mcp.run()
 
