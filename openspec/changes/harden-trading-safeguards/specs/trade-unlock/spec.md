@@ -156,6 +156,18 @@ made. A failed relock SHALL NOT change the reported outcome of the mutation, whe
 that outcome is acknowledged, outcome unknown or not sent. The Execution Halt
 requirement covers what happens next.
 
+An unlock the gateway reports as unnecessary SHALL count as a successful unlock and
+SHALL allow the dispatch to proceed. The system SHALL NOT assert, as a post-condition
+of unlocking, that the gateway is now in an unlocked state.
+
+#### Scenario: An unlock reported as unnecessary is a success
+
+- **GIVEN** a REAL write with a stored credential
+- **WHEN** the gateway answers the just-in-time unlock by reporting that no unlock is
+  required
+- **THEN** the write SHALL proceed to dispatch
+- **AND** the system SHALL NOT treat the response as a failed unlock
+
 #### Scenario: Order execution triggers ephemeral JIT unlock and relock
 
 - **GIVEN** `MOOMOO_TRADING_MODE` is set to `REAL`
@@ -206,6 +218,15 @@ Its result SHALL report whether the execution halt is still in effect afterwards
 - **WHEN** `lock_trade` is invoked
 - **THEN** its lock request SHALL be issued only after that cancellation's relock
   attempt has completed
+
+#### Scenario: A lock the gateway refuses does not appear to succeed
+
+- **GIVEN** the gateway refuses a lock request, including when it cannot resolve the
+  account its lock path requires
+- **WHEN** `lock_trade` is invoked
+- **THEN** the call SHALL report the failure and the lock error
+- **AND** any execution halt in effect SHALL remain in effect
+- **AND** the result SHALL NOT report the halt as cleared
 
 ## ADDED Requirements
 

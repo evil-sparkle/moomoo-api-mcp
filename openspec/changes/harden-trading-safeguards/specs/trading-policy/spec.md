@@ -47,18 +47,35 @@ When a notional cap is configured, the order's notional value SHALL be:
 reference price × quantity × contract multiplier
 ```
 
-It SHALL be expressed in the currency of the instrument's market.
+It SHALL be expressed in the instrument's currency. The system SHALL establish that
+currency only for markets it has verified quote in a single known currency, and SHALL
+NOT infer an instrument's currency from its market prefix outside that verified set.
 
-- **Contract multiplier.** `1` for stocks and ETFs, and the broker-reported contract
-  size for options.
-- **Market reference (`M`).** The largest finite, positive value among the
-  instrument snapshot's `last_price`, `bid_price` and `ask_price`, used as returned.
-  If none is finite and positive, `M` is unavailable. This version applies no
-  staleness threshold.
+- **Instrument facts.** The system SHALL obtain, for each code the order names:
+  the security classification, the monetary multiplier, and the instrument's quote
+  prices. The classification SHALL come from the broker's instrument reference data,
+  requested with an explicit list of the codes being valued. Quote prices SHALL come
+  from the instrument snapshot. Both reads SHALL succeed for the instrument to be
+  assessable.
+- **Quote normalization.** Before assessment, each quote field SHALL be reduced to a
+  number or to nothing. A value that is absent, non-numeric, non-finite, or not
+  greater than zero SHALL be treated as absent. The assessment SHALL NOT perform
+  arithmetic or a finiteness test on a non-numeric value.
+- **Monetary multiplier.** The multiplier SHALL convert a quoted price into money for
+  one unit of quantity. It SHALL be `1` for stocks and ETFs. For options it SHALL be
+  the broker-reported contract field whose monetary semantics have been verified, and
+  until that verification an option SHALL NOT be assessable. Any other classification
+  SHALL be refused.
+- **Market reference (`M`).** The largest of the normalized quote prices. When no
+  normalized price remains, `M` is unavailable. This version applies no staleness
+  threshold.
 - **Order classes.**
   - *Fixed-limit* order types are those listed under Validate Order Values.
   - *No-fixed-limit* order types are `MARKET`, `AUCTION`, `STOP`,
     `MARKET_IF_TOUCHED`, `TRAILING_STOP` and `TRAILING_STOP_LIMIT`.
+  - Together these cover every order type this system submits. Algorithmic variants
+    the SDK defines for query purposes only are not submission types and are not
+    classified.
   - Any other order type SHALL be refused while a notional cap is configured.
 
 For a single-leg order, the reference price SHALL be determined as follows:
@@ -82,8 +99,10 @@ For a combo order:
 While a notional cap is configured, the order SHALL be refused if any of these
 holds:
 
-- the instrument's snapshot, security type or contract size cannot be obtained;
-- the security type is not a stock, ETF or option, or the market is not supported;
+- any required valuation fact cannot be established: the quote snapshot, the
+  security classification, or the monetary multiplier;
+- the classification is not a stock, ETF or option, or the instrument's currency
+  cannot be established from the verified market set;
 - the rule above needs `M` and `M` is unavailable;
 - the instrument's currency has no configured cap;
 - a combo uses a no-fixed-limit order type, mixes contract sizes, or contains a
@@ -149,14 +168,46 @@ computed.
 
 - **GIVEN** a notional cap is configured
 - **WHEN** any of these holds:
-  - the instrument's snapshot cannot be retrieved;
-  - its security type is not supported;
+  - the instrument's quote snapshot cannot be retrieved;
+  - its security classification cannot be retrieved;
+  - its classification is not supported;
+  - its monetary multiplier cannot be established;
+  - its currency cannot be established from the verified market set;
   - its currency has no configured cap;
   - the order needs `M` and `M` is unavailable;
   - the order type is in neither class
 - **THEN** the service SHALL reject the order with an error stating why no notional
   could be computed
 - **AND** no order-mutating gateway request SHALL be made
+- **AND** the refusal SHALL be reported as not sent
+
+#### Scenario: Non-numeric quote fields are normalized before assessment
+
+- **GIVEN** a notional cap is configured
+- **AND** the instrument's snapshot returns a non-numeric placeholder for `bid_price`
+  and `ask_price`
+- **WHEN** an order requiring `M` is assessed
+- **THEN** those fields SHALL be treated as absent rather than compared or computed
+  with
+- **AND** the assessment SHALL NOT raise a type error
+- **AND** the order SHALL be refused as not sent, naming the missing market reference
+
+#### Scenario: Classification is requested for the codes being valued
+
+- **GIVEN** a notional cap is configured
+- **WHEN** an order's instrument is assessed
+- **THEN** the security classification SHALL be requested with an explicit list of the
+  codes being valued
+- **AND** an instrument whose classification is not returned SHALL be refused as not
+  sent
+
+#### Scenario: An instrument outside the verified currency set is refused
+
+- **GIVEN** a notional cap is configured
+- **WHEN** an order names an instrument on a market that has not been verified to
+  quote in a single known currency
+- **THEN** the service SHALL refuse the order as not sent
+- **AND** SHALL NOT value it by assuming a currency from the market prefix
 
 #### Scenario: Combo premium limit
 

@@ -5,21 +5,54 @@
 These tasks are read-only or SIMULATE-only. None places a REAL order. Record each
 finding in `design.md` under the decision it affects.
 
-- [ ] 1.1 Call `get_market_snapshot` for a US stock, a US ETF and a US equity option,
-  and record their values. The fields to check are:
-  - `sec_type`, `last_price`, `bid_price`, `ask_price` and `lot_size`;
-  - `option_contract_size` and `option_contract_multiplier`;
-  - any currency field.
+- [ ] 1.1 Establish the instrument facts the assessment needs, for a US stock, a US
+  ETF and a US equity option.
+  - From `get_market_snapshot`: `last_price`, `bid_price`, `ask_price`, `lot_size`,
+    `option_contract_size` and `option_contract_multiplier`. Also record all three
+    price fields for an option with no trades today, to capture what the gateway
+    returns when a quote is absent.
+  - From `get_stock_basicinfo`, called with an explicit `code_list` of those codes:
+    `stock_type`. Record whether every requested code is returned.
+  - **Monetary multiplier semantics.** Determine which option field, multiplied by
+    the quoted price, yields the cash value of one contract. Verify it against an
+    independent figure — an option's own `option_contract_nominal_value`, a position's
+    market value, or a known premium — not by observing that a field equals 100. A
+    field equalling 100 for standard US contracts does not establish what it means.
+    Record the finding and fix Decision 3's multiplier accordingly.
+  - **Currency.** Confirm that every instrument valued on `US` quotes in USD, so the
+    verified-market table in Decision 2 can list it as confirmed rather than
+    provisional. Do not extend the table to a market that has not been checked this
+    way.
 
-  Also record the bid, ask and last values for an option with no trades today.
+  Verify by recording each field and its source call, and by stating which of the two
+  option fields carries the monetary multiplier and on what evidence.
+- [ ] 1.2 Measure how long a terminal paper order stays queryable, using a `DAY`
+  order.
 
-  Verify by confirming which option field equals 100, and that the three price field
-  names match the `M` definition. Update Decision 3 if either differs, and
-  Decision 2 if a currency field exists.
-- [ ] 1.2 In SIMULATE, place a GTC limit order far from the market. On a later
-  trading day, call `order_list_query(order_id=…)` and record whether the order is
-  returned. If no multi-day window is available, record the result as unverified.
-  Verify by noting the outcome under the Decision 5 risk.
+  Official Moomoo paper-trading documentation states that paper orders are valid for
+  the day only, and that deal-related operations are not available in paper trading.
+  The earlier form of this task assumed a multi-day GTC paper order, which that
+  documentation rules out; it is replaced rather than retried.
+
+  In SIMULATE, place a `DAY` limit order far from the market, cancel it, and then
+  record whether `order_list_query(order_id=…)` and the history-order query still
+  return it: immediately, later the same session, and after the trading day closes.
+
+  Verify by recording both retention windows. This is what Decision 5's risk actually
+  needs — how late a modification can still find its target order — and it is
+  answerable on a day-only provider.
+
+- [ ] 1.2a *(optional, separately authorized)* If the day-only constraint is to be
+  tested rather than assumed, attempt one SIMULATE order with a non-`DAY` time in
+  force and record the outcome.
+
+  A `RET_OK` on submission SHALL NOT be recorded as acceptance. Query the resulting
+  order and record its **stored `time_in_force`**: a gateway that accepts the request
+  and silently stores `DAY` has confirmed the documented constraint, not contradicted
+  it. Only a stored non-`DAY` value contradicts the documentation.
+
+  This places an order and is not part of the required set. It requires its own
+  authorization, and nothing in this change depends on its outcome.
 - [ ] 1.3 With the operator's confirmation, lock the live gateway (`lock_trade`),
   then call these REAL reads:
   - `get_accounts`, `get_assets`, `get_positions`, `get_orders` and `get_deals`;
@@ -28,6 +61,11 @@ finding in `design.md` under the decision it affects.
   Record any read that fails because the gateway is locked. Verify by listing the
   per-read outcome. If a read fails, add a task in group 5 to wrap it in the JIT
   unlock before removing startup unlock.
+
+  Also record whether the `lock_trade` request itself succeeds on this gateway. The
+  SDK's lock path resolves a REAL account before issuing the lock, so a gateway that
+  cannot resolve one produces a failing lock — and `lock_trade` is the only route out
+  of `HALTED`. Record the outcome so the halt has a verified recovery path.
 
 ## 2. Settings and policy configuration
 
@@ -85,6 +123,10 @@ finding in `design.md` under the decision it affects.
     only;
   - fail-closed refusals, with messages naming the value, currency and reason.
 
+  Take instrument facts as already-normalized numbers: `assess_order` performs no
+  arithmetic or finiteness test on a value the adapter has not reduced to a number or
+  to `None`, and refuses when a required fact is `None`.
+
   Remove `check_order_limits`. Verify with tests covering every scenario in
   `specs/trading-policy` and `specs/combo-order-placement`, including 5 × 3.00 × 100
   = 1,500 USD, and these cases:
@@ -100,8 +142,10 @@ finding in `design.md` under the decision it affects.
 
 - [ ] 4.1 Add `services/order_errors.py` with `OrderNotSentError`,
   `OrderOutcomeUnknownError` and `OrderReceiptUnreadableError`. Add a
-  `_not_sent(operation)` wrapper that converts pre-dispatch `TradingPolicyError`,
-  `ValueError` and not-connected errors, keeping `__cause__`. Verify with unit tests
+  `_not_sent(operation)` wrapper that converts every pre-dispatch failure, keeping
+  `__cause__`: `TradingPolicyError`, `ValueError`, `TypeError`, not-connected errors,
+  and any failure raised by the instrument adapter. Nothing raised before the SDK
+  write may escape the boundary unconverted. Verify with unit tests
   on the message text:
   - not sent: "no order was sent";
   - unknown: "may have been sent", "outcome is unknown", "check get_orders before
@@ -118,10 +162,23 @@ finding in `design.md` under the decision it affects.
 
   Verify with tests for a single eligible account, two eligible accounts, none, an
   unlisted explicit account, and SIMULATE being unaffected by the allowlist.
-- [ ] 4.3 Accept an `instrument_lookup` callable in the `TradeService` constructor,
-  and build `OrderFacts` from snapshots only when a notional cap is configured.
-  Verify that tests assert the lookup is not called when no cap is set, and that a
-  lookup failure refuses the order as not sent.
+- [ ] 4.3 Add the instrument adapter and accept it as `instrument_lookup` in the
+  `TradeService` constructor, building `OrderFacts` only when a notional cap is
+  configured. The adapter:
+  - calls `get_market_snapshot` for prices and contract fields, and
+    `get_stock_basicinfo` with an explicit `code_list` for `stock_type`, using the
+    codes the order names;
+  - normalizes every quote field to a number or `None`, treating absent, non-numeric
+    (including the `'N/A'` sentinel), non-finite and non-positive values as absent;
+  - returns `InstrumentFacts` with the classification, the monetary multiplier and
+    the normalized prices;
+  - refuses when either call fails, when a requested code is not returned, or when
+    the classification, multiplier or currency cannot be established.
+
+  Verify that tests assert: neither call is made when no cap is set; a snapshot
+  carrying `'N/A'` for bid and ask yields `None` for those fields and no type error;
+  a code missing from the classification response refuses the order; and every
+  adapter failure surfaces as not sent, never as an unknown outcome.
 - [ ] 4.4 Rework `place_order`, `place_combo_order` and `preview_combo_order` onto
   the pre-dispatch sequence:
   - make `trd_env` keyword-only and required on the write methods;

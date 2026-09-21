@@ -49,6 +49,10 @@ journal and the approval workflow on top of it.
 - **Explicit account routing.**
   - **BREAKING**: `place_order`, `place_combo_order`, `modify_order` and
     `cancel_order` require `trd_env`; it no longer has a default.
+  - **BREAKING**: `modify_order` and `cancel_order` resolve the account before
+    dispatch. They currently pass `acc_id="0"` straight to the SDK and let it pick
+    its own default; from now on `"0"` resolves only when exactly one account is
+    eligible, and an ambiguous or unlisted account is refused as not sent.
   - **BREAKING**: REAL mode requires `MOOMOO_REAL_ACC_IDS`. REAL writes may only
     target those accounts. `acc_id="0"` resolves only when exactly one allowed
     account fits; otherwise the request is refused.
@@ -142,8 +146,12 @@ None.
   - `tools/trading.py`: required `trd_env` and updated docstrings.
   - `tools/account.py`: `unlock_trade` refusal and docstring.
   - `services/base_service.py`: health fields.
-  - `TradeService` needs read access to the quote context for market snapshots, so
-    it can resolve security type, contract size and last price.
+  - `TradeService` needs read access to the quote context through an instrument
+    adapter. The adapter combines the instrument snapshot (prices, contract fields)
+    with the broker's instrument reference data requested by explicit code list (the
+    security classification), normalizes non-numeric quote fields, and refuses before
+    dispatch when any required valuation fact is missing. The snapshot alone does not
+    carry a security classification or a currency.
 - **Tests**:
   - `tests/test_services/test_trading_policy.py`
   - `tests/test_services/test_trade_service.py`

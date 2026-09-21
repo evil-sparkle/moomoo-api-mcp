@@ -36,10 +36,17 @@ current code and the SDK. They were checked against `main` at `f0ae2ef` and agai
 - **Configuration errors surface late.** `TradingPolicy.from_env()` runs in
   `_build_services()`, lazily on the first request. A configuration error therefore
   surfaces on the first tool call, not at process start.
-- **Market snapshots carry what the notional check needs.**
-  `get_market_snapshot` needs no subscription. It returns `sec_type`
-  (`STOCK`, `ETF`, `DRVT`, `WARRANT`, `FUTURE`, …), `last_price`, `lot_size`, and,
-  for options, `option_contract_size` and `option_contract_multiplier`.
+- **The notional check needs two reads, not one.** Verified against `moomoo-api`
+  10.10.7008 in the dev venv.
+  - `get_market_snapshot` needs no subscription and returns `last_price`,
+    `bid_price`, `ask_price`, `lot_size` and, for options,
+    `option_contract_size` and `option_contract_multiplier`.
+  - It does **not** return a security classification. `MarketSnapshotQuery` carries
+    no `sec_type`, `stock_type` or `security_type` field. Classification comes from
+    `get_stock_basicinfo`, which returns `stock_type`.
+  - It does **not** return a currency field.
+  - `bid_price` and `ask_price` are the string `'N/A'` when the gateway omits them,
+    so quote fields are not reliably numeric.
 - **`order_list_query` can target one order.** It accepts `order_id`.
 
 ## Goals / Non-Goals
@@ -115,14 +122,28 @@ itself. `TradeService` receives the credential in its constructor, replacing the
   The value is never parsed as a limit.
 - **Parsing.** Parse with `split(",")`, then `partition(":")`, with explicit
   checks: a three-letter alphabetic code (`isalpha()`) and no duplicates. No regex.
-- **Currency.** Currency comes from the market prefix, through a fixed table:
-  - `US` → `USD`
-  - `HK` → `HKD`
-  - `SH`, `SZ` → `CNY`
-  - `SG` → `SGD`
-  - `JP` → `JPY`
+- **Currency.** The snapshot carries no currency field (verified against
+  `moomoo-api` 10.10.7008), so currency has to be established another way.
 
-  Any other prefix is unsupported while a cap is configured.
+  A market prefix is **not** an instrument's currency, and this change does not treat
+  it as one. A prefix names a venue; instruments on one venue may quote in more than
+  one currency, HK dual-counter (HKD/RMB) being the standing example. The prefix is
+  therefore used only as a **verified per-market subset**: a market appears in the
+  table only once it has been confirmed that every instrument this server will value
+  on that venue quotes in the stated currency.
+
+  | Market prefix | Currency | Status |
+  | --- | --- | --- |
+  | `US` | `USD` | provisional — task 1.1 confirms |
+
+  No other prefix is supported while a notional cap is configured, and an instrument
+  whose currency cannot be established this way is **refused**, not valued at a
+  guessed currency. Adding a market to the table is a deliberate act backed by
+  verification, not an inference from its prefix.
+
+  This is deliberately narrower than the markets the server can trade. A cap that
+  cannot be expressed in the instrument's own currency is not applied loosely; the
+  order is refused.
 
 - *Alternative:* keep one unit-less cap and ignore currency. It was rejected because
   a 25,000 cap means roughly 7.8× different exposure in USD and in HKD.
@@ -152,18 +173,56 @@ assess_order(operation, OrderFacts) -> None   # raises TradingPolicyError
 - the price and trigger price;
 - the legs, each with a ratio and its `InstrumentFacts`.
 
-`InstrumentFacts` holds the code, currency, `sec_type`, contract size, and the
-snapshot's `last_price`, `bid_price` and `ask_price`.
+`InstrumentFacts` holds the code, currency, security classification, monetary
+multiplier, and normalized `last_price`, `bid_price` and `ask_price`.
 
 `TradeService` builds `OrderFacts`. It receives `instrument_lookup`, a callable
-`codes -> list[snapshot dict]`, wired in `server.py` to the shared quote context's
-`get_market_snapshot`. The lookup is called only when a notional cap is configured.
+`codes -> list[InstrumentFacts]`, wired in `server.py` to an **instrument adapter**
+over the shared quote context. The lookup is called only when a notional cap is
+configured.
+
+The adapter performs two reads per assessment and combines them:
+
+1. `get_market_snapshot(code_list)` — prices, `lot_size`, and the option contract
+   fields.
+2. `get_stock_basicinfo(market, stock_type, code_list=...)` — the security
+   classification (`stock_type`). The call passes an **explicit `code_list`** so it
+   returns the requested instruments rather than enumerating a market.
+
+Both calls are made with the codes the order names, and both must succeed for the
+instrument to be assessable.
+
+**Quote normalization precedes assessment.** The adapter converts each quote field to
+a number or to `None` before the policy sees it. A value that is absent, non-numeric
+(including the `'N/A'` sentinel), non-finite, or not greater than zero becomes `None`.
+The policy therefore never performs arithmetic or a finiteness test on a string, and
+`assess_order` stays pure over numbers. Normalization is the adapter's job precisely
+so the policy has no gateway-shaped edge cases in it.
+
+**The adapter sits inside the pre-dispatch boundary.** Every adapter failure — either
+call failing, a classification that cannot be obtained, a multiplier that cannot be
+established — is a refusal before the SDK write, converted by `_not_sent(operation)`
+and reported as *not sent*. No adapter path can raise past that boundary, so a
+missing valuation fact can never surface as an unknown outcome.
 
 The rules are listed below. They are also specified in `trading-policy`.
 
-- **Multiplier.** `STOCK` and `ETF` use a multiplier of 1. `DRVT` uses
-  `option_contract_size`, which must be finite and greater than 0. Every other
-  `sec_type` is refused.
+- **Monetary multiplier.** The multiplier converts a quoted price into money for one
+  unit of quantity: `money = reference price × multiplier`. Equities quote in money
+  per share, so `STOCK` and `ETF` use `1`. Options quote per share of the underlying
+  while trading in contracts, so `DRVT` uses the broker-reported contract field.
+  - The classification comes from `get_stock_basicinfo`'s `stock_type`, not from the
+    snapshot.
+  - **Which option field carries the monetary multiplier is unverified.** The snapshot
+    offers both `option_contract_size` and `option_contract_multiplier`. Task 1.1
+    establishes their *monetary semantics* — which one, multiplied by the quoted
+    price, yields the cash value of one contract — not merely which one equals 100.
+    Equality with 100 is a coincidence of common US contracts, not a definition, and
+    choosing on that basis would silently misprice any instrument with a non-standard
+    multiplier.
+  - Until task 1.1 resolves it, an option is not assessable and is refused while a
+    cap is configured.
+  - Any classification other than `STOCK`, `ETF` or `DRVT` is refused.
 - **Order classes.** Two frozensets live in `services/validation.py` and are shared
   with Decision 4:
   - `FIXED_LIMIT_TYPES`: `NORMAL`, `ABSOLUTE_LIMIT`, `SPECIAL_LIMIT`,
@@ -171,11 +230,18 @@ The rules are listed below. They are also specified in `trading-policy`.
   - `NO_FIXED_LIMIT_TYPES`: `MARKET`, `AUCTION`, `STOP`, `MARKET_IF_TOUCHED`,
     `TRAILING_STOP` and `TRAILING_STOP_LIMIT`.
 
-  While a cap is configured, a type in neither set is refused. A new SDK order type
-  is therefore refused until someone classifies it.
-- **Market reference `M`.** The largest finite, positive value among `last_price`,
-  `bid_price` and `ask_price`, as returned. It is `None` when there is none. No
-  staleness threshold applies.
+  These cover every order type this server submits. The SDK's `OrderType` also
+  defines `TWAP`, `TWAP_LIMIT`, `VWAP` and `VWAP_LIMIT`; official Moomoo
+  documentation marks those algorithmic variants as **query-only**, so they are not
+  submission types, are deliberately unclassified, and this change neither adds
+  algorithmic submission support nor removes a submission capability.
+
+  While a cap is configured, a type in neither set is refused. A future submission
+  order type is therefore refused until someone classifies it.
+- **Market reference `M`.** The largest of the normalized `last_price`, `bid_price`
+  and `ask_price`. Normalization (above) has already reduced absent, non-numeric,
+  non-finite and non-positive values to `None`, so `M` is the maximum of whatever
+  numbers remain and is `None` when none remain. No staleness threshold applies.
 - **Reference price for a single-leg order.**
 
   | Side | Class | Reference | `M` required |
@@ -202,11 +268,14 @@ The rules are listed below. They are also specified in `trading-policy`.
   data.
 
 - *Alternative:* inject `MarketDataService` into `TradeService`. It was rejected
-  because it couples two services for one read. A callable keeps tests trivial.
-- *Alternative:* fetch the snapshot on every order, for validation. It was rejected
-  because it adds latency and a quote dependency when no cap is configured.
-- *Alternative:* use `option_contract_multiplier`. It was deferred, because task 1.1
-  confirms which field equals 100 for US equity options. The choice is one constant.
+  because it couples two services for what is a narrow, order-shaped read. The
+  adapter keeps tests trivial and keeps the policy pure.
+- *Alternative:* fetch instrument data on every order, for validation. It was
+  rejected because it adds latency and a quote dependency when no cap is configured.
+- *Alternative:* infer the classification from snapshot fields that do exist, such as
+  `option_valid` or the presence of `option_contract_size`. It was rejected because
+  `stock_type` is an authoritative field and inference is not; a guardrail should not
+  price an instrument by guessing what kind of instrument it is.
 
 ### 4. Numeric validation of order values
 
@@ -404,6 +473,15 @@ the opt-out. `stdio` is unaffected.
 
 ## Risks / Trade-offs
 
+- **[Risk]** `lock_trade` cannot succeed without a resolvable REAL account. The SDK's
+  `unlock_trade` calls `_check_acc_id(TrdEnv.REAL, 0)` on both the unlock and the lock
+  path, so a deployment whose gateway exposes no REAL account gets a failing lock.
+  → **Mitigation:** in REAL mode a REAL account exists by definition, so this is
+  bounded. It matters because `lock_trade` is the only route out of `HALTED`
+  (Decision 8): an operator facing a halt on a gateway that cannot resolve a REAL
+  account has no recovery. Task 1.3 records the lock outcome alongside the read
+  checks, and the `trade-unlock` spec states that a failed `lock_trade` leaves the
+  halt in place rather than appearing to clear it.
 - **[Risk]** Some REAL reads (`accinfo_query`, `acctradinginfo_query`,
   `comboorder_tradinginfo_query`) may require an unlocked gateway once startup
   unlock is gone.
@@ -420,15 +498,18 @@ the opt-out. `stdio` is unaffected.
   trigger the caller supplied. A staleness threshold can be added later without
   changing the table. The limitation is stated in the spec.
 - **[Trade-off]** A SELL fixed-limit order, or an order without a fixed limit, on an
-  instrument with no positive `last_price`, `bid_price` or `ask_price` is refused
-  while a cap is configured. An illiquid option with no quotes is an example.
+  instrument whose quote fields all normalize to `None` is refused while a cap is
+  configured. An illiquid option quoting `'N/A'` for bid and ask is the common case.
   → **Mitigation:** this is intended fail-closed behaviour. The error names the
   missing market reference, and the operator can place the order with no cap
   configured.
-- **[Risk]** The market-prefix currency table misprices HK dual-counter (RMB/USD)
-  securities.
-  → **Mitigation:** documented. The snapshot currency field is preferred if task 1.1
-  confirms one exists.
+- **[Trade-off]** The verified-market currency table covers fewer markets than the
+  server can trade, so a capped deployment refuses orders on unlisted markets.
+  → **Accepted.** The snapshot carries no currency field, and a market prefix is not
+  an instrument's currency — HK dual-counter instruments quote in HKD or RMB on one
+  venue. Valuing by prefix outside a verified subset would misprice exactly those
+  instruments while appearing to work. Refusing is the fail-closed direction, and a
+  market is added to the table by verification, not by inference.
 - **[Trade-off]** A combo cap on premium is not a cap on maximum loss.
   → **Mitigation:** it is named "package premium" in the errors, tool docs and spec.
   Max-loss is a later change.
@@ -465,7 +546,15 @@ the opt-out. `stdio` is unaffected.
    ignores `MOOMOO_REAL_ACC_IDS` and `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`, and
    enforces its unit-less `MOOMOO_MAX_ORDER_NOTIONAL` as before. The old image also
    restores startup auto-unlock. That is expected behaviour for that version.
-8. Update the ZeroClaw agent prompt or skills, if they call write tools without
-   `trd_env`, and teach it that `lock_trade` is how an operator clears a halt.
-9. After Stage 1 has been stable for a while, remove `MOOMOO_MAX_ORDER_NOTIONAL`
+8. Update the ZeroClaw agent prompt or skills for two changes: write tools now
+   require `trd_env`, and `modify_order`/`cancel_order` now resolve the account
+   before dispatch, so a call that relied on the gateway's own default for
+   `acc_id="0"` must name an account when more than one is eligible. Teach it that
+   `lock_trade` is how an operator clears a halt, and that a refused lock leaves the
+   halt in place.
+9. If a notional cap is configured, confirm the traded markets appear in the verified
+   currency table and that any option instruments have a verified monetary
+   multiplier. Instruments outside those sets are refused while a cap is set; this is
+   intended, and is the migration's most likely surprise.
+10. After Stage 1 has been stable for a while, remove `MOOMOO_MAX_ORDER_NOTIONAL`
    from `.env`, which ends rollback compatibility for that setting.

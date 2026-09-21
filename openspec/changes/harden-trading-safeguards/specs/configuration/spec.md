@@ -24,7 +24,9 @@ The system SHALL support the following security configuration environment variab
 - `MOOMOO_REAL_ACC_IDS`: comma-separated REAL account identifiers that REAL writes
   may target. Required when `MOOMOO_TRADING_MODE` is `REAL`.
 - `MOOMOO_SECURITY_FIRM`: optional securities-firm identifier. When set, it SHALL
-  name a firm the SDK recognizes.
+  name an actual securities firm the SDK defines. The SDK's firm enumeration also
+  carries a not-applicable placeholder; that placeholder SHALL NOT be accepted as a
+  configured firm.
 
 An invalid value for any of these SHALL fail startup with a configuration error that
 names the variable. The server SHALL NOT fall back to a default in its place.
@@ -77,3 +79,9 @@ names the variable. The server SHALL NOT fall back to a default in its place.
 
 - **WHEN** `MOOMOO_SECURITY_FIRM` is set to a value the SDK does not define
 - **THEN** startup SHALL fail with a configuration error listing the valid values
+
+#### Scenario: The not-applicable placeholder is not a firm
+
+- **WHEN** `MOOMOO_SECURITY_FIRM` is set to the SDK's not-applicable placeholder
+- **THEN** startup SHALL fail with a configuration error
+- **AND** the listed valid values SHALL NOT include that placeholder
