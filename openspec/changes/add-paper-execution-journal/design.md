@@ -571,10 +571,25 @@ resolved through an explicit, operator-only mechanism:
   that transaction commits before the gate is re-evaluated.** A gate that could open
   before its justification is durable would lose exactly the record that explains why
   it opened.
-- **Precise Gate-Release Conditions:**
-  The recovery review gate is released if and only if EVERY operation in the journal
-  is in a terminal state (`ACKNOWLEDGED`, `REFUSED`, `RECONCILED`, or
-  `TERMINAL_ACCOUNTED`).
+- **Precise Gate-Release Conditions.** The effective dispatch condition is:
+
+  ```
+  startup recovery review is complete
+  AND no blocking reason remains active
+  ```
+
+  It is **not** "all operation rows are terminal". Those differ, and the difference
+  matters: reconciliation can legitimately move a recovered dispatch to `RECONCILED`,
+  which is terminal, while its `RECOVERED_DISPATCH` requirement is still outstanding.
+  A gate keyed on row states alone would open there, and "reconciled" would quietly
+  come to mean "operator review completed".
+
+  So an outstanding operator-review requirement is **durable and independently
+  discoverable**, recorded separately from the operation's lifecycle state and
+  surviving that state reaching a terminal value. Startup enumerates outstanding review
+  requirements as well as non-terminal operations; a requirement attached to a terminal
+  row is not overlooked. Only a valid, durably committed operator acknowledgement
+  clears it.
 
 #### Indefinite blocking is an accepted version 1 limitation
 

@@ -813,7 +813,15 @@ resolved only via a named, operator-only recovery acknowledgement mechanism:
   evidence.
 - The acknowledgement and its durable `recovery_audit` record SHALL commit in the same
   transaction, and that transaction SHALL commit before the gate is re-evaluated.
-- The gate SHALL be released if and only if every operation is in a terminal state.
+- **Gate release SHALL depend on two conditions, not one:** startup recovery review
+  SHALL be complete, **and** no blocking reason SHALL remain active. Release SHALL NOT
+  be determined solely by every operation row having reached a terminal state.
+- **An outstanding operator-review requirement SHALL be durable and independently
+  discoverable,** and SHALL survive the operation's lifecycle state reaching a terminal
+  value. Reconciliation moving an operation to `RECONCILED` SHALL NOT satisfy an
+  outstanding review requirement attached to it. Startup SHALL enumerate outstanding
+  review requirements as well as non-terminal operations, so a requirement attached to
+  a terminal row is not overlooked.
 - **An operation that can be accounted for by neither reconciliation nor an authorized
   evidence-backed disposition SHALL keep automated execution blocked indefinitely.**
   The system SHALL NOT offer a risk-acceptance override, and SHALL NOT resume by
@@ -966,6 +974,27 @@ resolved only via a named, operator-only recovery acknowledgement mechanism:
 - **THEN** its findings SHALL be recorded as evidence
 - **AND** automated execution SHALL still wait for the bound operator acknowledgement
 - **AND** the review requirement SHALL NOT be cleared by that reconciliation
+
+#### Scenario: A reconciled operation with an outstanding review requirement still blocks
+
+- **GIVEN** a dispatch marker was recovered at startup and reconciliation moved that
+  operation to `RECONCILED`
+- **AND** no operator acknowledgement has been recorded for it
+- **WHEN** a paper mutation is requested
+- **THEN** execution SHALL remain blocked
+- **AND** the outstanding review requirement SHALL remain discoverable although the
+  operation's lifecycle state is terminal
+
+#### Scenario: A further restart does not discard an outstanding review requirement
+
+- **GIVEN** a recovered dispatch marker was reconciled, its evidence committed, and no
+  operator acknowledgement recorded
+- **WHEN** the process restarts again
+- **THEN** startup SHALL find the outstanding review requirement even though no
+  operation row is non-terminal
+- **AND** execution SHALL remain blocked
+- **AND** only a valid, durably committed operator acknowledgement SHALL release that
+  requirement, subject to any other blocking reason still active
 
 #### Scenario: An operation that cannot be accounted for blocks execution indefinitely
 

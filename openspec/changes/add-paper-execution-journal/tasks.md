@@ -103,6 +103,11 @@ under the decision it affects.
 - [ ] 3.8 Implement the audit log table `recovery_audit` for recording operator
   recovery acknowledgements and state transitions. Verify with tests asserting durable
   audit rows for operator recovery actions. (`U17`)
+- [ ] 3.9 Store outstanding operator-review requirements durably and **independently of
+  the operation's lifecycle state**, so a requirement survives that state reaching a
+  terminal value and is discoverable at startup on its own. Verify with a test that a
+  requirement attached to a `RECONCILED` operation is still found by a startup scan
+  that no longer sees any non-terminal operation row. (`U13`, `U17`)
 
 ## 4. Execution identity
 
@@ -218,10 +223,28 @@ under the decision it affects.
 - [ ] 6.10 Require an authorized operator acknowledgement for **every dispatch marker
   recovered at startup with no durable outcome**, however the process ended.
   Reconciliation runs and records its findings as evidence but does not clear the
-  requirement. Verify with the acceptance case: force an acknowledged operation's
-  outcome write to fail, terminate the process, restart, reconcile the operation
-  successfully — automated execution must still wait for the bound operator
-  acknowledgement. (`U07`, `U19`)
+  requirement.
+
+  Record the outstanding review requirement **durably and independently of the
+  operation's lifecycle state**, so it survives that state reaching a terminal value.
+  Startup SHALL enumerate outstanding review requirements as well as non-terminal
+  operation rows. The effective dispatch condition is `startup recovery review is
+  complete AND no blocking reason remains active`, never merely "all operation rows are
+  terminal" — otherwise `RECONCILED` silently becomes "operator review completed".
+
+  Verify with this sequence, across **two** restarts:
+  1. the broker acknowledges the mutation;
+  2. the outcome write fails;
+  3. restart — `RECOVERED_DISPATCH` requires operator acknowledgement;
+  4. reconciliation succeeds and its evidence is committed (the operation may now be
+     `RECONCILED`, which is terminal);
+  5. restart again, before any operator acknowledgement;
+  6. execution must still be blocked, and startup must find the outstanding
+     requirement even though no operation row is non-terminal;
+  7. only a valid, durably committed operator acknowledgement releases that
+     requirement, subject to any other blocking reason still active.
+
+  (`U07`, `U19`)
 - [ ] 6.11 Accept indefinite blocking: an operation accountable by neither
   reconciliation nor an authorized evidence-backed disposition keeps automated
   execution refused with no time limit and no override. Verify that later mutation
@@ -321,8 +344,9 @@ under the decision it affects.
 - [ ] 10.2 Run container tests for missing mount, single-process locking, consistent
   backup, and restoring older storage, confirming that restore requires recovery
   review. (`C01`–`C04`)
-- [ ] 10.3 Verify that all 122 spec scenarios map 1:1 to planned tests in the
-  traceability table.
+- [ ] 10.3 Verify that every scenario in this change's delta specs maps 1:1 to a
+  planned test in the traceability table, with no unmapped scenarios and no orphan
+  rows. Derive the count from the specs rather than quoting a fixed number.
 
 ## 11. Manual verification — requires separate authorization
 
@@ -339,7 +363,7 @@ alone.
 
 ## Scenario-to-test traceability
 
-Every scenario in this change's delta specs maps to a planned test. 144 scenarios across 16 requirements.
+Every scenario in this change's delta specs maps to a planned test. 146 scenarios across 16 requirements.
 
 ### `execution-journal`
 
@@ -435,6 +459,8 @@ Every scenario in this change's delta specs maps to a planned test. 144 scenario
 |  | An empty post-close history query alone does not account for an operation | `U20` |
 |  | A recovered dispatch marker requires operator acknowledgement | `U07`, `U19` |
 |  | Reconciliation after a lost outcome write does not resume execution | `U07`, `U19` |
+|  | A reconciled operation with an outstanding review requirement still blocks | `U13`, `U19` |
+|  | A further restart does not discard an outstanding review requirement | `U07`, `U13` |
 |  | An operation that cannot be accounted for blocks execution indefinitely | `U13` |
 |  | A new journal does not account for a prior unresolved operation | `U13`, `C04` |
 
