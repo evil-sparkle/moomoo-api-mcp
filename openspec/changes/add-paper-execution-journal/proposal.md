@@ -157,10 +157,30 @@ DAY-only provider can answer.
     Accounting for a terminal target therefore records its final status, filled
     quantity, remaining executable quantity and resulting position. It does not require
     the account to be flat, and it never claims the uncertain mutation succeeded.
-  - **Absence requires positive proof.** An order's non-appearance in a query is not
-    evidence that it does not exist — reconciliation already says so, and the recovery
-    path is not a way around it. An empty post-close history query alone leaves the
-    operation unresolved.
+  - **Absence requires positive proof, and version 1 offers no absence disposition.**
+    An order's non-appearance in a query is not evidence that it does not exist —
+    reconciliation already says so, and the recovery path is not a way around it. An
+    empty post-close history query alone leaves the operation unresolved. Task 1.6 asks
+    whether the provider offers positive proof; a negative answer is a valid, final
+    answer, not a prompt to accept weaker evidence.
+  - **A recovered dispatch marker always needs operator acknowledgement.** After a
+    restart, a crash before the SDK call and a lost outcome write leave identical
+    durable evidence, so the stricter rule governs both. Reconciliation still runs and
+    records what it finds; it does not clear the requirement.
+- **Indefinite blocking is an accepted version 1 limitation.**
+  - When neither reconciliation nor an authorized evidence-backed disposition can
+    account for an operation, automated execution stays blocked with no time limit and
+    no override. The journal does not promise that every interruption is recoverable to
+    a ready state.
+  - This costs availability, not correctness: refusing execution cannot produce a second
+    invocation, so the at-most-once guarantee is untouched. An honest unresolved record
+    is preferred to a system that resumes having forgotten why it stopped.
+  - **A fresh journal is not recovery.** A new database against the same paper account
+    erases local history without removing broker-side effects, and nothing stops a new
+    token from adding exposure on top of the unaccounted one. Reinitializing, replacing
+    or repointing the journal for the same account is not an approved way to clear
+    unresolved execution; the runbook says so, and a new isolated paper environment is a
+    separately authorized action that is never reported as reconciliation of the old one.
 - **Dedicated, optional storage.**
   - An optional execution directory, and a separate `execution-data` volume, distinct
     from OpenD's `opend-data`. The existing authorization storage and the

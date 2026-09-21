@@ -32,6 +32,16 @@ device authorization volume.
 - Restoring older journal storage SHALL require recovery review before new mutations
   are admitted, as specified by `execution-journal` › Recovery Review Gate and
   Operator Acknowledgement.
+- **Reinitializing, replacing or repointing the journal for the same broker account
+  SHALL NOT be an approved way to clear unresolved execution.** The operational
+  documentation SHALL state that the original journal and its unresolved records are
+  preserved, and that standing up a new testing environment is a separately authorized
+  action which SHALL NOT be reported as reconciliation of the previous one.
+  - Continued experimentation SHALL use a separately verified, isolated paper
+    environment, retaining the prior journal for investigation.
+  - A provider's "reset paper account" facility SHALL NOT be assumed to provide that
+    isolation. Its effect on outstanding orders, pending requests and account identity
+    SHALL be verified before it is relied on.
 
 #### Scenario: Container recreation preserves the journal
 
@@ -77,6 +87,15 @@ device authorization volume.
 - **GIVEN** the trading mode is `READ_ONLY`
 - **WHEN** the container starts with no journal volume mounted
 - **THEN** it SHALL start and serve reads normally
+
+#### Scenario: A same-account journal reset is not an approved recovery procedure
+
+- **GIVEN** a paper account whose journal holds an unresolved operation
+- **WHEN** an operator considers reinitializing, replacing or repointing that journal
+  to resume execution
+- **THEN** the documented procedure SHALL refuse it as a recovery method
+- **AND** SHALL direct the operator to preserve the journal and use a separately
+  authorized, isolated paper environment instead
 
 #### Scenario: Restored older storage requires review before mutations
 

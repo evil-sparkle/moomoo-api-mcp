@@ -411,10 +411,14 @@ such as `SUBMITTED`, `FILLED_PART`, `FILLED_ALL`, `CANCELLED_ALL` and `REJECTED`
   (`ARMED`/`HALTED`). `lock_trade` SHALL NOT clear paper journal failures.
 - Journal blocking SHALL record the reason it was entered, and SHALL be released only
   by the release that matches that reason:
-  - an unresolved outcome is released by successful reconciliation of that operation,
-    or by an authorized operator acknowledgement;
+  - an unresolved outcome recorded durably **in this process** is released by
+    successful reconciliation of that operation, or by an authorized operator
+    acknowledgement;
   - a failed outcome write is released by an authorized operator acknowledgement only,
     because the unstored fact is what is in doubt;
+  - a dispatch marker recovered at startup with no durable outcome is released by an
+    authorized operator acknowledgement only. Reconciliation records evidence for it
+    but does not release it;
   - a storage failure is released only by restarting the process with healthy storage
     and completing recovery review. Reconciliation SHALL NOT clear it in the running
     process, because the store cannot be relied on to have recorded the result.
@@ -662,6 +666,14 @@ single-process execution, and SHALL NEVER silently recreate missing storage.
 - The guarantee's scope and limitations:
   - Epoch enforcement refuses unknown non-current-epoch tokens. It does not detect
     all restores (such as when fresh tokens are generated).
+  - Restore handling SHALL be understood as exactly two protections: refusing an
+    unchanged retry of a token the storage no longer holds, and surfacing for review
+    the non-terminal rows the storage still holds. It SHALL NOT be described as
+    making a restore safe.
+  - Neither protection accounts for history that is entirely absent. An operation
+    admitted after a backup was taken leaves no row to review, and a genuinely new
+    token SHALL still be admitted, so a restore MAY leave broker-side effects
+    unaccounted for.
   - The system SHALL NOT recover missing history from restored backups.
   - The system SHALL NOT infer `NOT_SENT` from a restored pre-dispatch (`ADMITTED`)
     row without establishing verified journal continuity.
@@ -785,14 +797,30 @@ resolved only via a named, operator-only recovery acknowledgement mechanism:
 
   It SHALL NOT require the account to be flat, and SHALL NOT be recorded as the
   uncertain mutation having succeeded.
-- **Absence SHALL require positive proof.** A disposition asserting that no order
-  exists (`CONFIRMED_NOT_SENT`) SHALL require provider-verified evidence stronger than
-  an order's non-appearance in a query. A trading-close boundary, a timestamp, or an
-  operator's assertion SHALL NOT qualify, and an empty post-close history query alone
-  SHALL leave the operation unresolved.
+- **Version 1 SHALL provide exactly one operator disposition, `TERMINAL_ACCOUNTED`.**
+  A disposition asserting that no broker order exists SHALL NOT be offered in version
+  1. An order's non-appearance in a query SHALL NOT be accepted as evidence of absence,
+  and an empty post-close history query alone SHALL leave the operation unresolved.
+  - Should such a disposition be introduced later, it SHALL rest on provider-verified
+    evidence that positively establishes absence, and SHALL NOT be mapped onto Stage
+    1's pre-dispatch `NOT_SENT` classification: evidence that no broker order was
+    created does not establish that the SDK invocation never started.
+- **A dispatch marker recovered at startup with no durable outcome SHALL require an
+  authorized operator acknowledgement** before automated execution resumes.
+  Reconciliation SHALL still run and SHALL record its findings as evidence, and SHALL
+  NOT by itself clear that requirement. This applies however the process ended,
+  because a crash before the SDK call and a lost outcome write leave identical durable
+  evidence.
 - The acknowledgement and its durable `recovery_audit` record SHALL commit in the same
   transaction, and that transaction SHALL commit before the gate is re-evaluated.
 - The gate SHALL be released if and only if every operation is in a terminal state.
+- **An operation that can be accounted for by neither reconciliation nor an authorized
+  evidence-backed disposition SHALL keep automated execution blocked indefinitely.**
+  The system SHALL NOT offer a risk-acceptance override, and SHALL NOT resume by
+  discarding the unresolved record.
+- **Reinitializing, replacing or repointing the journal for the same broker account
+  SHALL NOT be treated as accounting for unresolved execution.** A journal that no
+  longer holds an operation's record SHALL NOT be reported as reconciliation of it.
 
 #### Scenario: New mutations are refused until review has run
 
@@ -921,3 +949,37 @@ resolved only via a named, operator-only recovery acknowledgement mechanism:
 - **THEN** the acknowledgement SHALL be refused for insufficient evidence
 - **AND** the operation SHALL remain unresolved
 - **AND** paper execution SHALL remain blocked
+
+#### Scenario: A recovered dispatch marker requires operator acknowledgement
+
+- **GIVEN** a dispatch marker was recovered at startup with no durable outcome
+- **WHEN** recovery review runs
+- **THEN** automated execution SHALL remain blocked until an authorized operator
+  acknowledgement accounts for that operation
+
+#### Scenario: Reconciliation after a lost outcome write does not resume execution
+
+- **GIVEN** a mutation was acknowledged by the broker and its outcome write failed
+- **AND** the process then terminated and restarted, leaving a recovered dispatch
+  marker with no durable outcome
+- **WHEN** reconciliation of that operation completes successfully
+- **THEN** its findings SHALL be recorded as evidence
+- **AND** automated execution SHALL still wait for the bound operator acknowledgement
+- **AND** the review requirement SHALL NOT be cleared by that reconciliation
+
+#### Scenario: An operation that cannot be accounted for blocks execution indefinitely
+
+- **GIVEN** an operation that neither reconciliation nor an authorized
+  evidence-backed disposition can account for
+- **WHEN** further paper mutations are requested, at any later time
+- **THEN** they SHALL continue to be refused
+- **AND** the system SHALL NOT offer an override that resumes execution by accepting
+  the uncertainty
+
+#### Scenario: A new journal does not account for a prior unresolved operation
+
+- **GIVEN** an unresolved operation recorded in a journal for a paper account
+- **WHEN** a new or reinitialized journal is started for that same account and its
+  startup review finds nothing outstanding
+- **THEN** that review SHALL NOT be reported as reconciliation of the prior operation
+- **AND** the prior operation SHALL NOT be treated as accounted for

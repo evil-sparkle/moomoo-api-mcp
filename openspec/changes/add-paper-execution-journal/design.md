@@ -343,14 +343,21 @@ broker round trip.
      cannot be presumed `NOT_SENT`; it must be evaluated under recovery review.
 2. **Crash between Dispatch Commit (`DISPATCHING`) and SDK Invocation:**
    - The journal holds `DISPATCHING`. At startup recovery, this transitions to
-     `UNKNOWN_OUTCOME` (reason `CRASH_IN_DISPATCH`). The operation is treated as
-     possibly sent and blocks mutations until reconciled.
+     `UNKNOWN_OUTCOME` with blocking reason `RECOVERED_DISPATCH`. The operation is
+     treated as possibly sent and blocks mutations until an authorized operator
+     acknowledgement accounts for it. Reconciliation runs and records evidence, but
+     does not by itself clear the requirement, because windows 2, 3 and 4 leave
+     identical durable evidence.
 3. **Crash during SDK Invocation:**
    - The broker may or may not have received/executed the order. At restart, recovered
-     as `UNKNOWN_OUTCOME`. Requires order query reconciliation or operator accounting.
+     as `UNKNOWN_OUTCOME` with blocking reason `RECOVERED_DISPATCH`, requiring operator
+     acknowledgement.
 4. **Crash between SDK Invocation and Outcome Commit:**
-   - Broker may have acknowledged. At restart, recovered as `UNKNOWN_OUTCOME`.
-     Reconciliation checks broker orders to locate the receipt.
+   - Broker may have acknowledged. At restart, recovered as `UNKNOWN_OUTCOME` with
+     blocking reason `RECOVERED_DISPATCH`. Reconciliation checks broker orders to
+     locate the receipt and records what it finds, but the operator acknowledgement is
+     still required: this window is indistinguishable from windows 2 and 3 in the
+     durable record.
 
 ### 8. Outcome classification and recovered lifecycle-state semantics
 
@@ -428,10 +435,20 @@ error, and blocks subsequent automated paper mutations until resolved.
   - an unknown token carrying a non-current epoch is refused rather than admitted as
     new.
 
-  Together these make a restore safe without detecting it. Any wording that implies the
-  server compares a restored journal's epoch history against "what this process
-  retired" describes a detector that does not exist and cannot be built from the data
-  available, and is not part of this design.
+  Together these give a restore **two specific protections**, without detecting it:
+  they refuse an unchanged retry of a token the restored database no longer holds, and
+  they surface the non-terminal rows that *are* still in it for review.
+
+  That is the whole of the protection, and the wording must not be broader. These rules
+  **cannot account for history that is entirely absent**: an operation admitted after
+  the backup was taken, whose order exists at the broker, leaves no row to review and no
+  token to refuse unless that same token is presented again. A new token creating new
+  exposure is not prevented by any of this. A restore is therefore *survivable*, not
+  *safe*, and the "fresh journal is not recovery" note in Decision 12 applies directly.
+
+  Any wording that implies the server compares a restored journal's epoch history
+  against "what this process retired" describes a detector that does not exist and
+  cannot be built from the data available, and is not part of this design.
 - **Storage failure recovery.** If SQLite experiences I/O errors or lock exhaustion,
   the store marks itself in a failed state. Concurrent and subsequent mutations fail
   closed immediately without attempting broker I/O. Recovery requires restarting the
@@ -480,7 +497,8 @@ resolved through an explicit, operator-only mechanism:
   - `operation_id`: target operation.
   - `operator_id`: must match the authenticated principal.
   - `recovery_epoch` and `observed_state`: what was reviewed.
-  - `resolution`: `TERMINAL_ACCOUNTED` or `CONFIRMED_NOT_SENT`.
+  - `resolution`: `TERMINAL_ACCOUNTED`. Version 1 offers exactly one operator
+    disposition; see the absence note below.
   - `reason`: durable human-readable justification.
   - `evidence_reference`: verifiable broker evidence reference.
   - the accounted facts below, for `TERMINAL_ACCOUNTED`.
@@ -502,19 +520,49 @@ resolved through an explicit, operator-only mechanism:
   It does **not** require the account to be flat. It requires an accurate record of
   what remains. The broker's order response reports filled quantity and average price
   separately from order status, so the recovery contract records them separately too.
-- **No post-close absence shortcut.** The previous clause admitted "confirmed absent by
-  end-of-day order history" without ever defining what establishes that confirmation.
-  Reconciliation is explicit that an empty query is not proof of absence, and the
-  recovery path must not become a back door around it. An absence disposition
-  (`CONFIRMED_NOT_SENT`) requires provider-verified proof that is strictly stronger
-  than "the order was not returned" — for example a broker-side statement or audit
-  record that positively enumerates the account's orders for the session. A timestamp,
-  a trading-close boundary, or an operator's assertion alone does not qualify, and an
-  empty post-close history query alone leaves the operation unresolved.
-  - Version 1 does not assume such proof exists. Task 1.6 establishes whether the paper
-    provider offers any; until it does, `CONFIRMED_NOT_SENT` is unavailable and such
-    operations stay unresolved.
+- **No post-close absence shortcut, and no absence disposition in version 1.** The
+  earlier clause admitted "confirmed absent by end-of-day order history" without ever
+  defining what establishes that confirmation. Reconciliation is explicit that an empty
+  query is not proof of absence, and the recovery path must not become a back door
+  around it. An empty post-close history query alone leaves the operation unresolved.
+  - **Version 1 ships exactly one operator disposition, `TERMINAL_ACCOUNTED`.** An
+    absence disposition is **deferred from version 1's executable interface** rather
+    than half-specified: task 1.6 has not run, the documented placement and
+    order-history interfaces show no affirmative absence-proof mechanism, and defining
+    a full lifecycle mapping for a capability that will most likely stay disabled adds
+    surface without protection.
+  - **A negative result from task 1.6 is a valid, final result.** "No positive absence
+    proof is available through the verified provider interface; the absence disposition
+    stays disabled; unprovable operations remain unresolved and execution-blocking" is
+    a complete answer. It must not be treated as pressure to invent weaker evidence so
+    that recovery becomes possible.
+  - **If such proof is ever established,** the disposition lands as its own change,
+    named **`ABSENCE_ACCOUNTED`** — not `CONFIRMED_NOT_SENT`. Evidence that no broker
+    order was created is not evidence that the SDK invocation never started. A
+    post-marker operation must never be mapped into Stage 1's pre-dispatch `NOT_SENT`
+    classification, because `NOT_SENT` asserts something about this process that the
+    broker's records cannot witness. `ABSENCE_ACCOUNTED` would be a refinement of the
+    positive-proof disposition, never a risk-acceptance override.
 - **Insufficient evidence keeps execution blocked.**
+- **Recovered dispatch markers always require operator acknowledgement.** After a
+  restart, a durable `DISPATCHING` row with no stored outcome is the *same evidence*
+  whether the process died before the SDK call or after it acknowledged and the outcome
+  write failed. The journal cannot distinguish them, so the stricter of the two rules
+  applies to both: any dispatch marker recovered at startup without a durable outcome
+  requires an operator acknowledgement before automated execution resumes.
+  - Reconciliation still runs, and still records what it finds — that evidence is
+    exactly what the operator needs. It does **not** silently clear the review
+    requirement.
+  - Without this rule a restart would *weaken* the contract: an `OUTCOME_NOT_STORED`
+    failure demands operator acknowledgement in-process, but the write that would have
+    recorded that demand is precisely the one that failed, so after a restart the
+    operation would look like an ordinary `UNKNOWN_OUTCOME` and become
+    reconciliation-clearable. Losing a safety requirement because the record of it
+    could not be written is the wrong direction.
+  - This is the conservative contract of the two available. The alternative — the
+    operator-only rule applying only while the failure is known in the current process,
+    with all recovered dispatches following ordinary evidence-based recovery — is a
+    different policy offering weaker protection, and version 1 does not adopt it.
 - **Durable Audit Record, committed before release:**
   Every acknowledgement is written to a dedicated `recovery_audit` table recording the
   operation ID, the authenticated operator identity, resolution, reason, evidence
@@ -527,6 +575,57 @@ resolved through an explicit, operator-only mechanism:
   The recovery review gate is released if and only if EVERY operation in the journal
   is in a terminal state (`ACKNOWLEDGED`, `REFUSED`, `RECONCILED`, or
   `TERMINAL_ACCOUNTED`).
+
+#### Indefinite blocking is an accepted version 1 limitation
+
+Two histories leave identical durable evidence:
+
+| History | Durable journal after restart |
+| --- | --- |
+| Commit the dispatch marker, then crash before calling the SDK | `DISPATCHING`, no stored outcome |
+| Commit the marker, call the SDK, then crash before storing the outcome | `DISPATCHING`, no stored outcome |
+
+Startup recovery correctly turns that evidence into `UNKNOWN_OUTCOME`, and the
+zero-match rule correctly refuses to manufacture the missing distinction from an empty
+broker query. So when neither reconciliation nor an authorized evidence-backed
+disposition can account for an operation, **automated execution stays blocked
+indefinitely.** The journal does not promise that every interruption is recoverable to
+a ready state.
+
+This is a deliberate availability trade-off, stated rather than discovered. It is not a
+failure of the at-most-once guarantee: refusing further execution cannot produce a
+second invocation.
+
+It is worth separating necessity from policy. At-most-once dispatch of the original
+operation does not *logically* require stopping every unrelated future operation
+forever; the global block is an additional execution-safety policy chosen here. A
+future operator-authorized abandonment mechanism could change that policy while still
+preserving the original operation's uncertainty and preventing its replay — but that
+would be a new, explicit risk-acceptance contract, not another way of proving the
+original order never existed. Version 1 leaves it out.
+
+#### A fresh journal is not recovery
+
+Starting a new database against the same paper account removes local history. It does
+not remove or account for broker-side effects.
+
+An unresolved operation may have created a real order. An empty journal makes startup
+review find nothing outstanding while that order, or the position it produced, still
+exists. The retired-epoch rule refuses an unchanged retry of the old token, but nothing
+stops a genuinely new token from adding further exposure on top of the unaccounted one.
+Making initialization explicit makes the action visible; it does not make it
+evidence-backed recovery.
+
+**Reinitializing, replacing, or repointing the journal for the same broker account is
+not an approved way to clear unresolved execution.** The runbook states this directly:
+preserve the original journal and its unresolved records. Standing up a new testing
+environment is a separately authorized action and must never be reported as
+reconciliation of the old one.
+
+Where experimentation must continue, the supported route is a separately verified,
+isolated paper environment, with the old journal retained for investigation. A broker
+"reset paper account" feature is not assumed to provide that isolation: what it does to
+outstanding orders, pending requests and account identity has to be verified first.
 
 ### 13. Independent paper-journal blocking and runtime failures
 
@@ -549,8 +648,9 @@ separate from Stage 1's `execution_halted` (REAL relock halt):
 
   | Blocking reason | Entered when | Released by |
   | --- | --- | --- |
-  | `UNRESOLVED_OUTCOME` | an operation entered `UNKNOWN_OUTCOME` | successful reconciliation of that operation, or an authorized operator acknowledgement |
+  | `UNRESOLVED_OUTCOME` | an operation entered `UNKNOWN_OUTCOME` **in this process**, with its outcome durably recorded | successful reconciliation of that operation, or an authorized operator acknowledgement |
   | `OUTCOME_NOT_STORED` | the broker acknowledged but the outcome write failed | authorized operator acknowledgement only; reconciliation alone does not clear it, because the unstored fact is what is in doubt |
+  | `RECOVERED_DISPATCH` | a dispatch marker was recovered at startup with no durable outcome | authorized operator acknowledgement only. Reconciliation runs and records its findings as evidence, but does not clear the requirement, because this evidence cannot distinguish a crash before the SDK call from a lost outcome write |
   | `STORAGE_FAILED` | SQLite I/O error, lock exhaustion, or integrity failure | **restarting the process with healthy storage, then completing recovery review.** Neither reconciliation nor an operator acknowledgement clears it in the running process |
 
   A successful reconciliation in a storage-failed process therefore clears nothing: the
@@ -615,6 +715,14 @@ What is **not** guaranteed:
 
 ## Risks / Trade-offs
 
+- **[Accepted limitation]** An operation whose outcome cannot be established blocks
+  automated paper execution **indefinitely**. Version 1 offers no abandonment
+  mechanism, and a negative task 1.6 result makes this reachable in practice.
+  → **Not mitigated, by choice.** See Decision 12. Refusing execution cannot cause a
+  second invocation, so the at-most-once guarantee is unaffected; what is lost is
+  availability. An honest unresolved record is preferred to a system that resumes
+  having forgotten why it stopped. Reinitializing the journal for the same account is
+  explicitly not the escape hatch.
 - **[Risk]** Unverified provider facts (DAY-only, deal query absence).
   → **Mitigation:** Task group 1 checks them before implementation.
 - **[Risk]** Retention of terminal paper orders limits reconciliation window.

@@ -49,7 +49,11 @@ under the decision it affects.
   does **not** exist — a broker-side statement or audit record that enumerates the
   account's orders for a session — as opposed to an order merely not appearing in a
   query. Verify by recording the call and its output, or recording that none exists.
-  `CONFIRMED_NOT_SENT` stays unavailable until this is answered affirmatively.
+  **A negative result is a valid, final result**: "no positive absence proof is
+  available through the verified provider interface; the absence disposition stays
+  disabled; unprovable operations remain unresolved and execution-blocking" closes this
+  task. It is not a prompt to invent weaker evidence so that recovery becomes
+  possible.
 
 ## 2. Configuration
 
@@ -204,10 +208,25 @@ under the decision it affects.
   case: an uncertain cancellation against a fully filled 100-share BUY is accountable,
   and the disposition retains the 100 filled shares, zero remaining executable
   quantity and the resulting position. (`U20`)
-- [ ] 6.7 Enforce that an absence disposition (`CONFIRMED_NOT_SENT`) requires
-  provider-verified proof stronger than an order's non-appearance. Verify that an empty
+- [ ] 6.7 Ship exactly one operator disposition in version 1, `TERMINAL_ACCOUNTED`.
+  Offer **no** absence disposition and no risk-acceptance override. Verify that an empty
   post-close history query offered as evidence is refused for insufficient evidence and
-  leaves the operation unresolved. Gate availability on task 1.6's finding. (`U20`)
+  leaves the operation unresolved, and that no interface accepts an "accept the
+  uncertainty" resolution. Should task 1.6 return positive proof, the disposition lands
+  as its own change named `ABSENCE_ACCOUNTED`, never mapped onto Stage 1's pre-dispatch
+  `NOT_SENT`. (`U20`)
+- [ ] 6.10 Require an authorized operator acknowledgement for **every dispatch marker
+  recovered at startup with no durable outcome**, however the process ended.
+  Reconciliation runs and records its findings as evidence but does not clear the
+  requirement. Verify with the acceptance case: force an acknowledged operation's
+  outcome write to fail, terminate the process, restart, reconcile the operation
+  successfully — automated execution must still wait for the bound operator
+  acknowledgement. (`U07`, `U19`)
+- [ ] 6.11 Accept indefinite blocking: an operation accountable by neither
+  reconciliation nor an authorized evidence-backed disposition keeps automated
+  execution refused with no time limit and no override. Verify that later mutation
+  attempts continue to be refused, and that a new or reinitialized journal for the same
+  account is not treated as accounting for the prior operation. (`U13`)
 - [ ] 6.8 Implement the operator authorization boundary: a capability distinct from the
   trading agent's transport credential and never provisioned to it; the audited
   identity derived from the authenticated principal, with a mismatched `operator_id`
@@ -219,9 +238,10 @@ under the decision it affects.
 - [ ] 6.9 Implement release-by-blocking-reason: an unresolved outcome clears on
   reconciliation or operator acknowledgement; a failed outcome write clears only on
   operator acknowledgement; a storage failure clears only by restarting with healthy
-  storage and completing recovery review. Verify that a successful reconciliation in a
-  storage-failed process clears nothing, and that blocking persists while any reason
-  remains. (`U15`)
+  storage and completing recovery review; and a dispatch marker recovered at startup
+  clears only on operator acknowledgement. Verify that a successful reconciliation in a
+  storage-failed process clears nothing, that a recovered dispatch marker is not cleared
+  by reconciliation, and that blocking persists while any reason remains. (`U15`)
 
 ## 7. Policy and scope
 
@@ -280,7 +300,15 @@ under the decision it affects.
   and restoring the rollback journal together with the database as a set. Verify docs,
   and verify with a container test that copying only the database after an abnormal
   termination is rejected by the documented procedure. (`C02`, `C04`)
-- [ ] 9.4 Document the journal lifecycle, two-phase dispatch, recovery review gate,
+- [ ] 9.4 Document, in the operator runbook, that reinitializing, replacing or
+  repointing the journal for the same broker account is **not** an approved way to clear
+  unresolved execution; that the original journal and its unresolved records are
+  preserved; that standing up a new testing environment is separately authorized and is
+  never reported as reconciliation of the old one; and that a provider "reset paper
+  account" facility is not assumed to isolate outstanding orders, pending requests or
+  account identity without verification. Also record indefinite blocking as an accepted
+  version 1 limitation. Verify docs. (`C04`)
+- [ ] 9.5 Document the journal lifecycle, two-phase dispatch, recovery review gate,
   operator acknowledgement runbook, and restore limitations in
   `docs/state-and-restarts.md` and `docs/deploy-vps.md`, and update `.env.example`,
   `README.md` and `openspec/config.yaml`. Verify docs.
@@ -311,7 +339,7 @@ alone.
 
 ## Scenario-to-test traceability
 
-Every scenario in this change's delta specs maps to a planned test. 139 scenarios across 16 requirements.
+Every scenario in this change's delta specs maps to a planned test. 144 scenarios across 16 requirements.
 
 ### `execution-journal`
 
@@ -405,6 +433,10 @@ Every scenario in this change's delta specs maps to a planned test. 139 scenario
 |  | Recovery acknowledgement records durable audit entry | `U17` |
 |  | Evidence-backed accounting of terminal target accounts for exposure without false success claim | `U20` |
 |  | An empty post-close history query alone does not account for an operation | `U20` |
+|  | A recovered dispatch marker requires operator acknowledgement | `U07`, `U19` |
+|  | Reconciliation after a lost outcome write does not resume execution | `U07`, `U19` |
+|  | An operation that cannot be accounted for blocks execution indefinitely | `U13` |
+|  | A new journal does not account for a prior unresolved operation | `U13`, `C04` |
 
 ### `trading-policy`
 
@@ -468,6 +500,7 @@ Every scenario in this change's delta specs maps to a planned test. 139 scenario
 |  | Supported consistent backup procedure does not corrupt database | `C02` |
 |  | An unheld process lock after a crash does not make a file copy safe | `C04` |
 |  | A deployment without journaled paper execution needs no volume | `C01` |
+|  | A same-account journal reset is not an approved recovery procedure | `C04` |
 |  | Restored older storage requires review before mutations | `C04` |
 
 ### `system-health`
