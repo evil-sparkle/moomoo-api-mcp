@@ -1053,7 +1053,8 @@ class TradeService:
                         )
                     ) from exc
 
-            relock_error: str | None = None
+            receipt: dict = {}
+            failure: BaseException | None = None
             try:
                 try:
                     ret, data = call()
@@ -1082,19 +1083,25 @@ class TradeService:
                             operation, f"{type(exc).__name__}: {exc}"
                         )
                     ) from exc
-            except (
-                OrderOutcomeUnknownError,
-                OrderReceiptUnreadableError,
-            ) as exc:
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                # Held rather than propagated so the relock in `finally` runs
+                # before anything leaves this block. The relock has to be
+                # attempted on every path out: the gateway is unlocked right
+                # now, and an exception is not a reason to leave it that way.
+                failure = exc
+            finally:
                 relock_error = self._relock_after_write(uses_jit)
-                if relock_error is not None:
-                    raise type(exc)(
-                        f"{exc} The gateway was also left unlocked: {relock_error}. "
-                        "Order execution is halted until lock_trade succeeds."
-                    ) from exc
-                raise
-            else:
-                relock_error = self._relock_after_write(uses_jit)
+
+            if failure is not None:
+                if relock_error is None:
+                    raise failure
+                # The write's own outcome is unchanged; the lock failure is
+                # appended to it rather than replacing it.
+                raise type(failure)(
+                    f"{failure} The gateway was also left unlocked: "
+                    f"{relock_error}. Order execution is halted until "
+                    "lock_trade succeeds."
+                ) from failure
 
         return receipt, relock_error
 
@@ -1742,12 +1749,17 @@ class TradeService:
                 merged_qty = qty if qty is not None else existing.get("qty")
                 merged_price = price if price is not None else existing.get("price")
                 existing_type = str(existing.get("order_type") or "NORMAL")
+                existing_aux = self._optional_float(existing.get("aux_price"))
                 validate_order_values(
                     operation,
                     order_type=existing_type,
                     qty=int(merged_qty) if merged_qty is not None else None,
                     price=merged_price,
-                    aux_price=existing.get("aux_price"),
+                    # Normalized first: an order with no trigger price reports
+                    # the SDK's 'N/A' sentinel, which means absent rather than
+                    # malformed, and would otherwise refuse every modification
+                    # of a plain limit order.
+                    aux_price=existing_aux,
                 )
                 self.policy.assess_order(
                     operation,
@@ -1760,7 +1772,7 @@ class TradeService:
                         price=(
                             float(merged_price) if merged_price is not None else None
                         ),
-                        aux_price=self._optional_float(existing.get("aux_price")),
+                        aux_price=existing_aux,
                     ),
                 )
 

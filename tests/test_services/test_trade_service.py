@@ -575,6 +575,50 @@ class TestDispatchOutcomes:
         assert "outcome is unknown" not in message
 
 
+class TestRelockAlwaysAttempted:
+    """The gateway is unlocked right now; nothing may leave it that way."""
+
+    def test_an_unexpected_failure_still_relocks(self, mock_trade_ctx):
+        """A conversion that raises something the boundary does not classify.
+
+        The relock lives in a `finally` precisely so that a path nobody
+        anticipated cannot skip it and leave the gateway open.
+        """
+        mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
+        mock_trade_ctx.place_order.return_value = (
+            RET_OK,
+            pd.DataFrame([{"order_id": "1"}]),
+        )
+        service = _credentialed_service(mock_trade_ctx)
+
+        def exploding_convert(_data):
+            raise KeyboardInterrupt("operator interrupted")
+
+        with pytest.raises(KeyboardInterrupt):
+            service._dispatch_write(
+                "REAL",
+                "place_order",
+                lambda: mock_trade_ctx.place_order(),
+                exploding_convert,
+            )
+
+        mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
+
+    def test_the_relock_runs_before_the_failure_propagates(self, mock_trade_ctx):
+        order = []
+        mock_trade_ctx.unlock_trade.side_effect = lambda **kwargs: (
+            order.append("lock" if kwargs.get("is_unlock") is False else "unlock"),
+            (RET_OK, None),
+        )[1]
+        mock_trade_ctx.place_order.return_value = (RET_ERROR, "gateway said no")
+        service = _credentialed_service(mock_trade_ctx)
+
+        with pytest.raises(OrderOutcomeUnknownError):
+            _place(service)
+
+        assert order == ["unlock", "lock"]
+
+
 class TestExecutionHalt:
     """A failed relock halts execution until someone locks the gateway."""
 
@@ -1114,6 +1158,27 @@ class TestModificationAssessment:
         kwargs = mock_trade_ctx.order_list_query.call_args.kwargs
         assert kwargs["order_id"] == "123456"
         assert kwargs["refresh_cache"] is True
+
+    def test_an_absent_trigger_price_does_not_refuse_the_modification(
+        self, mock_trade_ctx
+    ):
+        """A plain limit order has no trigger, and the SDK reports that as 'N/A'.
+
+        Validating the sentinel as a number would refuse every modification of
+        every limit order the gateway reports this way.
+        """
+        without_trigger = dict(self.OPEN_ORDER, aux_price="N/A")
+        service = self._service(mock_trade_ctx, without_trigger)
+
+        result = service.modify_order(
+            order_id="123456",
+            modify_order_op="NORMAL",
+            price=90.0,
+            trd_env="REAL",
+            acc_id=123,
+        )
+
+        assert result["order_status"] == "MODIFIED"
 
     @pytest.mark.parametrize("op", ["CANCEL", "DISABLE", "DELETE"])
     def test_exposure_reducing_operations_skip_the_assessment(self, mock_trade_ctx, op):
