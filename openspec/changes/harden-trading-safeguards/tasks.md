@@ -15,8 +15,11 @@ finding in `design.md` under the decision it affects.
     `stock_type`. Record whether every requested code is returned.
   - **Monetary multiplier semantics.** Determine which option field, multiplied by
     the quoted price, yields the cash value of one contract. Verify it against an
-    independent figure — an option's own `option_contract_nominal_value`, a position's
-    market value, or a known premium — not by observing that a field equals 100. A
+    independent figure — an independently established premium cash value, or a
+    matched position's market value for that same contract — not by observing that a
+    field equals 100. Do not use `option_contract_nominal_value` as the US evidence:
+    the published field table marks it HK-options-only, and a nominal amount is not
+    the premium being assessed. A
     field equalling 100 for standard US contracts does not establish what it means.
     Record the finding and fix Decision 3's multiplier accordingly.
   - **Currency.** Confirm that every instrument valued on `US` quotes in USD, so the
@@ -119,7 +122,8 @@ finding in `design.md` under the decision it affects.
     `max(price, M)`; no-fixed-limit → `max(M, aux_price, price)`, where `M` is
     required;
   - refusal of order types in neither class;
-  - combo premium, with equal contract sizes, no stock leg and fixed-limit types
+  - combo premium using the monetary multiplier, with equal monetary multipliers and
+    equal contract sizes, no stock leg and fixed-limit types
     only;
   - fail-closed refusals, with messages naming the value, currency and reason.
 
@@ -136,6 +140,9 @@ finding in `design.md` under the decision it affects.
   - a BUY STOP with `aux_price` 130 and `M` 120 → 1,040;
   - a SELL limit with no `M` → refused;
   - a combo at -2.50 × 3 × 100 = 750;
+  - a synthetic instrument whose contract size and monetary multiplier differ,
+    asserting that both the single-leg notional and the combo premium use the
+    monetary multiplier. This is the case that catches the wrong field being reused;
   - the 1:2:1 butterfly quantity of 6.
 
 ## 4. Dispatch boundary, account routing and modification checks in `TradeService`

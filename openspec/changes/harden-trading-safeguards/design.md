@@ -154,9 +154,10 @@ itself. `TradeService` receives the credential in its constructor, replacing the
   `float()` and fails on `USD:…`. A rollback would then require editing `.env` under
   pressure. With a new name, one `.env` serves both images: the old image enforces
   its unit-less cap, and the new one enforces currency caps.
-- *Alternative:* use a currency field from the snapshot. It was not chosen because
-  that field's presence is unverified. Task 1.1 checks it. If a reliable field
-  exists, it takes precedence over the table. That does not change the approach.
+- *Alternative:* use a currency field from the snapshot. It is not available:
+  `MarketSnapshotQuery` exposes no currency field in `moomoo-api` 10.10.7008. Should a
+  future SDK add one, it would take precedence over the verified-market table without
+  changing the approach.
 
 ### 3. Notional assessment: the policy decides, the service gathers facts
 
@@ -259,8 +260,12 @@ The rules are listed below. They are also specified in `trading-policy`.
   - **No-fixed-limit.** There is no bound, so the estimate takes the market and any
     trigger or price the caller supplied. Adding a candidate can only raise the
     estimate. The rule never lowers it below `M`.
-- **Combo.** `|price| × qty × contract size`. All legs must be `DRVT` with equal
-  contract sizes, and the order type must be in `FIXED_LIMIT_TYPES`. A combo without
+- **Combo.** `|price| × qty × monetary multiplier`, using the same verified monetary
+  multiplier as a single-leg order. Deliverable contract size and monetary multiplier
+  are distinct broker fields; the premium uses the multiplier, and equal contract
+  sizes remain a separate compatibility restriction. All legs must be `DRVT` with
+  equal monetary multipliers and equal contract sizes, and the order type must be in
+  `FIXED_LIMIT_TYPES`. A combo without
   a fixed limit is refused, because no net package reference price is available.
 - **Modification.** The same table applies to the merged order. The side, order type
   and trigger price come from the existing order, and a fresh snapshot is taken.
@@ -308,8 +313,12 @@ An order that is not found, or has unreadable fields, is refused as not sent.
 - *Alternative:* require callers to supply both fields. It was rejected because it
   shifts the check onto the agent, and the value that matters is the broker's
   current order, not the agent's memory of it.
-- *Risk:* a GTC order from a previous day might not appear in `order_list_query`.
-  The refusal is fail-closed. Task 1.2 verifies this in SIMULATE.
+- *Risk:* a target order may no longer be retrievable when a modification is
+  assessed, so the modification is refused. The refusal is fail-closed.
+  Task 1.2 measures how long a terminal `DAY` order stays queryable in paper, by
+  order and history-order query. That measures the paper interface's retention
+  behaviour; it does **not** establish REAL GTC-order visibility, which this change
+  does not test. Under either, a target that cannot be retrieved remains a refusal.
 
 ### 6. Account routing
 

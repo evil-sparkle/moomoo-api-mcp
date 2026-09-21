@@ -52,19 +52,18 @@ The journal depends on these Stage 1 contracts and does not restate them:
 proposal against those landed contracts → separately authorize implementation →
 automated acceptance tests → separately authorize paper-provider validation.
 
-### An unresolved conflict with the prerequisite
+### A conflict with the prerequisite, since resolved
 
-Stage 1 task 1.2 proposes placing a **GTC** limit order in `SIMULATE` and querying
-it on a later trading day, to learn whether `order_list_query` still returns it.
+Stage 1 originally proposed placing a **GTC** limit order in `SIMULATE` and querying
+it on a later trading day. Official Moomoo paper-trading documentation states
+day-only order validity, so that order cannot be placed as described.
 
-Moomoo documents paper orders as **DAY only**. If that documentation holds, the
-prerequisite's task cannot be performed as written: there is no GTC paper order to
-leave open overnight.
-
-This proposal does not silently inherit that task, and does not silently drop it
-either. It is recorded here and in `design.md` as a conflict for the prerequisite's
-owner to resolve, and task 1.4 below asks the same question in a form that a
-DAY-only provider can answer.
+Resolved by Stage 1 commit `04ec53d`: its task 1.2 now measures how long a terminal
+`DAY` order stays queryable, and testing the day-only constraint is an optional,
+separately authorized task that must record the stored `time_in_force` rather than a
+bare success code. Task 1.4 below measures the same retention question from this
+change's side. This records a planning decision; neither provider experiment has
+been performed.
 
 ## What Changes
 

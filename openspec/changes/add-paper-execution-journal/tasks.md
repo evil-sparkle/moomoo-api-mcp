@@ -1,8 +1,12 @@
 # Tasks
 
-No task below is complete. Nothing here is implemented, and no runtime milestone is
-claimed. Task groups 1, 10 and 11 gate the others: implementation begins only after
-group 1 resolves the provider facts and the prerequisite reconciliation, and after
+Nothing here is implemented, and no runtime milestone is claimed. Exactly one task is
+checked — 1.5, which records a **planning decision** taken in Stage 1. No provider
+experiment, automated test or implementation task is complete, and a checked planning
+decision never stands in for broker verification.
+
+Task groups 1, 10 and 11 gate the others: implementation begins only after group 1
+resolves the provider facts and the prerequisite reconciliation, and after
 implementation is separately authorized. Group 11 requires its own authorization
 again.
 
@@ -42,9 +46,10 @@ under the decision it affects.
   state, by order query and by history-order query. Verify by recording both windows.
   This replaces the prerequisite's multi-day GTC question in a form a `DAY`-only
   provider can answer.
-- [ ] 1.5 Raise the GTC conflict with the prerequisite's owner: Stage 1 task 1.2
-  proposes a `SIMULATE` GTC order, which a `DAY`-only provider cannot accept. Verify
-  by recording the decision taken on that task. Do not silently inherit or drop it.
+- [x] 1.5 GTC planning conflict resolved by Stage 1 commit `04ec53d`:
+  task 1.2 now measures terminal DAY-order retention; non-DAY testing is
+  optional and separately authorized. This records a planning decision,
+  not a completed provider experiment.
 - [ ] 1.6 Establish whether the paper provider offers any positive proof that an order
   does **not** exist — a broker-side statement or audit record that enumerates the
   account's orders for a session — as opposed to an order merely not appearing in a

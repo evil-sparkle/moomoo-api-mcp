@@ -38,13 +38,15 @@ as follows:
 
 - The quantity limit SHALL apply to the largest leg quantity, `qty × qty_ratio`.
 - The notional limit SHALL apply to the package premium:
-  `|net price| × qty × common contract size`.
+  `|net price| × qty × common monetary multiplier`, using the same verified monetary
+  multiplier as a single-leg order. Deliverable contract size and monetary multiplier
+  are distinct broker fields and SHALL NOT be used interchangeably.
 
 The tool description SHALL state that package premium is not maximum loss. It SHALL
 also state that, while a notional cap is configured, these combos are refused:
 
 - combos whose premium cannot be computed;
-- combos with legs of differing contract sizes;
+- combos with legs of differing monetary multipliers, or differing contract sizes;
 - combos that include a stock leg;
 - combos that use an order type outside the fixed-limit class.
 

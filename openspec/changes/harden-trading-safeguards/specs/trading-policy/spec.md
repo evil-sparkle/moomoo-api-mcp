@@ -92,7 +92,10 @@ there does it bound the fill price from above.
 For a combo order:
 
 - The notional SHALL be the package premium:
-  `|net price| × package quantity × the legs' common contract size`.
+  `|net price| × package quantity × the legs' common monetary multiplier`, using the
+  same verified monetary multiplier as a single-leg order. Deliverable contract size
+  and monetary multiplier are distinct broker fields and SHALL NOT be used
+  interchangeably.
 - The system SHALL describe this value as package premium, not as maximum loss.
 - Only fixed-limit order types are assessable.
 
@@ -105,7 +108,8 @@ holds:
   cannot be established from the verified market set;
 - the rule above needs `M` and `M` is unavailable;
 - the instrument's currency has no configured cap;
-- a combo uses a no-fixed-limit order type, mixes contract sizes, or contains a
+- a combo uses a no-fixed-limit order type, mixes monetary multipliers or contract
+  sizes, or contains a
   stock leg.
 
 A modification SHALL be assessed with the same rule. The side, order type and trigger
@@ -181,15 +185,24 @@ computed.
 - **AND** no order-mutating gateway request SHALL be made
 - **AND** the refusal SHALL be reported as not sent
 
-#### Scenario: Non-numeric quote fields are normalized before assessment
+#### Scenario: Non-numeric quote fields do not by themselves prevent assessment
 
 - **GIVEN** a notional cap is configured
 - **AND** the instrument's snapshot returns a non-numeric placeholder for `bid_price`
-  and `ask_price`
+  and `ask_price`, and a usable `last_price`
 - **WHEN** an order requiring `M` is assessed
-- **THEN** those fields SHALL be treated as absent rather than compared or computed
-  with
+- **THEN** those placeholders SHALL be treated as absent rather than compared or
+  computed with
 - **AND** the assessment SHALL NOT raise a type error
+- **AND** `M` SHALL be the remaining `last_price`, and the assessment SHALL continue
+
+#### Scenario: No usable quote price refuses the order
+
+- **GIVEN** a notional cap is configured
+- **AND** no finite, positive numeric value remains among `last_price`, `bid_price`
+  and `ask_price` after normalization
+- **WHEN** an order whose rule requires `M` is assessed
+- **THEN** the assessment SHALL NOT raise a type error
 - **AND** the order SHALL be refused as not sent, naming the missing market reference
 
 #### Scenario: Classification is requested for the codes being valued
