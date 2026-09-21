@@ -11,15 +11,18 @@ device authorization volume.
 - The journal volume SHALL be mounted at a dedicated path and owned by the
   unprivileged user id the server runs as, so the server reads and writes it without
   root.
+- Exactly one executor process SHALL access the journal volume at a time, enforced
+  via an advisory exclusive process file lock (`execution.lock`).
+- The deployment SHALL rely on POSIX filesystems honoring fsync durability. Backups
+  SHALL use SQLite's online backup API or stopped-container file copies.
 - The OpenD authorization volume's mount path and owning user id SHALL be unchanged
   by this capability, so Session State Persistence continues to hold and no device
   re-authorization is triggered.
 - The journal volume SHALL be optional. A deployment that does not run journaled
   paper execution SHALL start without it.
-- Backup and restore of the journal SHALL operate on a single database file. The
-  deployment SHALL NOT depend on sidecar files being copied alongside it.
 - Restoring older journal storage SHALL require recovery review before new mutations
-  are admitted, as specified by `execution-journal` › Recovery Review Gate.
+  are admitted, as specified by `execution-journal` › Recovery Review Gate and
+  Operator Acknowledgement.
 
 #### Scenario: Container recreation preserves the journal
 
@@ -34,6 +37,21 @@ device authorization volume.
 - **WHEN** the journal volume is mounted
 - **THEN** the directory and database file SHALL be readable and writable by that
   user without root
+
+#### Scenario: Single executor process is enforced across container environment
+
+- **GIVEN** an active container holds the lock on `execution.lock`
+- **WHEN** a second container or process mounts the volume and attempts to start
+  the paper execution engine
+- **THEN** the second process SHALL fail closed on lock acquisition
+- **AND** the active container's database SHALL remain uncorrupted
+
+#### Scenario: Supported consistent backup procedure does not corrupt database
+
+- **GIVEN** active journaled execution is running
+- **WHEN** a consistent backup is taken using SQLite's backup API
+- **THEN** the backup file SHALL be a self-contained, valid SQLite database
+- **AND** active database transactions SHALL NOT be interrupted or corrupted
 
 #### Scenario: A deployment without journaled paper execution needs no volume
 

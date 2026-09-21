@@ -15,8 +15,11 @@ In `READ_ONLY` mode the system SHALL NOT open, create or require any journal
 database, and SHALL NOT fail for want of one.
 
 A `SIMULATE` mutation SHALL be admitted only under an explicit `SIMULATE` policy.
-When journal storage is required but unavailable, the mutation SHALL be refused. The
-system SHALL NOT fall back to dispatching it unjournaled.
+When journal storage is required but unavailable or blocked, the mutation SHALL be
+refused. The system SHALL NOT fall back to dispatching it unjournaled.
+
+Paper journal blocking SHALL be independent of Stage 1's REAL relock halt
+(`ARMED`/`HALTED`). Calling `lock_trade` SHALL NOT clear paper journal failures.
 
 The trading mode SHALL be determined by configuration alone. No tool argument,
 including the environment and account arguments a caller must supply, SHALL elevate
@@ -40,8 +43,17 @@ the configured mode or enable `REAL` execution.
 - **GIVEN** `MOOMOO_TRADING_MODE` is `SIMULATE`
 - **WHEN** SIMULATE mode receives a SIMULATE write for an allowlisted simulated
   account, with an explicit environment and a caller-supplied operation identifier
+  and valid admission epoch
 - **THEN** it may submit that write through the execution journal
 - **AND** REAL writes and unlock remain denied, without silent rewrite to SIMULATE.
+
+#### Scenario: Paper journal blocking is independent of REAL relock halt
+
+- **GIVEN** `MOOMOO_TRADING_MODE` is `SIMULATE` and paper execution is in state
+  `JOURNAL_BLOCKED`
+- **WHEN** `lock_trade` is called
+- **THEN** the call SHALL NOT clear `JOURNAL_BLOCKED`
+- **AND** paper mutations SHALL continue to be refused
 
 #### Scenario: Explicit real deployment
 

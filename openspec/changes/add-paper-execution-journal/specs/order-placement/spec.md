@@ -16,11 +16,15 @@ The system MUST allow placing orders with `code`, `side`, `qty`, `price`,
 
 A placement that is journaled paper execution SHALL additionally:
 
-- carry a non-empty, caller-supplied `operation_id`, as defined by
-  `execution-journal` › Operation Admission and Execution Identity;
-- express its price as a decimal string;
-- be admitted, and have its intent and dispatch marker committed, before the SDK
-  mutation invocation;
+- carry a non-empty, caller-supplied `operation_id` and a valid `admission_epoch`,
+  as defined by `execution-journal` › Operation Admission and Execution Identity;
+- express its price as a strict decimal string;
+- have its admission and intent persisted in state `ADMITTED` before safety checks,
+  and commit its dispatch marker (`DISPATCHING`) only after all safety checks pass;
+- record pre-dispatch safety and limit refusals as `REFUSED` with local disposition
+  `NOT_SENT` without committing a dispatch marker;
+- return an immediate bounded response (`IN_FLIGHT`) if an identical request is
+  retried while dispatch is currently executing;
 - be restricted to the version 1 paper scope in `trading-policy` › Version 1 Paper
   Execution Scope. Order types outside that scope are refused rather than dispatched.
 
@@ -50,16 +54,34 @@ alongside the broker receipt, and SHALL keep the two distinguishable.
 - **THEN** the call SHALL fail as a missing required argument
 - **AND** no gateway request SHALL be made
 
-#### Scenario: Journaled paper placement commits before dispatch
+#### Scenario: Journaled paper placement persists admission then checks before dispatching
 
 - **GIVEN** journaled paper execution is active for an allowlisted simulated account
 - **WHEN** a caller places a US stock `NORMAL` `DAY` order with
-  `operation_id='op-p1'`, an explicit `trd_env='SIMULATE'`, and a decimal-string
-  price
-- **THEN** the operation SHALL be committed to the journal before the SDK mutation
-  invocation
+  `operation_id='op-p1'`, `admission_epoch='epoch-1'`, an explicit
+  `trd_env='SIMULATE'`, and a decimal-string price
+- **THEN** the operation SHALL be persisted in state `ADMITTED` before pre-dispatch
+  limit checks run
+- **AND** the dispatch marker (`DISPATCHING`) SHALL be committed only after checks
+  pass, prior to the SDK mutation invocation
 - **AND** the result SHALL report the broker receipt and the operation's local state
   distinguishably
+
+#### Scenario: Pre-dispatch limit refusal records refused not sent without dispatch marker
+
+- **GIVEN** journaled paper execution is active
+- **WHEN** a caller places an order whose notional value exceeds the configured limit
+- **THEN** the operation SHALL be recorded in the journal as `REFUSED` with local
+  disposition `NOT_SENT`
+- **AND** no dispatch marker SHALL be committed
+- **AND** no gateway request SHALL be made
+
+#### Scenario: In-flight retry returns immediate bounded response
+
+- **GIVEN** a journaled placement `op-p2` is currently in state `DISPATCHING`
+- **WHEN** the caller re-sends the identical placement with `operation_id='op-p2'`
+- **THEN** the system SHALL return an immediate bounded in-flight response
+- **AND** SHALL NOT block or initiate a second gateway request
 
 #### Scenario: Market order is refused under journaled paper execution
 

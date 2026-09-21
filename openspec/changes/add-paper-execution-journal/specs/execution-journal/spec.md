@@ -11,33 +11,55 @@ refuses new mutations until recovery has been reviewed.
 
 ### Requirement: Operation Admission and Execution Identity
 
-Every journaled mutation SHALL carry a complete operation identifier established by
-the caller before the request is sent. The server SHALL NOT generate, default,
-derive or synthesize one.
+Every journaled mutation SHALL carry a complete operation token consisting of a
+caller-owned `operation_id` and a server-issued `admission_epoch`. The server SHALL
+NOT generate, default, derive, parse, or rewrite an identifier.
 
-The identifier SHALL be a non-empty printable string within a bounded length. The
-server SHALL treat it as opaque and SHALL NOT parse it or infer structure from it.
+The `operation_id` SHALL be a non-empty, printable string within a bounded length.
+It is scoped to the journal database and its bound paper environment and accounts.
+Once reserved in the journal, the identifier is immutable.
 
-Admission SHALL resolve to exactly one of:
+When a mutation request is evaluated, the system SHALL look up existing identifiers
+in the journal across all recorded epochs before enforcing the current-epoch rule
+for new admission:
 
-- **Reserved.** The identifier is unknown to the journal and is recorded, permitting
-  a single dispatch.
-- **Already admitted.** The identifier is known and the canonical request matches.
-  The stored state SHALL be returned and no further dispatch SHALL occur.
-- **Conflict.** The identifier is known and the canonical request differs. The
-  request SHALL be refused, and the refusal SHALL identify the differing fields.
-- **Refused.** The identifier cannot be accounted for, as specified by Storage
-  Lifecycle and Admission Epochs.
+- **Already Admitted (Stored Outcome).** The identifier exists in the journal and
+  the canonical request matches. If the operation is in `DISPATCHING`, the system
+  SHALL return an immediate bounded in-flight response (`IN_FLIGHT`) without
+  blocking or dispatching. If the operation is in any completed or unresolved state,
+  the stored state SHALL be returned and no further dispatch SHALL occur.
+- **Conflict.** The identifier exists in the journal and the canonical request
+  differs. The request SHALL be refused, naming the differing fields. Same-ID
+  "corrected" requests SHALL be refused.
+- **New Admission.** If the identifier is not found in the journal:
+  - If the caller's supplied `admission_epoch` matches the server's current fresh
+    epoch, the token SHALL be admitted in state `ADMITTED`.
+  - If the caller's supplied `admission_epoch` does not match the server's current
+    fresh epoch, the request SHALL be refused as an unknown non-current-epoch token.
+    The caller SHALL NOT refresh or rewrite an old token to retry it.
 
-Admission SHALL be atomic. Concurrent admissions of the same identifier SHALL result
-in at most one dispatch.
+Admission SHALL be atomic. The account and environment SHALL be frozen into the
+operation at admission.
 
-#### Scenario: Unknown identifier is reserved and dispatched once
+#### Scenario: Unknown identifier with current epoch is admitted
 
 - **GIVEN** no operation exists with identifier `op-a1`
-- **WHEN** a paper placement is admitted with `operation_id='op-a1'`
-- **THEN** the journal SHALL record the operation against that identifier
-- **AND** exactly one SDK mutation invocation SHALL be made for it
+- **AND** the server's active admission epoch is `epoch-current`
+- **WHEN** a paper placement is requested with `operation_id='op-a1'` and
+  `admission_epoch='epoch-current'`
+- **THEN** the journal SHALL persist the operation in state `ADMITTED`
+- **AND** the account and environment SHALL be bound immutably to the operation
+
+#### Scenario: Existing identifier lookup precedes epoch validation on retry
+
+- **GIVEN** an operation `op-a2` was admitted and acknowledged under prior epoch
+  `epoch-prior`
+- **AND** the server's active admission epoch is now `epoch-new`
+- **WHEN** the identical request is retried with `operation_id='op-a2'` and
+  `admission_epoch='epoch-prior'`
+- **THEN** the system SHALL return the stored state for `op-a2`
+- **AND** SHALL NOT refuse the request due to the retired epoch
+- **AND** SHALL NOT make a second SDK mutation invocation
 
 #### Scenario: Retry with an identical request returns the stored state
 
@@ -54,6 +76,13 @@ in at most one dispatch.
 - **AND** the refusal SHALL name the differing field
 - **AND** no SDK mutation invocation SHALL be made
 
+#### Scenario: Same-ID corrected request is refused as a conflict
+
+- **GIVEN** an operation `op-a3` was admitted or refused for a limit price of `100.00`
+- **WHEN** a caller presents `op-a3` with a "corrected" limit price of `101.00`
+- **THEN** the system SHALL refuse the request as an immutable identifier conflict
+- **AND** SHALL NOT update or overwrite the existing record
+
 #### Scenario: Missing identifier is refused without substitution
 
 - **WHEN** a journaled mutation is requested with no `operation_id`, or with an empty
@@ -63,12 +92,22 @@ in at most one dispatch.
 
 #### Scenario: Concurrent admissions dispatch at most once
 
-- **GIVEN** no operation exists with identifier `op-a2`
-- **WHEN** two requests carrying `operation_id='op-a2'` and identical contents are
+- **GIVEN** no operation exists with identifier `op-a4`
+- **WHEN** two requests carrying `operation_id='op-a4'` and identical contents are
   admitted concurrently
 - **THEN** at most one SDK mutation invocation SHALL be made
 - **AND** the other request SHALL resolve to the resulting stored state rather than
   dispatching
+
+#### Scenario: In-flight retry receives immediate bounded response
+
+- **GIVEN** an operation `op-a5` has committed its dispatch marker and is currently
+  executing its SDK mutation invocation
+- **WHEN** a retry arrives carrying `operation_id='op-a5'` and identical contents
+- **THEN** the system SHALL return an immediate bounded response indicating the
+  operation is in flight (`IN_FLIGHT`)
+- **AND** SHALL NOT block waiting for the in-flight invocation
+- **AND** SHALL NOT launch a second SDK mutation invocation
 
 #### Scenario: Identifier outside the accepted form is refused
 
@@ -76,6 +115,23 @@ in at most one dispatch.
   outside the accepted form
 - **THEN** the system SHALL refuse the mutation before any gateway request
 - **AND** SHALL NOT truncate, normalize or otherwise rewrite the identifier
+
+#### Scenario: Unknown identifier from non-current epoch is refused
+
+- **GIVEN** no operation exists in the journal with identifier `op-a6`
+- **AND** the server's active admission epoch is `epoch-current`
+- **WHEN** a request presents `operation_id='op-a6'` with an older epoch `epoch-old`
+- **THEN** the system SHALL refuse the request
+- **AND** SHALL NOT admit the operation as new
+- **AND** the refusal SHALL indicate that the non-current token cannot be accounted
+  for
+
+#### Scenario: Admitted operation has frozen account binding
+
+- **GIVEN** an operation `op-a7` was admitted for account `acc-1`
+- **WHEN** a request presents `op-a7` targeting account `acc-2`
+- **THEN** the system SHALL refuse the request as an account binding conflict
+- **AND** SHALL NOT permit dispatching against `acc-2`
 
 ### Requirement: Request Canonicalization and Modification Identity
 
@@ -87,9 +143,10 @@ rather than merely asserted.
   type, and the operation's own parameters.
 - Prices SHALL be carried and stored as decimal strings, and compared by decimal
   value, so that identity does not depend on binary floating-point coercion.
-- For a modification, the fingerprint SHALL be computed over the **caller's original
-  patch**: the fields the caller actually supplied. The merged broker request SHALL
-  be stored separately, for audit, and SHALL NOT contribute to identity.
+- For a modification, identity and fingerprinting SHALL cover the **target order ID**
+  and the **caller's original patch**: the fields the caller actually supplied. The
+  merged broker request SHALL be stored separately, for audit, and SHALL NOT
+  contribute to identity.
 
 #### Scenario: Prices are stored and compared as decimal values
 
@@ -111,6 +168,13 @@ rather than merely asserted.
 - **THEN** the value stored in the journal SHALL be the decimal value as supplied
 - **AND** identity comparison SHALL use that decimal value
 
+#### Scenario: Malformed decimal string price is refused
+
+- **WHEN** a paper mutation supplies a price string that is not a valid positive
+  decimal representation
+- **THEN** the system SHALL refuse the request before any database write or gateway
+  request
+
 #### Scenario: Price-only retry survives an intervening partial fill
 
 - **GIVEN** a price-only modification `op-b3` was admitted against an order for 100
@@ -119,6 +183,14 @@ rather than merely asserted.
 - **WHEN** the caller retries `op-b3` with the same price and no quantity
 - **THEN** the system SHALL recognize it as the same operation
 - **AND** SHALL NOT report a conflict on the basis of the newly observed quantity
+
+#### Scenario: Modification identity binds target order ID and caller patch
+
+- **GIVEN** an order with ID `order-100`
+- **WHEN** a modification is requested targeting `order-100` with price `50.00`
+- **THEN** the operation identity SHALL incorporate `order-100` and the price patch
+- **AND** a retry targeting a different order ID with the same patch SHALL be
+  refused as a conflict
 
 #### Scenario: The merged broker request is recorded but does not define identity
 
@@ -135,23 +207,49 @@ rather than merely asserted.
 
 ### Requirement: Pre-Dispatch Commitment and Single Invocation
 
-The journal SHALL durably commit the operation's intent and a dispatch marker before
-the SDK mutation invocation begins. The dispatch marker records that an invocation is
-about to occur, so that an interrupted operation is recoverable rather than lost.
+The journal SHALL enforce a two-phase dispatch lifecycle:
 
-A database write transaction SHALL NEVER remain open across a gateway call. Every
-transaction SHALL be explicit, short, and closed before dispatch begins.
+1. **Admission Persistence:** Durably commit the operation in state `ADMITTED` in a
+   short transaction before pre-dispatch safety checks run.
+2. **Pre-Dispatch Checks:** Validate account allowlists, order value, reference
+   price limits, notional caps, and target order status. If any check fails, commit
+   a transition to `REFUSED` with disposition `NOT_SENT` in a short transaction.
+   Under NO circumstances SHALL a dispatch marker (`DISPATCHING`) be committed for a
+   pre-dispatch refusal.
+3. **Dispatch Marker Commitment:** Acquire the dispatch slot, verify that the
+   journal is not blocked and that recovery review is complete, commit the transition
+   from `ADMITTED` to `DISPATCHING` in a short transaction, and close the
+   transaction before broker I/O begins.
+4. **SDK Mutation Invocation:** Execute exactly one application-level SDK mutation
+   invocation under serialized execution. A database write transaction SHALL NEVER
+   remain open across broker I/O.
+5. **Outcome Handling:** Record the outcome in a short transaction immediately
+   following the invocation.
 
-For each admitted operation the system SHALL make at most one application-level SDK
-mutation invocation. The system SHALL NOT itself retry that invocation.
+For each admitted operation the system SHALL make at most one SDK mutation invocation
+and SHALL NOT retry that invocation automatically.
 
-If storage cannot be written before dispatch, the mutation SHALL be refused, and the
-refusal SHALL state that no order was sent.
+#### Scenario: Admission and intent are persisted before pre-dispatch safety checks
 
-#### Scenario: Intent and dispatch marker are committed before the call
+- **WHEN** a journaled mutation is submitted
+- **THEN** the system SHALL persist the operation in state `ADMITTED` in durable
+  storage before evaluating limits, allowlists or account resolution
 
-- **WHEN** a journaled mutation is dispatched
-- **THEN** the operation and its dispatch marker SHALL be committed to durable
+#### Scenario: Pre-dispatch refusal is recorded as refused and not sent without dispatch marker
+
+- **GIVEN** an operation is persisted in state `ADMITTED`
+- **WHEN** a pre-dispatch safety check (such as notional cap or account allowlist)
+  refuses the request
+- **THEN** the operation SHALL transition to `REFUSED` with local disposition
+  `NOT_SENT`
+- **AND** no `DISPATCHING` marker SHALL be committed
+- **AND** no SDK mutation invocation SHALL be made
+
+#### Scenario: Intent and dispatch marker are committed before SDK invocation
+
+- **GIVEN** all pre-dispatch safety checks have passed
+- **WHEN** the operation proceeds to dispatch
+- **THEN** the dispatch marker (`DISPATCHING`) SHALL be committed to durable
   storage before the SDK mutation invocation begins
 - **AND** the committing transaction SHALL be closed before that invocation
 
@@ -160,6 +258,15 @@ refusal SHALL state that no order was sent.
 - **WHEN** a journaled mutation is dispatched
 - **THEN** no database write transaction SHALL be open for the duration of the
   gateway call
+
+#### Scenario: Serialized execution prevents concurrent SDK dispatches
+
+- **GIVEN** two admitted operations are ready for dispatch
+- **WHEN** dispatching proceeds
+- **THEN** the system SHALL serialize the dispatch slot such that only one SDK
+  mutation invocation executes at a time
+- **AND** the dispatch marker for the second operation SHALL NOT be committed until
+  the first invocation and outcome commit complete
 
 #### Scenario: Storage failure before dispatch refuses the mutation
 
@@ -178,11 +285,11 @@ refusal SHALL state that no order was sent.
 
 #### Scenario: Crash after commitment leaves a recoverable record
 
-- **GIVEN** an operation's intent and dispatch marker were committed
+- **GIVEN** an operation's dispatch marker was committed
 - **WHEN** the process terminates before the invocation completes
-- **THEN** the journal SHALL retain a record indicating that an invocation may have
-  started
-- **AND** the operation SHALL NOT be recorded as never attempted
+- **THEN** the journal SHALL retain a record in state `DISPATCHING`
+- **AND** on restart the operation SHALL transition to `UNKNOWN_OUTCOME`
+- **AND** SHALL NOT be recorded as never attempted
 
 #### Scenario: Storage is not bypassed when it is unavailable
 
@@ -191,20 +298,48 @@ refusal SHALL state that no order was sent.
 - **THEN** the system SHALL refuse it
 - **AND** SHALL NOT fall back to dispatching the mutation unjournaled
 
+#### Scenario: Crash before dispatch marker leaves admitted pre-dispatch row
+
+- **GIVEN** an operation is persisted in state `ADMITTED`
+- **WHEN** the process terminates before the dispatch marker is committed
+- **THEN** the journal SHALL retain the row in state `ADMITTED`
+- **AND** SHALL NOT contain a dispatch marker
+
+#### Scenario: Crash during SDK invocation preserves dispatching state
+
+- **GIVEN** an operation committed `DISPATCHING` and the SDK mutation call began
+- **WHEN** the process crashes while waiting for the broker response
+- **THEN** upon restart the recovered state SHALL transition to `UNKNOWN_OUTCOME`
+- **AND** the journal SHALL record that the operation was in flight during crash
+
+#### Scenario: Crash after SDK invocation but before outcome persistence preserves uncertainty
+
+- **GIVEN** the SDK call returned an acknowledgement
+- **WHEN** the process crashes before the outcome is durably committed
+- **THEN** upon restart the operation SHALL be recovered as `UNKNOWN_OUTCOME`
+- **AND** SHALL NOT be recorded as clean success or not sent
+
 ### Requirement: Outcome Classification and Preservation of Uncertainty
 
 The journal SHALL record the outcome of each dispatched operation using the dispatch
 boundary defined by `order-placement` › Report the Dispatch Boundary.
 
 Local lifecycle states SHALL remain distinct from broker order statuses. Local states
-are `ADMITTED`, `DISPATCHING`, `ACKNOWLEDGED`, `UNKNOWN_OUTCOME`, `RECONCILED` and
-`REFUSED`. Broker statuses are those the provider reports, such as `SUBMITTED`,
-`FILLED_PART`, `FILLED_ALL`, `CANCELLED_ALL` and `REJECTED`.
+are `ADMITTED`, `DISPATCHING`, `ACKNOWLEDGED`, `UNKNOWN_OUTCOME`, `RECONCILED`,
+`REFUSED`, and `TERMINAL_ACCOUNTED`. Broker statuses are those the provider reports,
+such as `SUBMITTED`, `FILLED_PART`, `FILLED_ALL`, `CANCELLED_ALL` and `REJECTED`.
 
 - An acknowledgement SHALL NOT be recorded or reported as a fill.
 - An unknown outcome SHALL NOT be recorded or reported as a rejection.
 - An operation in `UNKNOWN_OUTCOME` SHALL NEVER be automatically resubmitted, and
   SHALL NEVER be resolved by dispatching a substitute or replacement order.
+- Dispatched operations with unknown outcomes or failed outcome persistence SHALL
+  block subsequent automated paper mutations (`JOURNAL_BLOCKED`).
+- Journal blocking SHALL operate independently of Stage 1's REAL relock halt
+  (`ARMED`/`HALTED`). `lock_trade` SHALL NOT clear paper journal failures.
+- When journal blocking is active, order mutations SHALL NOT fall back to
+  unjournaled execution. In particular, unjournaled cancellation fallbacks are
+  strictly forbidden.
 
 #### Scenario: Acknowledgement is recorded as acknowledged, not filled
 
@@ -245,6 +380,28 @@ are `ADMITTED`, `DISPATCHING`, `ACKNOWLEDGED`, `UNKNOWN_OUTCOME`, `RECONCILED` a
   a journal-owned order
 - **THEN** the journal SHALL record each as a distinct broker status
 - **AND** SHALL NOT collapse a partial fill into a complete fill or a cancellation
+
+#### Scenario: Dispatched uncertainty blocks subsequent automated paper mutations
+
+- **GIVEN** an operation enters `UNKNOWN_OUTCOME`
+- **WHEN** a subsequent paper mutation is requested
+- **THEN** the system SHALL refuse the new mutation
+- **AND** the refusal SHALL state that paper execution is blocked by unresolved
+  operations
+
+#### Scenario: Unjournaled cancellation fallback is forbidden when journal is blocked
+
+- **GIVEN** paper execution is blocked due to an unresolved operation or storage error
+- **WHEN** a cancellation request is received
+- **THEN** the system SHALL refuse the cancellation
+- **AND** SHALL NOT dispatch the cancellation unjournaled
+
+#### Scenario: Journal blocking is independent of trade relock halt and not cleared by lock_trade
+
+- **GIVEN** paper execution is in state `JOURNAL_BLOCKED`
+- **WHEN** `lock_trade` is called
+- **THEN** `lock_trade` SHALL NOT clear paper journal blocking
+- **AND** subsequent paper mutations SHALL remain blocked
 
 ### Requirement: Late Local Failure Reporting
 
@@ -300,24 +457,62 @@ in a terminal state. Reconciliation SHALL apply only to operations the journal o
 Reconciliation SHALL use order and history-order observations. It SHALL NOT depend on
 broker deal records, because the paper provider does not offer a deal query.
 
-Matching SHALL prefer a recorded broker order identifier. Without one, it SHALL match
-on the operation's recorded attributes within that operation's own submission window.
+Matching SHALL distinguish candidate matches from proof of ownership:
 
-- Exactly one match SHALL resolve the operation to `RECONCILED`, adopting the broker
-  status as authoritative.
-- Zero matches SHALL leave the operation unresolved. An empty result SHALL NOT be
-  treated as proof that no order exists at the broker.
-- Two or more matches SHALL leave the operation unresolved. The system SHALL NOT
-  choose between them.
+- Attribute/time matching (matching code, side, quantity, price within submission
+  window) produces **candidates**, NOT proof of journal ownership.
+- Automatic association to `RECONCILED` SHALL require **reliable broker identity**
+  (recorded broker order identifier) or **verified provider correlation** (unique
+  client tag / remark).
+- Finding a modification or cancellation target order does NOT prove that the
+  mutation succeeded.
+- Exactly one match with reliable identity/correlation SHALL resolve the operation
+  to `RECONCILED`, adopting the broker status as authoritative.
+- Zero matches, ambiguous matches, or candidate-only matches SHALL leave the
+  operation unresolved. An empty result SHALL NOT be treated as proof that no order
+  exists at the broker.
 
 Reconciliation SHALL NOT dispatch any order-mutating request.
 
-#### Scenario: A unique match resolves the operation
+#### Scenario: A unique match with reliable broker identity resolves the operation
 
-- **GIVEN** an operation is in `UNKNOWN_OUTCOME`
-- **WHEN** reconciliation finds exactly one matching broker order
+- **GIVEN** an operation is in `UNKNOWN_OUTCOME` with a recorded broker order ID
+- **WHEN** reconciliation queries the broker and matches that exact order ID
 - **THEN** the operation SHALL transition to `RECONCILED`
 - **AND** the broker's status SHALL be recorded as authoritative
+
+#### Scenario: Attribute and time matches are candidates, not proof of ownership
+
+- **GIVEN** an operation in `UNKNOWN_OUTCOME` has no recorded broker order ID
+- **WHEN** reconciliation finds an order matching symbol, side, quantity and price
+  within the submission window, but lacking verified correlation
+- **THEN** the match SHALL be treated as a candidate only
+- **AND** the operation SHALL remain unresolved in `UNKNOWN_OUTCOME`
+
+#### Scenario: Unrelated identical broker orders do not resolve the operation
+
+- **GIVEN** multiple orders with identical symbol, quantity, side and price exist on
+  the paper account
+- **WHEN** reconciliation evaluates an uncertain operation lacking reliable broker ID
+- **THEN** the system SHALL NOT associate any of the identical orders
+- **AND** the operation SHALL remain unresolved
+
+#### Scenario: Finding modification target order does not prove modification succeeded
+
+- **GIVEN** an order modification is in `UNKNOWN_OUTCOME`
+- **WHEN** reconciliation locates the target order at the broker
+- **THEN** locating the target order SHALL NOT be taken as proof that the
+  modification succeeded
+- **AND** the modification SHALL remain unresolved until verified provider
+  correlation confirms the patch was applied
+
+#### Scenario: Finding cancellation target order does not prove cancellation succeeded
+
+- **GIVEN** an order cancellation is in `UNKNOWN_OUTCOME`
+- **WHEN** reconciliation locates the target order with broker status `CANCELLED_ALL`
+- **THEN** the system SHALL NOT mark the cancellation operation as successful without
+  verifying that the cancellation was caused by this operation rather than prior
+  action or expiry
 
 #### Scenario: An empty result does not resolve the operation
 
@@ -343,13 +538,6 @@ Reconciliation SHALL NOT dispatch any order-mutating request.
 - **WHEN** reconciliation runs for any operation
 - **THEN** no order placement, modification or cancellation SHALL be dispatched
 
-#### Scenario: A recorded broker order identifier is preferred for matching
-
-- **GIVEN** an operation recorded a broker order identifier before the failure
-- **WHEN** reconciliation runs
-- **THEN** it SHALL match on that identifier
-- **AND** SHALL NOT resolve the operation from attribute matching alone
-
 #### Scenario: Orders the journal does not own are not reconciled
 
 - **GIVEN** the account holds orders that no journal operation owns
@@ -359,20 +547,27 @@ Reconciliation SHALL NOT dispatch any order-mutating request.
 
 ### Requirement: Storage Lifecycle and Admission Epochs
 
-The execution store SHALL verify its storage before serving mutations, and SHALL
-NEVER silently recreate missing storage.
+The execution store SHALL verify its storage before serving mutations, enforce
+single-process execution, and SHALL NEVER silently recreate missing storage.
 
 - Creating the journal SHALL be an explicit, configured act. A missing file at a
   configured path SHALL fail closed.
+- Exactly one executor process SHALL be permitted to access the journal. Enforced at
+  startup using an exclusive non-blocking OS lock on `execution.lock`. If locked,
+  startup SHALL fail closed immediately.
 - The schema version SHALL be recorded. A version newer than the running binary
   understands SHALL fail closed without modifying the file. A failed integrity check
   SHALL fail closed.
-- The store SHALL record an **admission epoch**, and SHALL stamp each admitted
-  operation with the epoch that admitted it. Each start SHALL retire the previous
-  epoch and begin a new one.
-- After a restart, an operation identifier that the store cannot account for — including
-  one whose record is absent because older storage was restored — SHALL be refused,
-  and SHALL NOT be admitted as a new operation.
+- The store SHALL record a fresh **admission epoch** at each process start.
+- The guarantee's scope and limitations:
+  - Epoch enforcement refuses unknown non-current-epoch tokens. It does not detect
+    all restores (such as when fresh tokens are generated).
+  - The system SHALL NOT recover missing history from restored backups.
+  - The system SHALL NOT infer `NOT_SENT` from a restored pre-dispatch (`ADMITTED`)
+    row without establishing verified journal continuity.
+- Storage failures during runtime SHALL fail closed immediately. Storage recovery
+  SHALL require restarting the server with healthy storage and completing recovery
+  review.
 
 #### Scenario: Missing storage is not silently recreated
 
@@ -403,23 +598,57 @@ NEVER silently recreate missing storage.
 - **THEN** startup SHALL fail closed
 - **AND** SHALL NOT serve mutations
 
-#### Scenario: An identifier from a retired epoch is refused
+#### Scenario: Single executor process is enforced by process file lock
 
-- **GIVEN** an operation identifier was admitted under a previous admission epoch
-- **AND** the store cannot account for that operation after a restart
-- **WHEN** the identifier is presented again
-- **THEN** the system SHALL refuse it
-- **AND** SHALL NOT admit it as a new operation
+- **GIVEN** the server starts and acquires the exclusive lock on `execution.lock`
+- **WHEN** another process attempts to open the execution journal
+- **THEN** the second process SHALL fail to acquire the lock
+- **AND** SHALL fail closed immediately without accessing the database
 
-#### Scenario: An older restored backup does not resurrect identifiers as new
+#### Scenario: Concurrent second executor process fails closed
 
-- **GIVEN** an older backup was restored over the journal, and it does not contain
-  rows for operations admitted after that backup was taken
-- **WHEN** one of those operation identifiers is presented again
-- **THEN** the system SHALL refuse it
-- **AND** SHALL NOT admit it as a new operation
+- **GIVEN** an active executor process holds the execution lockfile
+- **WHEN** a second executor process attempts startup
+- **THEN** startup of the second process SHALL fail with an error stating that
+  another process holds the execution store
 
-### Requirement: Recovery Review Gate
+#### Scenario: Storage failure recovery requires restarting with healthy storage
+
+- **GIVEN** the journal encounters a disk I/O failure or SQLite corruption
+- **WHEN** the error occurs
+- **THEN** the store SHALL transition to a storage-failed state and refuse subsequent
+  mutations
+- **AND** recovery SHALL require restarting the executor process with healthy storage
+  and running recovery review
+
+#### Scenario: Concurrent requests during storage failure fail closed
+
+- **GIVEN** journal storage is experiencing I/O errors
+- **WHEN** multiple mutation requests arrive concurrently
+- **THEN** all requests SHALL fail closed with storage error notifications
+- **AND** none SHALL be dispatched unjournaled
+
+#### Scenario: Restored backup with missing rows and stale existing rows refuses missing tokens
+
+- **GIVEN** an older database backup is restored that lacks rows for recently admitted
+  operations and contains stale non-terminal rows for completed orders
+- **WHEN** a caller retries an operation that was in the missing rows using its
+  original epoch
+- **THEN** the system SHALL look up the ID, find no row, observe the non-current
+  epoch, and refuse the request
+- **AND** the stale existing rows SHALL keep the recovery review gate closed at
+  startup
+
+#### Scenario: Journal continuity is required before inferring not sent from pre-dispatch row
+
+- **GIVEN** a restored database contains an operation in state `ADMITTED`
+- **AND** journal continuity across restarts is broken or unverified
+- **WHEN** recovery review evaluates the operation
+- **THEN** the system SHALL NOT assume or infer that the operation was `NOT_SENT`
+- **AND** SHALL require explicit evidence-backed operator accounting before gate
+  release
+
+### Requirement: Recovery Review Gate and Operator Acknowledgement
 
 Every start of a paper execution process SHALL require recovery review before new
 mutations are admitted.
@@ -428,8 +657,21 @@ On start, the system SHALL enumerate operations that are not in a terminal state
 Until review has run and each has been accounted for, new mutations SHALL be refused.
 Reconciliation and read operations SHALL remain available while the gate holds.
 
-This gate is specific to recovery. It is not a general operator pause facility, and
-it SHALL NOT be entered other than by a process start.
+When automatic reconciliation cannot resolve an uncertain operation, it SHALL be
+resolved only via a named, operator-only recovery acknowledgement mechanism:
+
+- The mechanism SHALL require operator authorization, explicit `operator_id`,
+  durable human-readable `reason`, and verifiable `evidence_reference`.
+- Unauthorized requests or requests with insufficient evidence SHALL be refused,
+  leaving execution blocked.
+- Mutation uncertainty SHALL remain distinct from recovery disposition. The system
+  SHALL NOT provide a generic "accept risk and mark reconciled" override.
+- **Evidence-backed accounting of a terminal target:** An operator MAY account for a
+  terminal target order (verified `CANCELLED_ALL`, `FILLED_ALL`, `REJECTED`, or
+  confirmed absent after trading close) as `TERMINAL_ACCOUNTED` to satisfy gate
+  release conditions, without falsely claiming that an uncertain mutation succeeded.
+- The acknowledgement SHALL write a durable record to `recovery_audit`.
+- The gate SHALL be released if and only if every operation is in a terminal state.
 
 #### Scenario: New mutations are refused until review has run
 
@@ -463,3 +705,44 @@ it SHALL NOT be entered other than by a process start.
 - **GIVEN** the journal's epoch history does not match what this process retired
 - **WHEN** the process starts
 - **THEN** recovery review SHALL be required before any mutation is admitted
+
+#### Scenario: Named operator recovery acknowledgement with valid evidence satisfies gate condition
+
+- **GIVEN** an operation `op-r1` is in `UNKNOWN_OUTCOME`
+- **WHEN** an authorized operator submits `acknowledge_recovery` with `operator_id`,
+  `resolution='TERMINAL_ACCOUNTED'`, justification `reason`, and verified broker
+  `evidence_reference`
+- **THEN** the operation SHALL transition to `TERMINAL_ACCOUNTED`
+- **AND** the recovery review gate condition SHALL be satisfied for that operation
+
+#### Scenario: Unauthorized recovery acknowledgement is refused
+
+- **GIVEN** an operation is in `UNKNOWN_OUTCOME`
+- **WHEN** a recovery acknowledgement is attempted without valid operator
+  authorization
+- **THEN** the request SHALL be refused as unauthorized
+- **AND** the operation state SHALL NOT change
+- **AND** execution SHALL remain blocked
+
+#### Scenario: Insufficient evidence keeps execution blocked
+
+- **GIVEN** an operation is in `UNKNOWN_OUTCOME`
+- **WHEN** an operator submits `acknowledge_recovery` with missing, blank, or
+  unverifiable evidence
+- **THEN** the request SHALL be refused for insufficient evidence
+- **AND** paper execution SHALL remain blocked
+
+#### Scenario: Recovery acknowledgement records durable audit entry
+
+- **GIVEN** a valid operator recovery acknowledgement is accepted
+- **WHEN** the transaction commits
+- **THEN** a row SHALL be inserted into `recovery_audit` containing the operator ID,
+  operation ID, resolution, reason, evidence reference, and timestamp
+
+#### Scenario: Evidence-backed accounting of terminal target accounts for exposure without false success claim
+
+- **GIVEN** an order cancellation is in `UNKNOWN_OUTCOME`
+- **AND** broker evidence proves the target order reached `FILLED_ALL`
+- **WHEN** the operator acknowledges recovery under `TERMINAL_ACCOUNTED`
+- **THEN** the operation SHALL be recorded as `TERMINAL_ACCOUNTED`
+- **AND** the system SHALL NOT record that the cancellation succeeded
