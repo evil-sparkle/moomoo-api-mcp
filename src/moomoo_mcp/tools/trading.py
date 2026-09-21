@@ -443,7 +443,8 @@ async def cancel_order(
     last four digits; name one with acc_id.
 
     HALT: cancellation stays ALLOWED while execution is halted. Reducing
-    exposure is exactly what an operator needs during a halt.
+    exposure is exactly what an operator needs during a halt. lock_trade is
+    what clears the halt, once the gateway accepts a lock again.
 
     THREE OUTCOMES: an error says which one happened.
     - "no order was sent": refused before anything was dispatched. Safe to fix
@@ -456,11 +457,13 @@ async def cancel_order(
 
     Args:
         order_id: Order ID to cancel. Get from get_orders().
-        trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
-        acc_id: Account ID from get_accounts().
+        trd_env: Trading environment - 'REAL' or 'SIMULATE'. REQUIRED.
+        acc_id: Account ID from get_accounts(), or '0' to resolve one when
+            exactly one account is eligible.
 
     Returns:
-        Dictionary with cancelled order details.
+        Dictionary with the cancelled order's details, plus the acc_id and
+        trd_env the cancellation was submitted against.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
     return serialize_identifiers(
