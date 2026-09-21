@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
+from moomoo_mcp.services.order_errors import OrderNotSentError
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.serialization import (
@@ -289,7 +290,13 @@ class TestAccountToolsThroughMcp:
 
         result = await call_tool(
             "place_order",
-            {"code": "US.AAPL", "price": 100.0, "qty": 1, "trd_side": "BUY"},
+            {
+                "code": "US.AAPL",
+                "price": 100.0,
+                "qty": 1,
+                "trd_side": "BUY",
+                "trd_env": "SIMULATE",
+            },
         )
 
         assert result.json["acc_id"] == str(ACCOUNT_ID)
@@ -303,7 +310,12 @@ class TestAccountToolsThroughMcp:
 
         result = await call_tool(
             "modify_order",
-            {"order_id": "1", "modify_order_op": "NORMAL", "qty": 10},
+            {
+                "order_id": "1",
+                "modify_order_op": "NORMAL",
+                "qty": 10,
+                "trd_env": "SIMULATE",
+            },
         )
 
         assert result.json["acc_id"] == str(ACCOUNT_ID)
@@ -315,7 +327,9 @@ class TestAccountToolsThroughMcp:
             "acc_id": ACCOUNT_ID,
         }
 
-        result = await call_tool("cancel_order", {"order_id": "1"})
+        result = await call_tool(
+            "cancel_order", {"order_id": "1", "trd_env": "SIMULATE"}
+        )
 
         assert result.json["acc_id"] == str(ACCOUNT_ID)
 
@@ -429,8 +443,9 @@ class TestRetrievalToRequestRoundtrip:
         service.trade_ctx = ctx
 
         # A double-parsed id arrives as a float, which is now refused outright
-        # rather than silently truncated to the wrong position.
-        with pytest.raises(ValueError, match="non-integer 'position_id'"):
+        # rather than silently truncated to the wrong position. The refusal
+        # reaches the caller as "not sent", like every pre-dispatch failure.
+        with pytest.raises(OrderNotSentError, match="non-integer 'position_id'"):
             service.place_combo_order(
                 combo_legs=[
                     {
@@ -443,5 +458,6 @@ class TestRetrievalToRequestRoundtrip:
                 ],
                 price=2.5,
                 qty=1,
+                trd_env="SIMULATE",
                 acc_id=123,
             )

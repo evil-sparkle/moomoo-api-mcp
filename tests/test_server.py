@@ -1,4 +1,4 @@
-"""Tests for auto-unlock trade at startup functionality."""
+"""Server startup: configuration, connections and the transport it serves."""
 
 import os
 from unittest.mock import MagicMock, patch
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import moomoo_mcp.server as server
-from moomoo_mcp.server import _auto_unlock_trade, app_lifespan, close_services
+from moomoo_mcp.server import app_lifespan, close_services
 from moomoo_mcp.services.trading_policy import (
     ENV_VAR,
     TradingMode,
@@ -14,7 +14,10 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
 )
 
-REAL_POLICY = TradingPolicy(TradingMode.REAL)
+REAL_POLICY = TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123}))
+# REAL mode requires its account allowlist, so every REAL environment here
+# carries one.
+REAL_ENV = {ENV_VAR: "REAL", "MOOMOO_REAL_ACC_IDS": "123"}
 
 
 @pytest.fixture(autouse=True)
@@ -29,89 +32,16 @@ def fresh_process_services():
     server._services = None
 
 
-class TestAutoUnlockTrade:
-    """Tests for _auto_unlock_trade function."""
+class TestNoStartupUnlock:
+    """Startup auto-unlock is gone, and nothing replaced it.
 
-    def test_auto_unlock_with_plain_password(self) -> None:
-        """Test auto-unlock when MOOMOO_TRADE_PASSWORD is set."""
-        mock_trade_service = MagicMock()
-        mock_trade_service.policy = REAL_POLICY
-        mock_trade_service.get_accounts.return_value = [{"acc_id": 123}]
+    It was a second unlock path, and the SDK replays a cached unlock after
+    every reconnect, so it left the gateway unlocked for the life of the
+    process. REAL writes now unlock just in time for one order instead.
+    """
 
-        with patch.dict(
-            os.environ, {"MOOMOO_TRADE_PASSWORD": "test_password"}, clear=False
-        ):
-            _auto_unlock_trade(mock_trade_service)
-
-        # get_accounts must be called first to initialize account context
-        mock_trade_service.get_accounts.assert_called_once()
-        mock_trade_service.unlock_trade.assert_called_once_with(
-            password="test_password"
-        )
-
-    def test_auto_unlock_with_md5_password(self) -> None:
-        """Test auto-unlock when only MOOMOO_TRADE_PASSWORD_MD5 is set."""
-        mock_trade_service = MagicMock()
-        mock_trade_service.policy = REAL_POLICY
-
-        env_vars = {"MOOMOO_TRADE_PASSWORD_MD5": "md5_hash_value"}
-        with patch.dict(os.environ, env_vars, clear=False):
-            # Ensure plain password is not set
-            if "MOOMOO_TRADE_PASSWORD" in os.environ:
-                del os.environ["MOOMOO_TRADE_PASSWORD"]
-            _auto_unlock_trade(mock_trade_service)
-
-        mock_trade_service.unlock_trade.assert_called_once_with(
-            password_md5="md5_hash_value"
-        )
-
-    def test_plain_password_takes_precedence(self) -> None:
-        """Test that plain password takes precedence over MD5."""
-        mock_trade_service = MagicMock()
-        mock_trade_service.policy = REAL_POLICY
-
-        env_vars = {
-            "MOOMOO_TRADE_PASSWORD": "plain_password",
-            "MOOMOO_TRADE_PASSWORD_MD5": "md5_hash",
-        }
-        with patch.dict(os.environ, env_vars, clear=False):
-            _auto_unlock_trade(mock_trade_service)
-
-        # Should use plain password, not MD5
-        mock_trade_service.unlock_trade.assert_called_once_with(
-            password="plain_password"
-        )
-
-    def test_skip_unlock_when_no_env_vars(self) -> None:
-        """Test that unlock is skipped when no env vars are set."""
-        mock_trade_service = MagicMock()
-        mock_trade_service.policy = REAL_POLICY
-
-        # Create a clean environment without the password vars
-        clean_env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("MOOMOO_TRADE_PASSWORD", "MOOMOO_TRADE_PASSWORD_MD5")
-        }
-
-        with patch.dict(os.environ, clean_env, clear=True):
-            _auto_unlock_trade(mock_trade_service)
-
-        mock_trade_service.unlock_trade.assert_not_called()
-
-    def test_graceful_failure_on_unlock_error(self) -> None:
-        """Test that unlock failure is handled gracefully (no exception raised)."""
-        mock_trade_service = MagicMock()
-        mock_trade_service.policy = REAL_POLICY
-        mock_trade_service.unlock_trade.side_effect = RuntimeError("Invalid password")
-
-        with patch.dict(
-            os.environ, {"MOOMOO_TRADE_PASSWORD": "wrong_password"}, clear=False
-        ):
-            # Should not raise an exception
-            _auto_unlock_trade(mock_trade_service)
-
-        mock_trade_service.unlock_trade.assert_called_once()
+    def test_the_server_module_has_no_auto_unlock(self) -> None:
+        assert not hasattr(server, "_auto_unlock_trade")
 
 
 class TestLifespanResilience:
@@ -308,62 +238,68 @@ class TestStartupTradingMode:
         assert trade_service.policy.mode is TradingMode.SIMULATE
 
     @pytest.mark.asyncio
-    async def test_real_mode_with_password_unlocks(self) -> None:
-        _, trade_service = await self._start(
-            {ENV_VAR: "REAL", "MOOMOO_TRADE_PASSWORD": "hunter2"}
+    async def test_real_mode_with_a_password_does_not_unlock_at_startup(
+        self,
+    ) -> None:
+        """The credential is handed to the service for just-in-time use."""
+        captured, trade_service = await self._start(
+            {**REAL_ENV, "MOOMOO_TRADE_PASSWORD": "hunter2"}
         )
 
-        trade_service.unlock_trade.assert_called_once_with(password="hunter2")
-
-    @pytest.mark.asyncio
-    async def test_failed_unlock_does_not_change_the_mode(self) -> None:
-        moomoo_service, trade_service = self._mock_services()
-        trade_service.unlock_trade.side_effect = RuntimeError("bad password")
-
-        def make_trade_service(**kwargs):
-            trade_service.policy = kwargs["policy"]
-            return trade_service
-
-        env = {ENV_VAR: "REAL", "MOOMOO_TRADE_PASSWORD": "wrong"}
-        with (
-            patch.dict(os.environ, env, clear=True),
-            patch("moomoo_mcp.server.MoomooService", return_value=moomoo_service),
-            patch("moomoo_mcp.server.TradeService", side_effect=make_trade_service),
-            patch("moomoo_mcp.server.MarketDataService"),
-        ):
-            async with app_lifespan(MagicMock()):
-                pass
-
-        # Startup survives, the mode is untouched, and nothing is retried.
-        assert trade_service.policy.mode is TradingMode.REAL
-        assert trade_service.unlock_trade.call_count == 1
-        trade_service.place_order.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_real_mode_unready_connection_skips_auto_unlock(self) -> None:
-        """A REAL-mode startup whose trade connection is not ready skips auto-unlock."""
-        moomoo_service, trade_service = self._mock_services()
-        trade_service.connect.side_effect = None
-        trade_service.trade_ctx = None
-
-        def make_trade_service(**kwargs):
-            trade_service.policy = kwargs["policy"]
-            return trade_service
-
-        env = {ENV_VAR: "REAL", "MOOMOO_TRADE_PASSWORD": "hunter2"}
-        with (
-            patch.dict(os.environ, env, clear=True),
-            patch("moomoo_mcp.server.MoomooService", return_value=moomoo_service),
-            patch("moomoo_mcp.server.TradeService", side_effect=make_trade_service),
-            patch("moomoo_mcp.server.MarketDataService"),
-            patch("moomoo_mcp.server._auto_unlock_trade") as mock_auto_unlock,
-        ):
-            async with app_lifespan(MagicMock()):
-                pass
-
-        assert trade_service.policy.mode is TradingMode.REAL
-        mock_auto_unlock.assert_not_called()
         trade_service.unlock_trade.assert_not_called()
+        assert captured["trade_password"] == "hunter2"
+
+    @pytest.mark.asyncio
+    async def test_real_mode_without_an_allowlist_fails_startup(self) -> None:
+        with pytest.raises(TradingModeConfigError, match="MOOMOO_REAL_ACC_IDS"):
+            await self._start({ENV_VAR: "REAL"})
+
+    @pytest.mark.asyncio
+    async def test_an_instrument_lookup_is_wired_to_the_quote_context(self) -> None:
+        captured, _ = await self._start({})
+
+        assert captured["instrument_lookup"] is not None
+
+
+class TestStartupConfigurationFailure:
+    """An invalid variable exits before anything listens."""
+
+    @pytest.mark.parametrize(
+        "env",
+        [
+            {ENV_VAR: "PAPER"},
+            {ENV_VAR: "REAL"},  # no allowlist
+            {"MOOMOO_MAX_ORDER_NOTIONAL": "25000"},  # legacy variable alone
+            {"MOOMOO_SECURITY_FIRM": "NOTAFIRM"},
+            {"MOOMOO_OPEND_PORT": "not-a-port"},
+        ],
+    )
+    def test_main_exits_before_serving(self, env) -> None:
+        """A server running with configuration it rejected would fail every
+        request, quietly, one at a time. Exiting names the variable instead."""
+        from moomoo_mcp.server import main
+
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
+            patch("uvicorn.run") as mock_uvicorn_run,
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        mock_mcp_run.assert_not_called()
+        mock_uvicorn_run.assert_not_called()
+
+    def test_a_valid_configuration_serves(self) -> None:
+        from moomoo_mcp.server import main
+
+        with (
+            patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}, clear=True),
+            patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
+        ):
+            main()
+
+        mock_mcp_run.assert_called_once()
 
 
 class TestFastMCPSecurity:
@@ -470,8 +406,8 @@ class TestFastMCPSecurity:
         from moomoo_mcp.server import main
 
         with (
-            patch.dict(os.environ, {"MCP_TRANSPORT": "unsupported-mode"}),
-            pytest.raises(ValueError, match="Invalid MCP_TRANSPORT"),
+            patch.dict(os.environ, {"MCP_TRANSPORT": "unsupported-mode"}, clear=True),
+            pytest.raises(SystemExit),
         ):
             main()
 
@@ -548,7 +484,25 @@ class TestFastMCPSecurity:
                 in caplog.text
             )
 
-    def test_main_logs_streamable_http_endpoint_without_auth(
+    @pytest.mark.parametrize("transport", ["sse", "streamable-http"])
+    def test_main_refuses_http_without_a_token(self, transport) -> None:
+        """An unauthenticated HTTP endpoint exposes every tool this server has,
+        including the order-mutating ones, to anything that can reach the port.
+        """
+        from moomoo_mcp.server import main
+
+        with (
+            patch.dict(os.environ, {"MCP_TRANSPORT": transport}, clear=True),
+            patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
+            patch("uvicorn.run") as mock_uvicorn_run,
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        mock_mcp_run.assert_not_called()
+        mock_uvicorn_run.assert_not_called()
+
+    def test_the_opt_out_serves_unauthenticated_in_read_only(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         import logging
@@ -556,22 +510,55 @@ class TestFastMCPSecurity:
         from moomoo_mcp.server import main
 
         with (
-            caplog.at_level(logging.INFO),
+            caplog.at_level(logging.WARNING),
             patch.dict(
                 os.environ,
                 {
                     "MCP_TRANSPORT": "streamable-http",
-                    "MCP_AUTH_TOKEN": "",
+                    "MCP_ALLOW_UNAUTHENTICATED_HTTP": "1",
+                    ENV_VAR: "READ_ONLY",
                 },
+                clear=True,
             ),
+            patch("moomoo_mcp.server.create_streamable_http_app"),
+            patch("uvicorn.run") as mock_uvicorn_run,
+        ):
+            main()
+
+        mock_uvicorn_run.assert_called_once()
+        assert "without authentication" in caplog.text
+
+    @pytest.mark.parametrize("env", [REAL_ENV, {ENV_VAR: "SIMULATE"}])
+    def test_the_opt_out_is_refused_in_a_writing_mode(self, env) -> None:
+        from moomoo_mcp.server import main
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    **env,
+                    "MCP_TRANSPORT": "streamable-http",
+                    "MCP_ALLOW_UNAUTHENTICATED_HTTP": "1",
+                },
+                clear=True,
+            ),
+            patch("uvicorn.run") as mock_uvicorn_run,
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+        mock_uvicorn_run.assert_not_called()
+
+    def test_stdio_starts_without_a_token(self) -> None:
+        from moomoo_mcp.server import main
+
+        with (
+            patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}, clear=True),
             patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
         ):
             main()
-            mock_mcp_run.assert_called_once_with(transport="streamable-http")
-            assert (
-                "Serving MCP streamable-http endpoint without authentication at http://127.0.0.1:8000/mcp"
-                in caplog.text
-            )
+
+        mock_mcp_run.assert_called_once()
 
 
 class TestStatelessStreamableHTTP:
