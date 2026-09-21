@@ -5,6 +5,11 @@
 These tasks are read-only or SIMULATE-only. None places a REAL order. Record each
 finding in `design.md` under the decision it affects.
 
+Two harnesses run them, and `verification.md` holds the evidence:
+`scripts/verify_sdk_facts.py` (offline, also run by `tests/test_sdk_facts.py`) and
+`scripts/verify_gateway_facts.py` (operator-run, one authorization flag per
+non-read-only phase, no REAL-order path).
+
 - [ ] 1.1 Establish the instrument facts the assessment needs, for a US stock, a US
   ETF and a US equity option.
   - From `get_market_snapshot`: `last_price`, `bid_price`, `ask_price`, `lot_size`,
@@ -29,6 +34,15 @@ finding in `design.md` under the decision it affects.
 
   Verify by recording each field and its source call, and by stating which of the two
   option fields carries the monetary multiplier and on what evidence.
+
+  **Status: partially established.** The SDK's own field table narrows the
+  multiplier to `option_contract_size` and marks `option_contract_multiplier` as
+  index-options-only; two further findings (the `'N/A'` sentinel reaching the
+  multiplier, and `option_contract_size` being unable to report itself missing) are
+  recorded in Decision 3. The instrument reads, the independent cross-check and the
+  currency confirmation need a gateway and an account, which this session had
+  neither of. Options stay refused while a cap is configured. See
+  `verification.md`.
 - [ ] 1.2 Measure how long a terminal paper order stays queryable, using a `DAY`
   order.
 
@@ -44,6 +58,12 @@ finding in `design.md` under the decision it affects.
   Verify by recording both retention windows. This is what Decision 5's risk actually
   needs — how late a modification can still find its target order — and it is
   answerable on a day-only provider.
+
+  **Status: not run** — needs a gateway and paper-order authorization. Run
+  `verify_gateway_facts.py paper-retention`, then `paper-retention-recheck` after
+  the close. One offline finding constrains the measurement:
+  `history_order_list_query` accepts no `order_id`, so the history side filters by
+  code and matches the id client-side.
 
 - [ ] 1.2a *(optional, separately authorized)* If the day-only constraint is to be
   tested rather than assumed, attempt one SIMULATE order with a non-`DAY` time in
@@ -69,6 +89,12 @@ finding in `design.md` under the decision it affects.
   SDK's lock path resolves a REAL account before issuing the lock, so a gateway that
   cannot resolve one produces a failing lock — and `lock_trade` is the only route out
   of `HALTED`. Record the outcome so the halt has a verified recovery path.
+
+  **Status: not run** — needs a REAL gateway, the credential, and authorization to
+  change the gateway's lock state. The premise is confirmed offline: `_check_acc_id(
+  TrdEnv.REAL, 0)` sits outside the `is_unlock` branch, so locking resolves a REAL
+  account too. Run `verify_gateway_facts.py real-reads
+  --i-authorize-real-gateway-lock`.
 
 ## 2. Settings and policy configuration
 
