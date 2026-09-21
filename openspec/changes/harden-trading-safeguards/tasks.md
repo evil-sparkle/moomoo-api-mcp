@@ -98,7 +98,7 @@ non-read-only phase, no REAL-order path).
 
 ## 2. Settings and policy configuration
 
-- [ ] 2.1 Add `moomoo_mcp/settings.py` with `Settings` and `load_settings(environ)`.
+- [x] 2.1 Add `moomoo_mcp/settings.py` with `Settings` and `load_settings(environ)`.
   It covers the OpenD host and port, the policy, the credential (plain text takes
   precedence), a security firm validated against `SecurityFirm`, the transport, the
   auth token and `MCP_ALLOW_UNAUTHENTICATED_HTTP`. It uses no regex. Verify with new
@@ -106,7 +106,7 @@ non-read-only phase, no REAL-order path).
   - each invalid variable, with the error naming it;
   - credential precedence;
   - an unknown firm.
-- [ ] 2.2 Change `TradingPolicy`:
+- [x] 2.2 Change `TradingPolicy`:
   - validate `max_order_qty` and the caps in `__post_init__` (finite, `> 0`);
   - make `max_order_notional` a currency → amount mapping, parsed from
     `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` (`CURRENCY:AMOUNT[,…]`);
@@ -120,14 +120,14 @@ non-read-only phase, no REAL-order path).
   construction. Add a case for both variables set, which enforces the new cap and
   logs, and one for the legacy variable alone, where the error names the new
   variable.
-- [ ] 2.3 Add `real_acc_ids` to the policy, parsed from `MOOMOO_REAL_ACC_IDS`
+- [x] 2.3 Add `real_acc_ids` to the policy, parsed from `MOOMOO_REAL_ACC_IDS`
   (comma-separated decimal identifiers). It is required when the mode is REAL and
   ignored otherwise. Verify with tests for a missing, empty or malformed value in
   REAL, and for an absent value in SIMULATE.
 
 ## 3. Order-value validation and limit assessment
 
-- [ ] 3.1 Add `validate_order_values` to `services/validation.py`. It checks:
+- [x] 3.1 Add `validate_order_values` to `services/validation.py`. It checks:
   - a positive `int` quantity, with `bool` rejected;
   - finite, non-negative single-leg price, `aux_price` and trail values;
   - `price > 0` for `FIXED_LIMIT_TYPES`, defined here together with
@@ -137,7 +137,7 @@ non-read-only phase, no REAL-order path).
 
   It absorbs the existing stop and trailing required-field checks. Verify with unit
   tests for each rule, including that `TRAILING_STOP_LIMIT` accepts a zero price.
-- [ ] 3.2 Add the frozen dataclasses `InstrumentFacts` and `OrderFacts`, and the pure
+- [x] 3.2 Add the frozen dataclasses `InstrumentFacts` and `OrderFacts`, and the pure
   method `TradingPolicy.assess_order` that implements design Decision 3:
   - the quantity cap on the largest leg quantity;
   - the market → currency table;
@@ -173,7 +173,7 @@ non-read-only phase, no REAL-order path).
 
 ## 4. Dispatch boundary, account routing and modification checks in `TradeService`
 
-- [ ] 4.1 Add `services/order_errors.py` with `OrderNotSentError`,
+- [x] 4.1 Add `services/order_errors.py` with `OrderNotSentError`,
   `OrderOutcomeUnknownError` and `OrderReceiptUnreadableError`. Add a
   `_not_sent(operation)` wrapper that converts every pre-dispatch failure, keeping
   `__cause__`: `TradingPolicyError`, `ValueError`, `TypeError`, not-connected errors,
@@ -186,7 +186,7 @@ non-read-only phase, no REAL-order path).
   - unreadable: "acknowledged", "do not resend".
 
   Also verify that no message contains "reached", and that the cause is chained.
-- [ ] 4.2 Replace `_find_best_account` with `_resolve_account(trd_env, market,
+- [x] 4.2 Replace `_find_best_account` with `_resolve_account(trd_env, market,
   acc_id)`, following design Decision 6:
   - check the allowlist for explicit REAL identifiers without a gateway call;
   - resolve `acc_id == 0` only when exactly one account is eligible;
@@ -195,7 +195,7 @@ non-read-only phase, no REAL-order path).
 
   Verify with tests for a single eligible account, two eligible accounts, none, an
   unlisted explicit account, and SIMULATE being unaffected by the allowlist.
-- [ ] 4.3 Add the instrument adapter and accept it as `instrument_lookup` in the
+- [x] 4.3 Add the instrument adapter and accept it as `instrument_lookup` in the
   `TradeService` constructor, building `OrderFacts` only when a notional cap is
   configured. The adapter:
   - calls `get_market_snapshot` for prices and contract fields, and
@@ -212,14 +212,14 @@ non-read-only phase, no REAL-order path).
   carrying `'N/A'` for bid and ask yields `None` for those fields and no type error;
   a code missing from the classification response refuses the order; and every
   adapter failure surfaces as not sent, never as an unknown outcome.
-- [ ] 4.4 Rework `place_order`, `place_combo_order` and `preview_combo_order` onto
+- [x] 4.4 Rework `place_order`, `place_combo_order` and `preview_combo_order` onto
   the pre-dispatch sequence:
   - make `trd_env` keyword-only and required on the write methods;
   - have preview use the same resolver;
   - add `acc_id` and `trd_env` to the write results.
 
   Verify with the updated `test_trade_service.py` placement and combo tests.
-- [ ] 4.5 Change `modify_order` so `NORMAL` and `ENABLE` fetch the existing order
+- [x] 4.5 Change `modify_order` so `NORMAL` and `ENABLE` fetch the existing order
   with `order_list_query(order_id=…, refresh_cache=True)`, merge the requested
   changes, and assess the result with the existing order's side and order type. A
   missing order is refused as not sent. `CANCEL`, `DISABLE` and `DELETE` skip the
@@ -231,10 +231,10 @@ non-read-only phase, no REAL-order path).
 
 ## 5. Unlock lifecycle and execution state
 
-- [ ] 5.1 Pass the credential into `TradeService` from the settings, and remove the
+- [x] 5.1 Pass the credential into `TradeService` from the settings, and remove the
   `os.environ` reads from the trade service. Verify that JIT tests construct the
   service with a credential instead of patching the environment.
-- [ ] 5.2 Replace `_jit_trade_unlock` with `_dispatch_write`, following design
+- [x] 5.2 Replace `_jit_trade_unlock` with `_dispatch_write`, following design
   Decision 7:
   - serialize with `_jit_lock`;
   - on unlock failure, raise `OrderNotSentError`;
@@ -251,7 +251,7 @@ non-read-only phase, no REAL-order path).
   - `RET_OK` with an unconvertible payload → receipt unreadable;
   - an unlock failure, with no write call made;
   - relock always being attempted.
-- [ ] 5.3 Add `_ExecutionState` (`ARMED`/`HALTED`) with exactly the Decision 8
+- [x] 5.3 Add `_ExecutionState` (`ARMED`/`HALTED`) with exactly the Decision 8
   transition table:
   - JIT relock failure → `HALTED`, keeping the original `halted_since` if already
     halted;
@@ -265,37 +265,37 @@ non-read-only phase, no REAL-order path).
   relock fails. Verify with tests covering every Execution Halt scenario in
   `specs/trade-unlock`, including that a halted cancellation's successful relock and
   a reconnect lock both leave the state `HALTED`.
-- [ ] 5.4 Make the public `lock_trade` take `_jit_lock` in blocking mode, drive the
+- [x] 5.4 Make the public `lock_trade` take `_jit_lock` in blocking mode, drive the
   `HALTED` → `ARMED` transition, and return `execution_halted` and `halt_cleared`
   from the service and the `lock_trade` tool. Verify with tests:
   - `lock_trade` waits while a JIT write holds the lock;
   - it clears a halt on success, reporting `halt_cleared: true`;
   - it keeps the halt and the original `halted_since` on failure;
   - it reports `halt_cleared: false` when already `ARMED`.
-- [ ] 5.5 Extend `_enforce_gateway_lock` to REAL with a credential. On reconnect,
+- [x] 5.5 Extend `_enforce_gateway_lock` to REAL with a credential. On reconnect,
   skip the lock when `_jit_lock.acquire(blocking=False)` fails. Verify with tests:
   - REAL with a credential locks on connect and on reconnect;
   - a reconnect during a held JIT lock issues no lock;
   - SIMULATE, and REAL without a credential, issue no lock;
   - a successful lock at rest does not change the execution state.
-- [ ] 5.6 Make the public `unlock_trade` refuse when a credential is configured, and
+- [x] 5.6 Make the public `unlock_trade` refuse when a credential is configured, and
   add a private `_unlock_gateway` for JIT. In `tools/account.py`, remove the
   environment fallback and the `"none"`/`"null"` handling, require an explicit
   password or hash, and state the persistence of a manual unlock in the result and
   docstring. Verify with `test_account.py` cases for each Manual Unlock Tool
   scenario.
-- [ ] 5.7 Delete `_auto_unlock_trade` and its call in `_build_services`. Remove or
+- [x] 5.7 Delete `_auto_unlock_trade` and its call in `_build_services`. Remove or
   replace the `TestAutoUnlock` tests and
   `test_real_mode_unready_connection_skips_auto_unlock`. Verify with a test that
   REAL startup with a credential makes no unlock request.
 
 ## 6. Server wiring, authentication and health
 
-- [ ] 6.1 Have `main()` call `load_settings()` before choosing a transport, and have
+- [x] 6.1 Have `main()` call `load_settings()` before choosing a transport, and have
   `_build_services()` use the loaded settings. Wire `instrument_lookup` to the
   shared quote context's snapshot. Verify with a `test_server.py` case showing that
   an invalid variable exits before `mcp.run` or `uvicorn.run` is called.
-- [ ] 6.2 Refuse `sse` and `streamable-http` without a token, unless
+- [x] 6.2 Refuse `sse` and `streamable-http` without a token, unless
   `MCP_ALLOW_UNAUTHENTICATED_HTTP=1` is set and the mode is READ_ONLY. The opt-out
   logs a warning. Replace `test_main_logs_streamable_http_endpoint_without_auth`
   with tests for:
@@ -303,14 +303,14 @@ non-read-only phase, no REAL-order path).
   - the opt-out in READ_ONLY;
   - the opt-out refused in REAL and SIMULATE;
   - stdio without a token.
-- [ ] 6.3 Add `execution_halted`, `halted_since` and `halt_error` to
+- [x] 6.3 Add `execution_halted`, `halted_since` and `halt_error` to
   `HealthCheck.result()`, without any probe dependency. Verify with `test_health.py`
   and `test_system.py` cases for the `ARMED` and `HALTED` states, with status
   unchanged and the state not cleared by the health call.
 
 ## 7. Tool surface
 
-- [ ] 7.1 In `tools/trading.py`, remove the `trd_env` default from `place_order`,
+- [x] 7.1 In `tools/trading.py`, remove the `trd_env` default from `place_order`,
   `place_combo_order`, `modify_order` and `cancel_order`, and rewrite their
   docstrings:
   - remove "Default is REAL";
@@ -327,7 +327,7 @@ non-read-only phase, no REAL-order path).
 
 ## 8. Configuration, docs and project context
 
-- [ ] 8.1 Update the configuration files:
+- [x] 8.1 Update the configuration files:
   - `.env.example`: add `MOOMOO_REAL_ACC_IDS`,
     `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`, `MCP_AUTH_TOKEN` as required for HTTP,
     and `MCP_ALLOW_UNAUTHENTICATED_HTTP`. Mark `MOOMOO_MAX_ORDER_NOTIONAL` as a
@@ -337,7 +337,7 @@ non-read-only phase, no REAL-order path).
 
   Verify with `tests/test_compose_topology.py` still passing, and
   `./scripts/smoke-test.sh` in CI.
-- [ ] 8.2 Update the documentation:
+- [x] 8.2 Update the documentation:
   - `docs/deploy-vps.md`: the migration steps from design.md, the rollback with no
     `.env` edit, and the crash-loop signal.
   - `docs/state-and-restarts.md`: the unlock lifecycle, the `ARMED`/`HALTED`
@@ -352,18 +352,28 @@ non-read-only phase, no REAL-order path).
 
 ## 9. Integration check
 
-- [ ] 9.1 Run the full local gate and verify that each command passes:
+- [x] 9.1 Run the full local gate and verify that each command passes:
   - `uv run ruff check .`
   - `uv run ruff format --check .`
   - `uv run basedpyright`
   - `uv run pytest`
   - `npx -y @fission-ai/openspec@1.13.1 validate --all --strict --no-interactive`
+
+  All five pass: ruff clean, 60 files formatted, basedpyright 0 errors, 928
+  passed / 1 skipped / 72 subtests, openspec 25/25. Run on Python 3.12, which
+  is what CI uses.
 - [ ] 9.2 Against the live gateway in SIMULATE, run through each step and record the
   outcomes in the PR description:
   1. place a limit order with `acc_id="0"`;
   2. modify only its price past the cap and observe a not-sent refusal;
   3. cancel it;
   4. check that `check_health` shows `execution_halted: false`.
+
+  **Status: not run** — no gateway was reachable from the implementing session,
+  and step 1 places a paper order, which needs its own authorization. The
+  equivalent is covered against a fake broker in
+  `tests/test_services/test_trade_service.py`; that is not a substitute for the
+  live run, and the two are kept separate deliberately.
 - [ ] 9.3 Operator-run, after adding the new variables to the VPS `.env`: deploy,
   confirm authenticated `initialize` through `deploy_verify.py`, and optionally place
   and cancel a minimal far-from-market REAL limit order. Verify with the deploy log
