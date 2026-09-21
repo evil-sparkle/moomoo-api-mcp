@@ -49,6 +49,7 @@ and the exposure above.
 | OpenD device authorization, remembered login | `opend-data` volume | yes | yes | **yes** |
 | OpenD's live login to Moomoo | OpenD process memory | no — re-logs in, ~30s | no | no |
 | OpenD trade unlock | OpenD process memory | no — comes back locked | no | no |
+| Execution halt (`ARMED`/`HALTED`) | MCP server process memory | yes | **no — a new process starts `ARMED`** | no |
 | Gateway connections, quote subscriptions | MCP server process memory | yes — the SDK reconnects and replays | no — reopened on the next request | no |
 
 The only row that is genuinely persistent is the third, and it is the one that
@@ -103,9 +104,70 @@ supervisor restarts OpenD in place and the endpoint never stops answering, so
 `degraded`. What does not work, for the ~30s OpenD takes to log back in, is
 anything that has to reach the gateway: quotes, positions, orders. Those fail
 with a bounded connect timeout rather than hanging. The SDK reconnects on its own — every six seconds, for as long as it
-takes — and on reconnect replays the quote subscriptions it held, re-asserts the
-gateway lock in `READ_ONLY` mode, and replays a REAL deployment's startup unlock
-if one was performed. The address never moves now, because it is loopback.
+takes — and on reconnect replays the quote subscriptions it held and re-asserts
+the gateway lock at rest. The address never moves now, because it is loopback.
+
+One exception: if a write is in flight and holding the gateway deliberately
+unlocked, the reconnect skips its lock request. Locking underneath a write
+would make it fail on a locked gateway; the write's own re-lock covers that
+window instead.
+
+## The unlock lifecycle, and the execution halt
+
+There is one unlock path, and it lasts for one order.
+
+In `REAL` mode with a stored trade credential (`MOOMOO_TRADE_PASSWORD` or
+`MOOMOO_TRADE_PASSWORD_MD5`), the server keeps the gateway **locked at rest**:
+it issues a lock when it connects and after every reconnect, unlocks
+immediately before dispatching a single order, and re-locks immediately after.
+`READ_ONLY` locks at rest too, and never unlocks at all. `SIMULATE`, and `REAL`
+without a stored credential, leave the gateway alone — the latter because a
+server that cannot unlock again would strand an operator who unlocked by hand.
+
+There is no startup unlock. There used to be, and it was a second unlock path
+that the SDK then replayed after every reconnect, so the gateway stayed
+unlocked for the life of the process — exactly what the lock guards against.
+
+**The halt.** If the re-lock after an order fails, the gateway may still be
+unlocked and nothing has confirmed otherwise. The service moves to `HALTED`:
+
+| From | Event | To |
+| --- | --- | --- |
+| `ARMED` | a just-in-time re-lock fails | `HALTED`, recording the time and the lock error |
+| `HALTED` | a just-in-time re-lock fails again | `HALTED`, keeping the original start time |
+| `HALTED` | `lock_trade` fails | `HALTED`, keeping the original start time |
+| `HALTED` | `lock_trade` succeeds | `ARMED` |
+| `ARMED` | `lock_trade` succeeds or fails | `ARMED` |
+
+While `HALTED`, REAL placements, combo placements and `NORMAL`/`ENABLE`
+modifications are refused before any gateway request. Cancellations, and
+`CANCEL`/`DISABLE`/`DELETE` modifications, stay allowed: an operator facing a
+halt still has to be able to reduce exposure.
+
+**Only `lock_trade` clears it.** Two things that look like recovery are not:
+
+- a just-in-time re-lock that succeeds later only undoes an unlock the server
+  made a moment earlier, and says nothing about why the earlier one failed;
+- a lock after a reconnect happens without anyone seeing the halt at all.
+
+Requiring an explicit lock-only call makes recovery a visible, logged act. A
+`lock_trade` the gateway refuses leaves the halt exactly as it was and reports
+`halt_cleared: false` — it never looks like a recovery it did not achieve.
+
+An acknowledged order whose re-lock fails still returns its receipt, alongside
+`gateway_relock_error` and `execution_halted: true`. Losing an order identifier
+because the lock afterwards did not take would be strictly worse than reporting
+both facts.
+
+**It does not survive a restart.** The state is process memory: a new process
+starts `ARMED` and locks the gateway at rest when it connects. This is not an
+operator pause, and nothing here anticipates one.
+
+`check_health` reports `execution_halted`, and when halted also `halted_since`
+and `halt_error`. It reads memory — no gateway request — and reading it never
+clears the halt. The halt does not change the connectivity `status`: a halted
+server whose gateway is perfectly reachable is still connected, and collapsing
+the two would hide which of the two problems the deployment has.
 
 A gateway that cannot be started at all — no account configured, no remembered
 token — is treated the same way rather than as a fatal error: the supervisor
@@ -239,11 +301,12 @@ not rediscovered from scratch.
   scoping, and OpenD can answer a later unlock with "already unlocked" — but
   this was never checked against a live gateway. It decides whether sharing one
   trade context fixed a real race or merely tidied one away.
-- **REAL-mode startup unlock can be skipped.** It only runs if the trade
-  connection is established within the startup window, and OpenD needs ~30s to
-  log in, so a cold start routinely misses it. Impact is limited because each
-  REAL order performs its own just-in-time unlock. Fixing it needs the trade PIN
-  available to CI as a repository secret.
+- **Whether `lock_trade` can succeed on this gateway is unverified.** The SDK
+  resolves a REAL account before issuing a lock, not only before an unlock, so
+  a gateway that cannot resolve one produces a failing lock — and `lock_trade`
+  is the only exit from `HALTED`. Confirmed in the SDK source; not yet checked
+  against the live gateway. See
+  `openspec/changes/harden-trading-safeguards/verification.md`.
 - **The old ~10s stop was never explained.** The two-container MCP server took
   ~10s to stop in CI, which looked like the stop grace period expiring into a
   SIGKILL, and it was not reproduced outside the container. Under the

@@ -54,9 +54,17 @@ services:
       - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
       - MOOMOO_TRADE_PASSWORD=${MOOMOO_TRADE_PASSWORD:-}
       - MOOMOO_TRADE_PASSWORD_MD5=${MOOMOO_TRADE_PASSWORD_MD5:-}
+      # REAL writes may only target these accounts. Required in REAL mode.
+      - MOOMOO_REAL_ACC_IDS=${MOOMOO_REAL_ACC_IDS:-}
       - MOOMOO_MAX_ORDER_QTY=${MOOMOO_MAX_ORDER_QTY:-}
+      - MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=${MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY:-}
+      # Legacy, rollback-only. This image ignores it as a limit; the previous
+      # image reads it. Passing it through is what lets one .env serve both, so
+      # a rollback needs no environment edit.
       - MOOMOO_MAX_ORDER_NOTIONAL=${MOOMOO_MAX_ORDER_NOTIONAL:-}
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+      # Only honoured in READ_ONLY mode, and only as "1".
+      - MCP_ALLOW_UNAUTHENTICATED_HTTP=${MCP_ALLOW_UNAUTHENTICATED_HTTP:-}
       - FASTMCP_HOST=0.0.0.0
       - FASTMCP_PORT=8000
       - MCP_TRANSPORT=${MCP_TRANSPORT:-streamable-http}

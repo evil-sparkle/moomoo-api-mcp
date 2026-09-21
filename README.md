@@ -324,9 +324,43 @@ To enable **REAL account** access, you must securely provide your credentials.
 | `MOOMOO_TRADE_PASSWORD_MD5` | MD5 hash of 6-digit trade PIN (alternative to plain text)             | `e10adc...`   |
 | `MOOMOO_SECURITY_FIRM`      | Your broker region (e.g., FUTUSG, FUTUINC)                            | `FUTUSG`      |
 | `MCP_TRANSPORT`             | Optional: Transport mode (`streamable-http` [stateless, JSON responses], `sse`, `stdio`) | `streamable-http` |
-| `MCP_AUTH_TOKEN`            | Optional: Bearer token secret required for MCP HTTP/SSE clients       | `secret-token`|
-| `MOOMOO_MAX_ORDER_QTY`      | Optional: Safety cap on maximum quantity/shares per order             | `500`         |
-| `MOOMOO_MAX_ORDER_NOTIONAL` | Optional: Safety cap on maximum estimated notional ($) per order      | `25000`       |
+| `MOOMOO_REAL_ACC_IDS`       | **Required in `REAL` mode.** Comma-separated accounts REAL writes may target | `12345678` |
+| `MCP_AUTH_TOKEN`            | **Required** for the `streamable-http` and `sse` transports           | `secret-token`|
+| `MCP_ALLOW_UNAUTHENTICATED_HTTP` | Optional: `1` serves HTTP without a token, honoured only in `READ_ONLY` | `1`     |
+| `MOOMOO_MAX_ORDER_QTY`      | Optional: cap on quantity per order; for a combo, on the largest leg   | `500`         |
+| `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` | Optional: notional caps, one per currency                 | `USD:25000,HKD:200000` |
+| `MOOMOO_MAX_ORDER_NOTIONAL` | Legacy, rollback-only. Never applied as a limit; a startup error on its own | `25000` |
+
+#### Order limits
+
+When a notional cap is configured, an order is valued as **reference price x
+quantity x contract multiplier**, in the instrument's own currency. The
+reference price is the limit price for a BUY limit order, and otherwise the
+larger of the order's own prices and the market.
+
+The limits **fail closed**. An order whose value cannot be established is
+refused, not permitted — including an order in a currency with no cap, on a
+market whose quote currency has not been verified, or with no usable market
+price. Options are refused while any cap is configured, pending verification of
+which broker field carries an option's monetary multiplier.
+
+`MOOMOO_MAX_ORDER_NOTIONAL` is the previous unit-less cap. This version never
+applies it: a cap with no currency cannot be applied to an instrument whose
+currency it does not know. Leave it beside
+`MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` and the previous image still enforces
+it, so a rollback needs no `.env` edit. Set on its own, it is a startup error.
+
+#### Gateway lock and the execution halt
+
+In `REAL` mode with a stored trade credential, the server owns the gateway's
+lock: it keeps the gateway locked at rest and unlocks only for the instant one
+order is dispatched. Manual `unlock_trade` is refused in that configuration,
+because it would leave the gateway unlocked indefinitely.
+
+If the re-lock after an order fails, the gateway may still be unlocked, so
+execution **halts**: new placements and `NORMAL`/`ENABLE` modifications are
+refused while cancellations stay allowed. `check_health` reports the halt, and
+a successful `lock_trade` is the only way to clear it.
 
 #### Trading mode
 
