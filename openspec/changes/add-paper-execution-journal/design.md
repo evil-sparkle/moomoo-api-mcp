@@ -104,11 +104,18 @@ or path escapes the boundary; tools call `trade_service`, which calls the store.
   storage error. Nothing waits unbounded, and nothing blocks the event loop.
 - **No transaction spans broker I/O.** Structurally enforced: the store exposes
   commit-shaped operations, never an open handle a caller could hold across a call.
-- **Serialized dispatch slot.** Dispatch operations are serialized so that only one
-  SDK mutation invocation runs at a time. The gate check, dispatch marker commit, SDK
-  call, and outcome commit execute sequentially under a service-level dispatch lock,
-  ensuring no two threads race between marker commit and outcome handling, while
-  holding no database transaction across the SDK call.
+- **Serialized execution region.** A service-level execution lock serializes the whole
+  region from authoritative preparation through outcome handling: the blocked/gate
+  check, the authoritative target-order read, the patch merge, the final safety
+  assessment, the dispatch marker commit, the single SDK call, and the outcome commit.
+  Only one SDK mutation invocation runs at a time, and no two operations can interleave
+  between reading a target order and dispatching against it. No database transaction is
+  held across the SDK call.
+  - Token validation and existing-identifier lookup stay **outside** this region, so a
+    duplicate-identifier retry answers promptly instead of queueing behind an in-flight
+    broker round trip.
+  - Decision 7 gives the full step order and the lost-update interleaving this scope
+    prevents.
 
 ### 3. Storage engine, fsync semantics, and consistent backup procedures
 
@@ -129,11 +136,30 @@ Version 1 uses the rollback journal (`PRAGMA journal_mode = DELETE`) with
   fsync are explicitly unsupported. No speculative latency or fsync-count claims are
   made.
 - `PRAGMA foreign_keys = ON` for relational integrity.
-- **Consistent backup procedures.** Backing up an active SQLite database by copying
-  the database file directly is unsafe and unsupported. Backups must be performed
-  using SQLite's online backup API (such as `VACUUM INTO '<backup_path>'` or
-  `sqlite3.Connection.backup()`), or by shutting down the container and copying the
-  file while the process lockfile is unheld.
+- **Consistent backup procedures.** Backing up an active SQLite database by copying the
+  database file directly is unsafe and unsupported. The supported methods are:
+  1. **SQLite's own backup path**, on a running process — `VACUUM INTO '<backup_path>'`
+     or `sqlite3.Connection.backup()`. This is the default recommendation.
+  2. **An offline copy**, subject to the qualification below.
+- **The lockfile being unheld does not mean the database is clean.** A crashed process
+  releases its `flock` exactly as a clean shutdown does, so an unheld lockfile proves
+  only that nothing is running — not that the database was closed consistently. A
+  process that died mid-transaction leaves a **hot rollback journal**
+  (`execution.db-journal`) which is *required* to bring the database back to a
+  consistent state; SQLite warns that copying the database without it can produce an
+  invalid copy that appears fine until it is read. An offline copy is therefore valid
+  only when all of these hold:
+  - the database is cleanly closed or already recovered — no hot journal is present,
+    which in rollback-journal mode means opening it once with SQLite to let recovery
+    run and complete, then confirming no `-journal` file remains;
+  - no writer can start for the **entire** duration of the copy, not merely at the
+    moment it begins;
+  - if a hot journal is present and cannot be cleared, the journal file is copied
+    together with the database, as a set, and restored as a set.
+
+  Copying `execution.db` alone from a volume whose process crashed is the one
+  procedure most likely to yield a silently corrupt journal, which is why it is called
+  out rather than left implied.
 
 ### 4. Execution identity, admission epochs, and token evaluation order
 
@@ -191,14 +217,27 @@ The canonical request is a deterministic serialization of the fields defining th
 operation: environment, account, operation type, and parameters. It is hashed into a
 fingerprint, and stored alongside the canonical text for conflict diagnosis.
 
-- **Frozen account binding.** The account ID and trading environment are bound at
-  admission. An admitted operation cannot be retried against a different account.
-- **Strict decimal-string prices.** Paper mutation prices are accepted exclusively as
-  decimal strings and stored verbatim. Comparison uses decimal arithmetic. A price
-  that arrives as a binary float is strictly converted or rejected at the tool
-  boundary.
+- **Frozen binding is the concrete account, resolved before persistence.** The
+  trading environment and the **concrete broker account** are bound at admission. The
+  placeholder `"0"` is never persisted as a binding: account resolution (Decision 7,
+  Step 3) runs first, and only its concrete result is written. Persisting `"0"` and
+  substituting the resolution afterwards would either mutate a binding described as
+  immutable, or change the canonical request after it was fingerprinted.
+  - A retry of a known identifier uses the **recorded** binding and does not resolve
+    the account again. A later change to the eligible-account set therefore cannot
+    retarget an admitted operation, nor turn an identical retry into a newly resolved
+    request.
+  - An admitted operation cannot be retried against a different account.
+- **Strict decimal-string prices.** Paper mutation prices are accepted **exclusively**
+  as decimal strings, and stored verbatim. Comparison uses decimal arithmetic.
+  - A numeric (JSON number) price on a paper mutation is **refused**, not converted.
+    There is no conversion path. By the time a tool sees a JSON number it is already a
+    binary float and the caller's original text is gone, so "convert at the boundary"
+    cannot be implemented as written; offering it as an alternative would license an
+    implementation that silently reintroduces coercion artefacts.
   - Guarantees `350.0` and `350.00` evaluate to the same value, while `350.01` and
     `350.02` conflict, with zero binary float coercion artefacts.
+  - A malformed decimal string is refused for the same reason.
 
 ### 6. Modification identity is target order ID plus the caller's patch
 
@@ -217,28 +256,60 @@ is correctly recognized as the same operation.
 
 ### 7. Two-phase dispatch lifecycle, transition table, and crash behavior
 
-The dispatch lifecycle separates intent admission and safety validation from the
-actual broker dispatch marker:
+The dispatch lifecycle separates identity resolution, intent admission, safety
+validation and the broker dispatch marker, and serializes everything from
+authoritative preparation through outcome handling:
 
-1. **Step 1: Admission and Intent Persistence.**
-   Admit the token in a short `BEGIN IMMEDIATE` transaction, persisting the
-   operation in state `ADMITTED` with its canonical request and patch.
-2. **Step 2: Safety Checks and Broker Request Preparation.**
-   Run Stage 1 checks: account allowlist and resolution, order value validation,
-   price limits, notional caps, target order retrieval (for modification/cancel),
-   and paper v1 scope.
-   - If ANY check fails: In a short transaction, transition from `ADMITTED` to
-     `REFUSED` with local disposition `NOT_SENT` and record the refusal reason.
-     **No dispatch marker is ever committed.**
-3. **Step 3: Dispatch Commitment.**
-   Under the service dispatch lock, verify that the journal is not blocked and that
-   the recovery review gate is clear. In a short transaction, commit the transition
-   from `ADMITTED` to `DISPATCHING` (the dispatch marker), and close the transaction
+1. **Step 1: Token and Schema Validation.** Outside any lock, validate the operation
+   token's form and the request schema, including strict decimal-string prices.
+   Nothing is persisted.
+2. **Step 2: Existing-Identifier Lookup.** In a short read, look up the token across
+   all epochs. A known token resolves here — stored state, `IN_FLIGHT`, or conflict —
+   **using its recorded account binding**, never a fresh resolution. This step stays
+   outside the service execution lock so an in-flight retry answers promptly even
+   while another operation holds the lock.
+3. **Step 3: Account Resolution (new operations only).** Resolve `acc_id` to a
+   concrete broker account under the simulated-account allowlist and the
+   exactly-one-eligible rule. A request that cannot resolve to exactly one concrete
+   account is refused here, before anything is persisted.
+4. **Step 4: Immutable Admission.** In a short `BEGIN IMMEDIATE` transaction, persist
+   the operation in state `ADMITTED` with its canonical request, its patch, and the
+   **concrete resolved account** as its frozen binding. `"0"` is never persisted as a
+   binding.
+5. **Step 5: Acquire the Service Execution Lock.** Everything from here to outcome
+   handling runs under one lock, so no two operations interleave between reading a
+   target order and dispatching against it.
+6. **Step 6: Authoritative Preparation and Final Safety Assessment.** Under the lock:
+   verify the journal is not blocked and the recovery gate is clear; read the target
+   order authoritatively (for modification and cancellation); merge the caller's
+   patch over that reading; and run the Stage 1 assessment — order value validation,
+   price limits, notional caps — against the request that will actually be sent, plus
+   the paper v1 scope check.
+   - If ANY check fails: in a short transaction, transition `ADMITTED` → `REFUSED`
+     with disposition `NOT_SENT` and record the reason. **No dispatch marker is ever
+     committed.** Release the lock.
+7. **Step 7: Dispatch Commitment.** Still under the lock, in a short transaction,
+   commit `ADMITTED` → `DISPATCHING` (the dispatch marker), and close the transaction
    before initiating broker I/O.
-4. **Step 4: Serialized SDK Mutation Invocation.**
-   Execute exactly one SDK mutation invocation. No database transaction is open
-   during broker I/O.
-5. **Step 5: Outcome Handling.**
+8. **Step 8: Single SDK Mutation Invocation.** Execute exactly one SDK mutation
+   invocation. No database transaction is open during broker I/O.
+9. **Step 9: Outcome Handling,** then release the lock.
+
+**Why the lock opens at Step 5 rather than Step 7.** A lock that starts at the
+dispatch marker leaves the target-order read and merge unserialized, which permits a
+lost update. Two operations modify the same order, initially quantity 10 at price 50:
+A reads it and prepares a reduction to quantity 5; B reads the same snapshot and
+prepares a price change to 80; A dispatches, leaving quantity 5 at price 50; B then
+dispatches its already-merged request and restores quantity 10 at price 80. B was a
+price-only modification, yet it silently undid A's quantity reduction — contradicting
+the rule that omitted fields keep the existing order's values. Dispatching only B's
+patch does not fix it either: the order that receives the patch is then no longer the
+order that was assessed. The authoritative read, the merge and the assessment must sit
+inside the same serialized region as the dispatch.
+
+Step 2 deliberately stays outside that region. Duplicate-identifier lookups must not
+queue behind an in-flight dispatch, or an honest retry would block for the length of a
+broker round trip.
    In a new short transaction:
    - If gateway returns `RET_OK`: transition to `ACKNOWLEDGED` and record broker
      receipt (order ID).
@@ -252,9 +323,9 @@ actual broker dispatch marker:
 
 | Initial State | Event / Trigger | Target State | Local Disposition | Broker Marker Committed? |
 | --- | --- | --- | --- | --- |
-| None | Admission request (valid epoch, unknown ID) | `ADMITTED` | `PENDING_CHECKS` | No |
-| `ADMITTED` | Safety check or limit check failure | `REFUSED` | `NOT_SENT` | No |
-| `ADMITTED` | Safety checks pass, dispatch lock acquired | `DISPATCHING` | `IN_FLIGHT` | Yes |
+| None | Admission request (valid epoch, unknown ID, account resolved to exactly one concrete account) | `ADMITTED` | `PENDING_CHECKS` | No |
+| `ADMITTED` | Safety check or limit check failure, under the execution lock | `REFUSED` | `NOT_SENT` | No |
+| `ADMITTED` | Authoritative preparation and safety checks pass, under the execution lock | `DISPATCHING` | `IN_FLIGHT` | Yes |
 | `DISPATCHING` | Gateway returns `RET_OK` + receipt committed | `ACKNOWLEDGED` | `ACKNOWLEDGED` | Yes |
 | `DISPATCHING` | Gateway error code, SDK timeout, or network drop | `UNKNOWN_OUTCOME` | `POSSIBLY_SENT` | Yes |
 | `DISPATCHING` | Gateway `RET_OK`, but outcome persistence fails | `UNKNOWN_OUTCOME` | `OBSERVED_NOT_STORED` | Yes |
@@ -348,6 +419,19 @@ error, and blocks subsequent automated paper mutations until resolved.
   - Stale existing rows (which may have progressed to terminal states in real life but
     are stored as pre-terminal in the backup) are detected during startup recovery
     review, keeping the gate closed until reconciled against broker order history.
+- **There is no rollback detector, and none is claimed.** The protection is not that
+  the server recognizes a restore as such. Nothing inside a restored file can prove it
+  was restored, because whatever the previous run recorded lives in the file that was
+  replaced. The protection is the combination of two unconditional rules:
+  - **every** process start requires recovery review, whether or not anything was
+    restored; and
+  - an unknown token carrying a non-current epoch is refused rather than admitted as
+    new.
+
+  Together these make a restore safe without detecting it. Any wording that implies the
+  server compares a restored journal's epoch history against "what this process
+  retired" describes a detector that does not exist and cannot be built from the data
+  available, and is not part of this design.
 - **Storage failure recovery.** If SQLite experiences I/O errors or lock exhaustion,
   the store marks itself in a failed state. Concurrent and subsequent mutations fail
   closed immediately without attempting broker I/O. Recovery requires restarting the
@@ -367,33 +451,78 @@ reads stay available.
 When automatic reconciliation cannot resolve an uncertain operation, it must be
 resolved through an explicit, operator-only mechanism:
 
-- **Entry point:** `acknowledge_recovery` tool / administrative interface.
-- **Authorization:** Requires verified operator credentials / auth token.
-  Unauthorized attempts fail closed.
+- **Entry point:** `acknowledge_recovery`, an operator-only administrative interface.
+- **Authorization: a separate operator capability the trading agent does not hold.**
+  Stage 1 establishes one bearer token for the HTTP transports (`MCP_AUTH_TOKEN`), and
+  that token is what the trading agent presents. Recovery acknowledgement therefore
+  requires a **distinct** operator credential — a separate secret
+  (`MCP_OPERATOR_TOKEN`) that is never provisioned to the agent — and the interface is
+  refused to any principal authenticated only by the agent's token.
+  - A request bearing a **valid trading-agent token is refused**, whatever
+    `operator_id`, `reason` and `evidence_reference` it supplies. Supplying a
+    human-looking name in the arguments is not authorization; it is an argument.
+  - The audited operator identity is **derived from the authenticated principal**. A
+    supplied `operator_id` is accepted only if it matches that principal, and is
+    otherwise refused rather than recorded. An audit trail whose identity is chosen by
+    the caller records nothing worth keeping.
+  - Where no separate operator credential is configured, the interface is
+    unavailable — not open. Paper execution then stays blocked until one is
+    configured, which is the fail-closed direction.
+  - This is a missing security contract being specified, not a claim that an
+    implemented bypass exists. No implementation exists yet.
+- **Binding to what was reviewed:** an acknowledgement names, and is validated
+  against, the **current recovery epoch** and the **operation state the operator
+  observed**. If either has changed since the review — a later reconciliation moved
+  the operation, or the process restarted into a new recovery epoch — the
+  acknowledgement is refused and the operator reviews the current state. This stops a
+  stale disposition from releasing a gate that has since changed meaning.
 - **Required parameters:**
-  - `operation_id`: Target operation.
-  - `operator_id`: Identifier of the responsible human operator.
-  - `resolution`: Recovery disposition (e.g., `TERMINAL_ACCOUNTED`, `CONFIRMED_NOT_SENT`).
-  - `reason`: Durable human-readable justification.
-  - `evidence_reference`: Verifiable broker audit reference (e.g., query snapshot ID,
-    broker statement timestamp, or confirmation that the order reached a terminal
-    state).
+  - `operation_id`: target operation.
+  - `operator_id`: must match the authenticated principal.
+  - `recovery_epoch` and `observed_state`: what was reviewed.
+  - `resolution`: `TERMINAL_ACCOUNTED` or `CONFIRMED_NOT_SENT`.
+  - `reason`: durable human-readable justification.
+  - `evidence_reference`: verifiable broker evidence reference.
+  - the accounted facts below, for `TERMINAL_ACCOUNTED`.
 - **Separation of mutation uncertainty from recovery disposition:**
   The system strictly forbids a generic "accept risk and mark reconciled" override.
   If a mutation's actual success at the broker is unproven, the journal does NOT mark
-  the mutation as succeeded. Instead:
-  - **Evidence-backed accounting of a terminal target:** If verified evidence shows
-    that the target order reached a terminal state (`CANCELLED_ALL`, `FILLED_ALL`,
-    `REJECTED`, or confirmed absent by end-of-day order history), the operator
-    records a terminal disposition (`TERMINAL_ACCOUNTED`).
-  - This satisfies the recovery review gate condition by establishing that the
-    underlying market exposure is closed, without fabricating a claim that the
-    uncertain mutation succeeded.
-  - Insufficient evidence keeps execution blocked.
-- **Durable Audit Record:**
-  Every acknowledgement is written to a dedicated `recovery_audit` table in the
-  journal recording the operation ID, operator ID, resolution, reason, evidence,
-  timestamp, and previous state.
+  the mutation as succeeded.
+- **`TERMINAL_ACCOUNTED` is accounting, not closure.** A finished order and closed
+  exposure are different facts, and the earlier wording conflated them: a buy order for
+  100 shares that reaches `FILLED_ALL` is terminal, and the account now holds a
+  100-share position. The order ended; the exposure did not.
+
+  `TERMINAL_ACCOUNTED` therefore requires evidence-backed accounting of the target's:
+  - final broker status;
+  - **filled quantity** and average fill price;
+  - **remaining executable quantity** (zero for a terminal order, recorded explicitly);
+  - **resulting position or other account effects** attributable to the operation.
+
+  It does **not** require the account to be flat. It requires an accurate record of
+  what remains. The broker's order response reports filled quantity and average price
+  separately from order status, so the recovery contract records them separately too.
+- **No post-close absence shortcut.** The previous clause admitted "confirmed absent by
+  end-of-day order history" without ever defining what establishes that confirmation.
+  Reconciliation is explicit that an empty query is not proof of absence, and the
+  recovery path must not become a back door around it. An absence disposition
+  (`CONFIRMED_NOT_SENT`) requires provider-verified proof that is strictly stronger
+  than "the order was not returned" — for example a broker-side statement or audit
+  record that positively enumerates the account's orders for the session. A timestamp,
+  a trading-close boundary, or an operator's assertion alone does not qualify, and an
+  empty post-close history query alone leaves the operation unresolved.
+  - Version 1 does not assume such proof exists. Task 1.6 establishes whether the paper
+    provider offers any; until it does, `CONFIRMED_NOT_SENT` is unavailable and such
+    operations stay unresolved.
+- **Insufficient evidence keeps execution blocked.**
+- **Durable Audit Record, committed before release:**
+  Every acknowledgement is written to a dedicated `recovery_audit` table recording the
+  operation ID, the authenticated operator identity, resolution, reason, evidence
+  reference, the accounted facts, recovery epoch, observed and previous state, and
+  timestamp. **The audit row and the disposition commit in the same transaction, and
+  that transaction commits before the gate is re-evaluated.** A gate that could open
+  before its justification is durable would lose exactly the record that explains why
+  it opened.
 - **Precise Gate-Release Conditions:**
   The recovery review gate is released if and only if EVERY operation in the journal
   is in a terminal state (`ACKNOWLEDGED`, `REFUSED`, `RECONCILED`, or
@@ -412,9 +541,23 @@ separate from Stage 1's `execution_halted` (REAL relock halt):
   fall back to unjournaled mutations. Even if an order requires cancellation, it must
   not bypass the journal.
 - **`lock_trade` does NOT clear journal failures.** Stage 1's `lock_trade` resets the
-  relock halt for REAL trading; it has no effect on paper journal blocking. Journal
-  blocking can only be cleared by successful reconciliation or authorized operator
-  recovery review.
+  relock halt for REAL trading; it has no effect on paper journal blocking.
+- **Release rules are per blocking reason.** "Reconciliation or operator review clears
+  the block" is only true for the uncertainty reasons, and saying it unqualified
+  contradicts Decision 11's requirement that storage failure needs a restart. The block
+  records **why** it was entered, and only the matching release applies:
+
+  | Blocking reason | Entered when | Released by |
+  | --- | --- | --- |
+  | `UNRESOLVED_OUTCOME` | an operation entered `UNKNOWN_OUTCOME` | successful reconciliation of that operation, or an authorized operator acknowledgement |
+  | `OUTCOME_NOT_STORED` | the broker acknowledged but the outcome write failed | authorized operator acknowledgement only; reconciliation alone does not clear it, because the unstored fact is what is in doubt |
+  | `STORAGE_FAILED` | SQLite I/O error, lock exhaustion, or integrity failure | **restarting the process with healthy storage, then completing recovery review.** Neither reconciliation nor an operator acknowledgement clears it in the running process |
+
+  A successful reconciliation in a storage-failed process therefore clears nothing: the
+  store cannot be trusted to have recorded it. Where several reasons are active, the
+  block persists until every one of them is released.
+- Health state precedence is defined in Decision 14, so a process that is both blocked
+  and holding unreviewed operations reports one unambiguous state.
 - `READ_ONLY` mode remains completely database-independent: no database file is
   opened, verified, or required.
 
@@ -423,9 +566,30 @@ separate from Stage 1's `execution_halted` (REAL relock halt):
 - Optional execution directory on dedicated `execution-data` volume mounted at
   `/var/lib/moomoo-mcp/data`, owned by unprivileged uid 10001.
 - `opend-data` is untouched, preserving session state and device authorization.
-- Health reports journal state (`DISABLED`, `READY`, `REVIEW_PENDING`,
-  `JOURNAL_BLOCKED`), schema version, non-terminal count, and storage reachability
-  without issuing gateway calls, alongside Stage 1's `execution_halted`.
+- Health reports journal state, schema version, active admission epoch, operation
+  counts and storage reachability without issuing gateway calls, alongside Stage 1's
+  `execution_halted`.
+- **State precedence.** More than one condition can hold at once — an unresolved
+  outcome both blocks the journal and leaves a non-terminal operation — so the reported
+  state is the **first** match in this order, and it is always exactly one value:
+
+  1. `DISABLED` — journaled paper execution is not configured.
+  2. `JOURNAL_BLOCKED` — any blocking reason from Decision 13 is active.
+  3. `REVIEW_PENDING` — the startup recovery gate has not been cleared.
+  4. `READY` — the gate is clear and nothing is blocking.
+
+  `JOURNAL_BLOCKED` outranks `REVIEW_PENDING` because it is the condition that needs
+  an operator's attention first, and because its release rules are narrower.
+- **Three different non-terminal populations, reported separately.** A single
+  "non-terminal count" conflates normal operation with a fault. Health reports:
+  - `in_flight` — operations in `DISPATCHING` right now. Expected during normal
+    operation, and not on its own a reason for `REVIEW_PENDING`.
+  - `awaiting_review` — non-terminal operations found at startup that the recovery gate
+    is still holding.
+  - `blocking` — operations whose state is a live blocking reason, with that reason.
+
+  A `READY` journal may legitimately report a non-zero `in_flight`. It may not report a
+  non-zero `awaiting_review` or `blocking`.
 
 ## Assumptions and limits
 

@@ -85,14 +85,22 @@ DAY-only provider can answer.
     preventing restored older backups from silently admitting retries of live orders.
   - In-flight retries receive an immediate bounded response rather than waiting
     unbounded or launching concurrent dispatch.
-- **Two-phase dispatch lifecycle.**
-  - Admission and intent are persisted first in state `ADMITTED`.
-  - Safety checks (limits, allowlists, target order inspection) run next. Ordinary
-    pre-dispatch refusals are durably recorded as `REFUSED` with local disposition
-    `NOT_SENT` without ever committing a dispatch marker.
-  - Only after all checks pass is `DISPATCHING` committed in a short transaction,
-    followed by a serialized SDK mutation invocation without holding a database
-    transaction across broker I/O.
+- **Two-phase dispatch lifecycle, with the right things serialized.**
+  - Identity is resolved first, outside the execution lock, so a duplicate-identifier
+    retry is answered promptly instead of queueing behind a broker round trip. A known
+    identifier resolves from its **recorded** binding.
+  - A new operation's account is resolved to exactly one **concrete** account *before*
+    admission is persisted, so the frozen binding is a real account and never the
+    placeholder `"0"`.
+  - Admission and intent are then persisted in state `ADMITTED`.
+  - The execution lock opens **before** the authoritative target-order read, and covers
+    the merge, the final safety assessment, the dispatch marker, the single SDK
+    invocation and the outcome. A lock that opened only at the marker would leave
+    read-merge-dispatch unserialized, letting a price-only modification silently
+    restore a quantity another operation had just reduced.
+  - Ordinary pre-dispatch refusals are durably recorded as `REFUSED` with local
+    disposition `NOT_SENT` without ever committing a dispatch marker.
+  - No database transaction is held across broker I/O.
 - **Modification identity is the patch, not the merged order.**
   - Stage 1 has `modify_order` fetch the existing order and assess the merged
     result. The journal stores the caller's **target order ID and original patch**
@@ -103,6 +111,8 @@ DAY-only provider can answer.
 - **Decimal-string prices on paper mutations.**
   - Paper mutation prices are accepted as decimal strings and stored verbatim, so
     identity and journal records do not depend on binary float coercion.
+  - A numeric price is refused rather than converted. Once a JSON number has been
+    parsed, the caller's original text is gone, so there is no conversion to perform.
 - **Uncertainty is preserved, not guessed.**
   - An unresolved operation is never automatically replayed, and never resolved by a
     substitute or replacement order.
@@ -133,12 +143,24 @@ DAY-only provider can answer.
 - **Recovery review gate and operator recovery acknowledgement.**
   - Every paper execution-process start requires recovery review before new
     mutations are admitted.
-  - A named, operator-only recovery acknowledgement mechanism requires explicit
-    authorization, durable justification, and verified evidence.
-    Mutation uncertainty remains distinct from recovery disposition: no generic
-    "accept risk" override exists. Evidence-backed accounting of a terminal target
-    allows review completion without falsely claiming an uncertain mutation
-    succeeded. Insufficient evidence keeps execution blocked.
+  - A named recovery acknowledgement mechanism requires an **operator capability
+    distinct from the credential the trading agent presents**, and never provisioned
+    to it. A request authenticated only by the agent's token is refused whatever
+    arguments it carries, the audited identity is derived from the authenticated
+    principal rather than supplied, and the acknowledgement is bound to the recovery
+    epoch and operation state that were reviewed.
+  - Mutation uncertainty remains distinct from recovery disposition: no generic
+    "accept risk" override exists. Insufficient evidence keeps execution blocked, and
+    the disposition and its audit record commit together before the gate reopens.
+  - **Accounting is not closure.** A terminal order and closed exposure are different
+    facts: a buy order that fills completely is finished, and leaves a position behind.
+    Accounting for a terminal target therefore records its final status, filled
+    quantity, remaining executable quantity and resulting position. It does not require
+    the account to be flat, and it never claims the uncertain mutation succeeded.
+  - **Absence requires positive proof.** An order's non-appearance in a query is not
+    evidence that it does not exist — reconciliation already says so, and the recovery
+    path is not a way around it. An empty post-close history query alone leaves the
+    operation unresolved.
 - **Dedicated, optional storage.**
   - An optional execution directory, and a separate `execution-data` volume, distinct
     from OpenD's `opend-data`. The existing authorization storage and the
@@ -235,12 +257,13 @@ a real paper account (task group 1).
   - `settings.py` (introduced by Stage 1): journal configuration;
   - `services/health.py`, `services/base_service.py`: journal state;
   - `tools/trading.py`: `operation_id`, `admission_epoch`, operator recovery
-    acknowledgement tool, and decimal-string prices;
+    acknowledgement tool behind its own capability, and decimal-string prices;
   - `tools/system.py`: journal state in health output.
-- **Tests**: new unit/integration suites `U01`–`U18`, container tests `C01`–`C04`,
+- **Tests**: new unit/integration suites `U01`–`U20`, container tests `C01`–`C04`,
   and separately authorized manual checks `M01`–`M04`. See `tasks.md` for the
   scenario-to-test traceability table.
-- **Configuration and operations**: `.env.example`, `docker-compose.yml`,
+- **Configuration and operations**: a new operator credential, distinct from
+  `MCP_AUTH_TOKEN` and never given to the agent; `.env.example`, `docker-compose.yml`,
   `Dockerfile`, `docs/state-and-restarts.md`, `docs/deploy-vps.md`, and the
   `openspec/config.yaml` context.
 - **Agent (ZeroClaw)**: paper write tool calls must carry a stable `operation_id`

@@ -13,8 +13,17 @@ device authorization volume.
   root.
 - Exactly one executor process SHALL access the journal volume at a time, enforced
   via an advisory exclusive process file lock (`execution.lock`).
-- The deployment SHALL rely on POSIX filesystems honoring fsync durability. Backups
-  SHALL use SQLite's online backup API or stopped-container file copies.
+- The deployment SHALL rely on POSIX filesystems honoring fsync durability.
+- Backups SHALL use SQLite's online backup API, or an offline file copy that meets all
+  of the following. An unheld process lock SHALL NOT by itself be treated as evidence
+  that an offline copy is safe: a crashed process releases that lock exactly as a clean
+  shutdown does, and may leave a hot rollback journal that is required to recover the
+  database.
+  - The database SHALL be cleanly closed or already recovered, with no hot rollback
+    journal remaining.
+  - No writer SHALL be able to start for the entire duration of the copy.
+  - Where a hot rollback journal is present and cannot be cleared, it SHALL be copied
+    and restored together with the database as a set.
 - The OpenD authorization volume's mount path and owning user id SHALL be unchanged
   by this capability, so Session State Persistence continues to hold and no device
   re-authorization is triggered.
@@ -52,6 +61,16 @@ device authorization volume.
 - **WHEN** a consistent backup is taken using SQLite's backup API
 - **THEN** the backup file SHALL be a self-contained, valid SQLite database
 - **AND** active database transactions SHALL NOT be interrupted or corrupted
+
+#### Scenario: An unheld process lock after a crash does not make a file copy safe
+
+- **GIVEN** the executor process terminated abnormally, leaving a hot rollback journal
+  beside the database
+- **AND** the process lock is consequently unheld
+- **WHEN** an operator copies only the database file
+- **THEN** the procedure SHALL be treated as unsupported
+- **AND** the documented procedure SHALL require the database to be recovered first, or
+  the rollback journal to be copied and restored with it
 
 #### Scenario: A deployment without journaled paper execution needs no volume
 
