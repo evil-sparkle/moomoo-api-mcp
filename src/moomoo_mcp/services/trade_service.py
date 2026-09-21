@@ -359,7 +359,7 @@ class TradeService:
             # An explicit account needs no gateway call to check: the allowlist
             # is configuration, and a REAL write to an unlisted account is
             # refused whether or not that account exists.
-            if requested_env == "REAL":
+            if self._allowlist_applies(requested_env):
                 self._check_real_allowlist(resolved)
             return resolved
 
@@ -384,6 +384,17 @@ class TradeService:
             f"({masked}), so acc_id='0' does not identify one. Name the account "
             "explicitly with acc_id."
         )
+
+    def _allowlist_applies(self, trd_env: str) -> bool:
+        """Whether the REAL account allowlist governs this request.
+
+        Only in REAL mode, and only for REAL accounts. Outside REAL mode the
+        allowlist is ignored rather than empty-means-deny: a READ_ONLY
+        deployment configures no allowlist and still needs to resolve a REAL
+        account for reads and previews, and it cannot write in any case — the
+        policy refuses that before this runs.
+        """
+        return trd_env == "REAL" and self.policy.mode is TradingMode.REAL
 
     def _check_real_allowlist(self, acc_id: int) -> None:
         """Refuse a REAL account this deployment was not configured to trade.
@@ -430,7 +441,7 @@ class TradeService:
                 if target
                 in (account.get("market_auth") or account.get("trdmarket_auth") or [])
             ]
-        if trd_env == "REAL":
+        if self._allowlist_applies(trd_env):
             allowed = self.policy.real_acc_ids
             eligible = [
                 account

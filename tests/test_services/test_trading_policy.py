@@ -5,9 +5,13 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
+from moomoo_mcp.services.order_errors import OrderNotSentError
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import (
     ENV_VAR,
+    InstrumentFacts,
+    LegFacts,
+    OrderFacts,
     TradingMode,
     TradingModeConfigError,
     TradingPolicy,
@@ -25,8 +29,16 @@ ALLOWED_WRITES = {
 }
 
 
-def _service(mode: TradingMode, ctx: MagicMock) -> TradeService:
-    service = TradeService(policy=TradingPolicy(mode))
+def _policy(mode: TradingMode, **kwargs) -> TradingPolicy:
+    """A policy in ``mode``, with the REAL allowlist the fixture account needs."""
+    kwargs.setdefault(
+        "real_acc_ids", frozenset({456}) if mode is TradingMode.REAL else frozenset()
+    )
+    return TradingPolicy(mode, **kwargs)
+
+
+def _service(mode: TradingMode, ctx: MagicMock, **kwargs) -> TradeService:
+    service = TradeService(policy=_policy(mode, **kwargs))
     service.trade_ctx = ctx
     return service
 
@@ -40,6 +52,24 @@ def ctx() -> MagicMock:
     context.place_combo_order.return_value = (0, ok_frame)
     context.modify_order.return_value = (0, ok_frame)
     context.unlock_trade.return_value = (0, None)
+    # A NORMAL modification is assessed as the order that would result, so it
+    # reads the existing order first.
+    context.order_list_query.return_value = (
+        0,
+        pd.DataFrame(
+            [
+                {
+                    "order_id": "1",
+                    "code": "US.AAPL",
+                    "trd_side": "BUY",
+                    "order_type": "NORMAL",
+                    "qty": 10,
+                    "price": 50.0,
+                    "aux_price": 0.0,
+                }
+            ]
+        ),
+    )
     context.get_acc_list.return_value = (
         0,
         pd.DataFrame([{"acc_id": 456, "trd_env": "REAL", "market_auth": ["US"]}]),
@@ -102,10 +132,13 @@ class TestConfiguration:
 
     @pytest.mark.parametrize("mode", ALL_MODES)
     def test_each_documented_mode_parses(self, mode):
-        assert TradingPolicy.from_env({ENV_VAR: mode.value}).mode is mode
+        # REAL also needs its account allowlist; the other modes ignore it.
+        env = {ENV_VAR: mode.value, "MOOMOO_REAL_ACC_IDS": "456"}
+        assert TradingPolicy.from_env(env).mode is mode
 
     def test_mode_is_case_insensitive(self):
-        assert TradingPolicy.from_env({ENV_VAR: "real"}).mode is TradingMode.REAL
+        env = {ENV_VAR: "real", "MOOMOO_REAL_ACC_IDS": "456"}
+        assert TradingPolicy.from_env(env).mode is TradingMode.REAL
 
     def test_unknown_mode_is_a_configuration_error(self):
         with pytest.raises(TradingModeConfigError, match="not a trading mode"):
@@ -137,12 +170,16 @@ class TestWriteMatrix:
             assert ctx.method_calls, "an allowed write must reach the gateway"
             return
 
-        with pytest.raises(TradingPolicyError) as excinfo:
+        with pytest.raises(OrderNotSentError) as excinfo:
             _invoke(service, operation, trd_env)
 
         # Denied writes make zero gateway calls — not even an account lookup.
         assert ctx.method_calls == []
         assert operation.split("_")[0] in str(excinfo.value)
+        assert "no order was sent" in str(excinfo.value)
+        # The refusal keeps the policy error that caused it, so a caller can
+        # still branch on why as well as on what.
+        assert isinstance(excinfo.value.__cause__, TradingPolicyError)
         assert service.policy.mode is mode
 
     @pytest.mark.parametrize("mode", ALL_MODES)
@@ -153,14 +190,14 @@ class TestWriteMatrix:
         if (mode, "REAL") in ALLOWED_WRITES:
             pytest.skip("REAL writes are permitted in this mode")
 
-        with pytest.raises(TradingPolicyError):
+        with pytest.raises(OrderNotSentError):
             service.place_order(
                 code="US.AAPL",
                 price=1.0,
                 qty=1,
                 trd_side="BUY",
                 trd_env="REAL",
-                acc_id="0",  # would normally trigger _find_best_account
+                acc_id="0",  # would normally trigger account resolution
             )
 
         ctx.get_acc_list.assert_not_called()
@@ -168,7 +205,7 @@ class TestWriteMatrix:
     def test_denied_write_is_not_rerouted_to_another_environment(self, ctx):
         service = _service(TradingMode.SIMULATE, ctx)
 
-        with pytest.raises(TradingPolicyError):
+        with pytest.raises(OrderNotSentError):
             _invoke(service, "place_order", "REAL")
 
         ctx.place_order.assert_not_called()
@@ -176,7 +213,7 @@ class TestWriteMatrix:
     def test_unrecognized_environment_is_refused(self, ctx):
         service = _service(TradingMode.REAL, ctx)
 
-        with pytest.raises(TradingPolicyError, match="not a recognized"):
+        with pytest.raises(OrderNotSentError, match="not a recognized"):
             _invoke(service, "place_order", "PAPER")
 
         ctx.place_order.assert_not_called()
@@ -184,7 +221,7 @@ class TestWriteMatrix:
     def test_cancellation_is_denied_in_read_only(self, ctx):
         service = _service(TradingMode.READ_ONLY, ctx)
 
-        with pytest.raises(TradingPolicyError, match="cancel"):
+        with pytest.raises(OrderNotSentError, match="cancel"):
             service.cancel_order(order_id="1", trd_env="SIMULATE", acc_id=456)
 
         ctx.modify_order.assert_not_called()
@@ -261,87 +298,510 @@ class TestPolicyErrorMessages:
         assert "password does not change the mode" in str(excinfo.value)
 
 
-class TestTradingGuardrails:
-    """Configured limits protect against excessive order size and notional."""
+# --- fixtures for the limit assessment --------------------------------------
+#
+# These build InstrumentFacts directly. The policy is pure over already
+# normalized numbers, so a test that wants a missing bid says None, and the
+# question of how a gateway spells "missing" belongs to the adapter's tests.
+
+# M is 150: the largest of the three quoted prices. The reference-price rows
+# below are written against that number.
+STOCK = InstrumentFacts(
+    code="US.AAPL",
+    classification="STOCK",
+    monetary_multiplier=1.0,
+    last_price=150.0,
+    bid_price=148.0,
+    ask_price=149.0,
+)
+
+
+def _option(code: str = "US.XYZ260101C100000", **overrides) -> InstrumentFacts:
+    facts = {
+        "classification": "DRVT",
+        "monetary_multiplier": 100.0,
+        "contract_size": 100.0,
+        "last_price": 3.00,
+        "bid_price": 2.95,
+        "ask_price": 3.05,
+    }
+    facts.update(overrides)
+    return InstrumentFacts(code=code, **facts)
+
+
+def _order(instrument: InstrumentFacts = STOCK, **overrides) -> OrderFacts:
+    facts = {
+        "order_type": "NORMAL",
+        "trd_side": "BUY",
+        "qty": 1,
+        "legs": [LegFacts(instrument=instrument)],
+        "price": 100.0,
+    }
+    facts.update(overrides)
+    return OrderFacts(**facts)
+
+
+class TestLimitConfiguration:
+    """Parsing and validating the configured limits."""
 
     def test_from_env_parses_valid_limits(self):
-        env = {
-            "MOOMOO_TRADING_MODE": "REAL",
-            "MOOMOO_MAX_ORDER_QTY": "500",
-            "MOOMOO_MAX_ORDER_NOTIONAL": "25000.50",
-        }
-        policy = TradingPolicy.from_env(env)
+        policy = TradingPolicy.from_env(
+            {
+                "MOOMOO_TRADING_MODE": "REAL",
+                "MOOMOO_REAL_ACC_IDS": "456",
+                "MOOMOO_MAX_ORDER_QTY": "500",
+                "MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY": "USD:25000.50,HKD:200000",
+            }
+        )
         assert policy.mode is TradingMode.REAL
         assert policy.max_order_qty == 500.0
-        assert policy.max_order_notional == 25000.50
+        assert policy.max_order_notional == {"USD": 25000.50, "HKD": 200000.0}
 
     def test_from_env_rejects_non_numeric_qty(self):
-        env = {"MOOMOO_MAX_ORDER_QTY": "invalid"}
-        with pytest.raises(TradingModeConfigError):
-            TradingPolicy.from_env(env)
+        with pytest.raises(TradingModeConfigError, match="MOOMOO_MAX_ORDER_QTY"):
+            TradingPolicy.from_env({"MOOMOO_MAX_ORDER_QTY": "invalid"})
 
-    def test_from_env_rejects_negative_notional(self):
-        env = {"MOOMOO_MAX_ORDER_NOTIONAL": "-100"}
-        with pytest.raises(TradingModeConfigError):
-            TradingPolicy.from_env(env)
+    @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-100"])
+    def test_from_env_rejects_unusable_qty_limits(self, value):
+        """nan is the reason this validation exists at all.
 
-    def test_quantity_limit_enforced(self):
-        policy = TradingPolicy(TradingMode.REAL, max_order_qty=100)
-        # 100 is permitted
-        policy.check_order_limits("place_order", qty=100)
-        # 101 is rejected
-        with pytest.raises(TradingPolicyError, match="order quantity 101 exceeds"):
-            policy.check_order_limits("place_order", qty=101)
+        Every comparison against nan is false, so an unvalidated nan does not
+        raise anywhere — it silently switches the limit off, which is the exact
+        opposite of what configuring a limit means.
+        """
+        with pytest.raises(TradingModeConfigError, match="MOOMOO_MAX_ORDER_QTY"):
+            TradingPolicy.from_env({"MOOMOO_MAX_ORDER_QTY": value})
 
-    def test_notional_limit_enforced(self):
-        policy = TradingPolicy(TradingMode.REAL, max_order_notional=1000.0)
-        # 10 shares @ $100 = $1,000 -> allowed
-        policy.check_order_limits("place_order", qty=10, price=100.0)
-        # 11 shares @ $100 = $1,100 -> rejected
-        with pytest.raises(TradingPolicyError, match="estimated order notional"):
-            policy.check_order_limits("place_order", qty=11, price=100.0)
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "USD:nan",
+            "USD:inf",
+            "USD:0",
+            "USD:-1",
+            "25000",  # no currency
+            "USD:1000,USD:2000",  # duplicate
+            "US:1000",  # not three letters
+            "USDD:1000",
+            "US1:1000",  # not alphabetic
+            "USD:abc",
+        ],
+    )
+    def test_from_env_rejects_malformed_caps(self, value):
+        with pytest.raises(
+            TradingModeConfigError, match="MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY"
+        ):
+            TradingPolicy.from_env({"MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY": value})
 
-    def test_service_place_order_blocked_by_quantity_guardrail(self, ctx):
-        policy = TradingPolicy(TradingMode.SIMULATE, max_order_qty=50)
-        service = _service(TradingMode.SIMULATE, ctx)
-        # Inject policy with guardrails
-        service.policy = policy
-
-        with pytest.raises(TradingPolicyError, match="order quantity 100 exceeds"):
-            service.place_order(
-                code="US.AAPL",
-                price=150.0,
-                qty=100,
-                trd_side="BUY",
-                trd_env="SIMULATE",
-            )
-        ctx.place_order.assert_not_called()
-
-    def test_service_modify_order_blocked_by_guardrails(self, ctx):
-        policy = TradingPolicy(
-            TradingMode.SIMULATE, max_order_qty=50, max_order_notional=1000.0
+    def test_currency_codes_are_upper_cased(self):
+        policy = TradingPolicy.from_env(
+            {"MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY": "usd:1000"}
         )
-        service = _service(TradingMode.SIMULATE, ctx)
-        service.policy = policy
+        assert policy.max_order_notional == {"USD": 1000.0}
 
-        # Exceeds max_order_qty
-        with pytest.raises(TradingPolicyError, match="order quantity 100 exceeds"):
-            service.modify_order(
-                order_id="123",
-                modify_order_op="NORMAL",
-                qty=100,
-                price=10.0,
-                trd_env="SIMULATE",
-            )
-        ctx.modify_order.assert_not_called()
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"max_order_qty": float("nan")},
+            {"max_order_qty": float("inf")},
+            {"max_order_qty": 0},
+            {"max_order_notional": {"USD": float("nan")}},
+            {"max_order_notional": {"USD": -1.0}},
+        ],
+    )
+    def test_direct_construction_is_validated_too(self, kwargs):
+        """A policy built in code gets the same check as one built from env."""
+        with pytest.raises(TradingModeConfigError):
+            TradingPolicy(TradingMode.REAL, **kwargs)
 
-        # Exceeds max_order_notional
-        with pytest.raises(TradingPolicyError, match="estimated order notional"):
-            service.modify_order(
-                order_id="123",
-                modify_order_op="NORMAL",
-                qty=20,
-                price=100.0,
-                trd_env="SIMULATE",
+    def test_legacy_variable_alongside_the_new_one_is_ignored(self, caplog):
+        with caplog.at_level("INFO"):
+            policy = TradingPolicy.from_env(
+                {
+                    "MOOMOO_MAX_ORDER_NOTIONAL": "25000",
+                    "MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY": "USD:25000",
+                }
             )
-        ctx.modify_order.assert_not_called()
+        assert policy.max_order_notional == {"USD": 25000.0}
+        assert "MOOMOO_MAX_ORDER_NOTIONAL is set and ignored" in caplog.text
+
+    def test_legacy_variable_alone_is_a_startup_error(self):
+        with pytest.raises(TradingModeConfigError) as excinfo:
+            TradingPolicy.from_env({"MOOMOO_MAX_ORDER_NOTIONAL": "25000"})
+
+        message = str(excinfo.value)
+        assert "MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY" in message
+        assert "without a currency" in message
+
+    def test_legacy_variable_is_never_parsed_as_a_limit(self):
+        """Even a value that would parse fine is not read as a cap."""
+        with pytest.raises(TradingModeConfigError):
+            TradingPolicy.from_env({"MOOMOO_MAX_ORDER_NOTIONAL": "25000"})
+
+    def test_no_cap_configured_means_no_assessment(self):
+        policy = TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({456}))
+        assert policy.notional_cap_configured is False
+        # An instrument with no facts at all would be unassessable, and is
+        # permitted, because nothing asked for a valuation.
+        policy.assess_order(
+            "place_order", _order(InstrumentFacts(code="XX.UNKNOWN"), qty=10_000)
+        )
+
+
+class TestRealAccountAllowlist:
+    """MOOMOO_REAL_ACC_IDS is required in REAL mode and ignored elsewhere."""
+
+    @pytest.mark.parametrize("value", [None, "", "   ", ","])
+    def test_real_mode_requires_the_allowlist(self, value):
+        env = {"MOOMOO_TRADING_MODE": "REAL"}
+        if value is not None:
+            env["MOOMOO_REAL_ACC_IDS"] = value
+
+        with pytest.raises(TradingModeConfigError, match="MOOMOO_REAL_ACC_IDS"):
+            TradingPolicy.from_env(env)
+
+    @pytest.mark.parametrize("value", ["abc", "123,abc", "12.5", "-1"])
+    def test_malformed_allowlist_is_rejected(self, value):
+        with pytest.raises(TradingModeConfigError, match="MOOMOO_REAL_ACC_IDS"):
+            TradingPolicy.from_env(
+                {"MOOMOO_TRADING_MODE": "REAL", "MOOMOO_REAL_ACC_IDS": value}
+            )
+
+    def test_allowlist_parses_to_identifiers(self):
+        policy = TradingPolicy.from_env(
+            {"MOOMOO_TRADING_MODE": "REAL", "MOOMOO_REAL_ACC_IDS": " 123 , 456 "}
+        )
+        assert policy.real_acc_ids == frozenset({123, 456})
+
+    def test_simulate_needs_no_allowlist(self):
+        policy = TradingPolicy.from_env({"MOOMOO_TRADING_MODE": "SIMULATE"})
+        assert policy.real_acc_ids == frozenset()
+
+    def test_allowlist_outside_real_mode_is_ignored(self):
+        policy = TradingPolicy.from_env(
+            {"MOOMOO_TRADING_MODE": "SIMULATE", "MOOMOO_REAL_ACC_IDS": "456"}
+        )
+        assert policy.real_acc_ids == frozenset()
+
+
+class TestQuantityLimit:
+    """The quantity cap, including what it measures on a combo."""
+
+    def test_quantity_at_the_limit_is_permitted(self):
+        policy = TradingPolicy(TradingMode.REAL, max_order_qty=100)
+        policy.assess_order("place_order", _order(qty=100))
+
+    def test_quantity_over_the_limit_is_refused(self):
+        policy = TradingPolicy(TradingMode.REAL, max_order_qty=100)
+        with pytest.raises(TradingPolicyError, match="order quantity 101 exceeds"):
+            policy.assess_order("place_order", _order(qty=101))
+
+    def test_combo_measures_the_largest_leg_not_the_package_count(self):
+        """A 1:2:1 butterfly for 3 packages puts 6 contracts on its middle leg.
+
+        Measuring the package count would read that as 3 and let it through.
+        """
+        policy = TradingPolicy(TradingMode.REAL, max_order_qty=5)
+        butterfly = OrderFacts(
+            order_type="NORMAL",
+            trd_side="",
+            qty=3,
+            is_combo=True,
+            price=-1.0,
+            legs=[
+                LegFacts(instrument=_option("US.A"), qty_ratio=1),
+                LegFacts(instrument=_option("US.B"), qty_ratio=2),
+                LegFacts(instrument=_option("US.C"), qty_ratio=1),
+            ],
+        )
+
+        with pytest.raises(TradingPolicyError, match="largest leg quantity 6 exceeds"):
+            policy.assess_order("place_combo_order", butterfly)
+
+
+class TestReferencePrice:
+    """The reference-price table, row by row."""
+
+    @pytest.fixture
+    def policy(self) -> TradingPolicy:
+        return TradingPolicy(
+            TradingMode.REAL,
+            max_order_notional={"USD": 1000.0},
+            real_acc_ids=frozenset({456}),
+        )
+
+    def test_buy_limit_below_the_market_uses_its_own_price(self, policy):
+        """10 x 90 = 900, permitted, even though M is 150.
+
+        A BUY limit bounds the fill from above: the order cannot cost more than
+        it asks to, so judging it at the market would overstate it.
+        """
+        policy.assess_order("place_order", _order(qty=10, price=90.0))
+
+    def test_sell_limit_below_the_market_uses_the_market(self, policy):
+        """10 x max(90, 150) = 1,500, refused.
+
+        A SELL limit bounds the fill from below, so the market supplies the
+        upper side.
+        """
+        with pytest.raises(TradingPolicyError, match="1,500.00 USD"):
+            policy.assess_order(
+                "place_order", _order(qty=10, price=90.0, trd_side="SELL")
+            )
+
+    def test_market_order_at_price_zero_uses_the_market(self, policy):
+        """The old check skipped the notional entirely when price was 0."""
+        with pytest.raises(TradingPolicyError, match="1,500.00 USD"):
+            policy.assess_order(
+                "place_order",
+                _order(qty=10, price=0.0, order_type="MARKET"),
+            )
+
+    def test_stop_trigger_above_the_market_is_used(self, policy):
+        """8 x max(120, 130) = 1,040, refused."""
+        with pytest.raises(TradingPolicyError, match="1,040.00 USD"):
+            policy.assess_order(
+                "place_order",
+                _order(
+                    InstrumentFacts(
+                        code="US.AAPL",
+                        classification="STOCK",
+                        monetary_multiplier=1.0,
+                        last_price=120.0,
+                    ),
+                    qty=8,
+                    price=0.0,
+                    aux_price=130.0,
+                    order_type="STOP",
+                ),
+            )
+
+    def test_market_reference_is_the_largest_quoted_price(self):
+        facts = InstrumentFacts(
+            code="US.AAPL", last_price=100.0, bid_price=99.0, ask_price=101.0
+        )
+        assert facts.market_reference() == 101.0
+
+    def test_non_numeric_quotes_leave_the_remaining_price_usable(self, policy):
+        """Bid and ask absent, last present: M is the last price, and no crash."""
+        facts = InstrumentFacts(
+            code="US.AAPL",
+            classification="STOCK",
+            monetary_multiplier=1.0,
+            last_price=150.0,
+            bid_price=None,
+            ask_price=None,
+        )
+        assert facts.market_reference() == 150.0
+        with pytest.raises(TradingPolicyError, match="1,500.00 USD"):
+            policy.assess_order(
+                "place_order", _order(facts, qty=10, price=90.0, trd_side="SELL")
+            )
+
+    def test_sell_limit_with_no_market_reference_is_refused(self, policy):
+        """Fail closed: an illiquid option quoting nothing is the common case."""
+        facts = InstrumentFacts(
+            code="US.AAPL", classification="STOCK", monetary_multiplier=1.0
+        )
+        assert facts.market_reference() is None
+
+        with pytest.raises(TradingPolicyError, match="no usable market price"):
+            policy.assess_order(
+                "place_order", _order(facts, qty=1, price=1.0, trd_side="SELL")
+            )
+
+    def test_unclassified_order_type_is_refused(self, policy):
+        """TWAP and friends are query-only, so nothing knows how to value them."""
+        with pytest.raises(TradingPolicyError, match="not classified"):
+            policy.assess_order(
+                "place_order", _order(qty=1, price=1.0, order_type="TWAP")
+            )
+
+
+class TestNotionalAssessment:
+    """Valuing an order, and refusing when it cannot be valued."""
+
+    @pytest.fixture
+    def policy(self) -> TradingPolicy:
+        return TradingPolicy(
+            TradingMode.REAL,
+            max_order_notional={"USD": 1000.0},
+            real_acc_ids=frozenset({456}),
+        )
+
+    def test_option_notional_uses_the_monetary_multiplier(self, policy):
+        """5 x 3.00 x 100 = 1,500 USD."""
+        with pytest.raises(TradingPolicyError) as excinfo:
+            policy.assess_order("place_order", _order(_option(), qty=5, price=3.00))
+
+        message = str(excinfo.value)
+        assert "1,500.00 USD" in message
+        assert "1,000.00 USD" in message
+
+    def test_the_multiplier_is_used_even_when_contract_size_differs(self, policy):
+        """The case that catches the wrong field being reused.
+
+        Contract size and monetary multiplier are distinct broker fields. A
+        synthetic instrument where they differ is the only way to tell which one
+        the valuation actually reached for.
+        """
+        synthetic = _option(contract_size=10.0, monetary_multiplier=100.0)
+
+        with pytest.raises(TradingPolicyError, match="1,500.00 USD"):
+            policy.assess_order("place_order", _order(synthetic, qty=5, price=3.00))
+
+    def test_equity_multiplier_is_one(self, policy):
+        with pytest.raises(TradingPolicyError, match="1,100.00 USD"):
+            policy.assess_order("place_order", _order(qty=11, price=100.0))
+
+    def test_missing_classification_is_refused(self, policy):
+        with pytest.raises(TradingPolicyError, match="classification"):
+            policy.assess_order(
+                "place_order",
+                _order(InstrumentFacts(code="US.AAPL", last_price=1.0), price=1.0),
+            )
+
+    def test_unsupported_classification_is_refused(self, policy):
+        with pytest.raises(TradingPolicyError, match="does not value"):
+            policy.assess_order(
+                "place_order",
+                _order(
+                    InstrumentFacts(
+                        code="US.X", classification="FUTURE", last_price=1.0
+                    ),
+                    price=1.0,
+                ),
+            )
+
+    def test_option_without_a_verified_multiplier_is_refused(self, policy):
+        with pytest.raises(TradingPolicyError, match="monetary multiplier"):
+            policy.assess_order(
+                "place_order",
+                _order(_option(monetary_multiplier=None), price=1.0),
+            )
+
+    def test_unverified_market_is_refused_not_guessed(self, policy):
+        """A market prefix is a venue, not a currency.
+
+        HK dual-counter instruments quote in HKD or RMB on one venue, so valuing
+        by prefix outside a verified subset would misprice exactly those while
+        appearing to work.
+        """
+        with pytest.raises(TradingPolicyError, match="cannot establish the currency"):
+            policy.assess_order(
+                "place_order",
+                _order(
+                    InstrumentFacts(
+                        code="HK.00700",
+                        classification="STOCK",
+                        monetary_multiplier=1.0,
+                        last_price=1.0,
+                    ),
+                    price=1.0,
+                ),
+            )
+
+    def test_currency_without_a_configured_cap_is_refused(self):
+        """A cap in one currency does not mean no cap in the others."""
+        policy = TradingPolicy(
+            TradingMode.REAL,
+            max_order_notional={"HKD": 200000.0},
+            real_acc_ids=frozenset({456}),
+        )
+
+        with pytest.raises(TradingPolicyError, match="no configured cap"):
+            policy.assess_order("place_order", _order(qty=1, price=1.0))
+
+    def test_an_instrument_supplied_currency_wins_over_the_table(self, policy):
+        """Forward compatibility: a real currency field would take precedence."""
+        facts = InstrumentFacts(
+            code="XX.SOMETHING",
+            classification="STOCK",
+            monetary_multiplier=1.0,
+            last_price=150.0,
+            currency="USD",
+        )
+        with pytest.raises(TradingPolicyError, match="1,500.00 USD"):
+            policy.assess_order("place_order", _order(facts, qty=10, price=150.0))
+
+
+class TestComboPremium:
+    """The combo cap measures package premium, and says so."""
+
+    @pytest.fixture
+    def policy(self) -> TradingPolicy:
+        return TradingPolicy(
+            TradingMode.REAL,
+            max_order_notional={"USD": 500.0},
+            real_acc_ids=frozenset({456}),
+        )
+
+    def _combo(self, policy_price: float = -2.50, **overrides) -> OrderFacts:
+        facts = {
+            "order_type": "NORMAL",
+            "trd_side": "",
+            "qty": 3,
+            "is_combo": True,
+            "price": policy_price,
+            "legs": [
+                LegFacts(instrument=_option("US.A")),
+                LegFacts(instrument=_option("US.B")),
+            ],
+        }
+        facts.update(overrides)
+        return OrderFacts(**facts)
+
+    def test_premium_uses_the_absolute_net_price(self, policy):
+        """|-2.50| x 3 x 100 = 750 USD. The sign is not itself grounds to refuse."""
+        with pytest.raises(TradingPolicyError) as excinfo:
+            policy.assess_order("place_combo_order", self._combo())
+
+        message = str(excinfo.value)
+        assert "750.00 USD" in message
+        assert "package premium" in message
+
+    def test_premium_is_named_premium_not_max_loss(self, policy):
+        with pytest.raises(TradingPolicyError) as excinfo:
+            policy.assess_order("place_combo_order", self._combo())
+
+        assert "maximum loss" not in str(excinfo.value)
+
+    def test_premium_uses_the_multiplier_not_the_contract_size(self, policy):
+        legs = [
+            LegFacts(instrument=_option("US.A", contract_size=10.0)),
+            LegFacts(instrument=_option("US.B", contract_size=10.0)),
+        ]
+        with pytest.raises(TradingPolicyError, match="750.00 USD"):
+            policy.assess_order("place_combo_order", self._combo(legs=legs))
+
+    def test_a_no_fixed_limit_combo_has_no_computable_premium(self, policy):
+        with pytest.raises(TradingPolicyError, match="no fixed net limit price"):
+            policy.assess_order("place_combo_order", self._combo(order_type="MARKET"))
+
+    def test_a_stock_leg_makes_the_premium_meaningless(self, policy):
+        legs = [
+            LegFacts(instrument=_option("US.A")),
+            LegFacts(instrument=STOCK),
+        ]
+        with pytest.raises(TradingPolicyError, match="options only"):
+            policy.assess_order("place_combo_order", self._combo(legs=legs))
+
+    def test_differing_multipliers_are_refused(self, policy):
+        legs = [
+            LegFacts(instrument=_option("US.A", monetary_multiplier=100.0)),
+            LegFacts(instrument=_option("US.B", monetary_multiplier=10.0)),
+        ]
+        with pytest.raises(TradingPolicyError, match="differing monetary multipliers"):
+            policy.assess_order("place_combo_order", self._combo(legs=legs))
+
+    def test_differing_contract_sizes_are_refused(self, policy):
+        legs = [
+            LegFacts(instrument=_option("US.A", contract_size=100.0)),
+            LegFacts(instrument=_option("US.B", contract_size=10.0)),
+        ]
+        with pytest.raises(TradingPolicyError, match="differing contract sizes"):
+            policy.assess_order("place_combo_order", self._combo(legs=legs))
+
+    def test_a_permitted_premium_passes(self, policy):
+        """|-1.00| x 3 x 100 = 300 USD, under the 500 cap."""
+        policy.assess_order("place_combo_order", self._combo(policy_price=-1.00))

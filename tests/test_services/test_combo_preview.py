@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from moomoo_mcp.services.order_errors import OrderNotSentError
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import (
     TradingMode,
@@ -296,10 +297,16 @@ class TestUnavailableValues:
             combo_legs=_opening_legs(), price=2.5, qty=1, acc_id=456
         )
 
-        with pytest.raises(TradingPolicyError):
+        with pytest.raises(OrderNotSentError) as excinfo:
             service.place_combo_order(
-                combo_legs=_opening_legs(), price=2.5, qty=1, acc_id=456
+                combo_legs=_opening_legs(),
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=456,
             )
+
+        assert isinstance(excinfo.value.__cause__, TradingPolicyError)
 
         assert_no_writes(ctx)
 

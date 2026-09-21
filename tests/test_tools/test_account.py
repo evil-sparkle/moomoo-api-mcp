@@ -62,16 +62,56 @@ async def test_unlock_trade_explicit_password(call_tool, mock_trade_service):
 
 
 @pytest.mark.asyncio
-async def test_unlock_trade_environment_fallback(call_tool, mock_trade_service):
-    """Test unlock_trade tool falls back to MOOMOO_TRADE_PASSWORD env var."""
+async def test_unlock_trade_has_no_environment_fallback(call_tool, mock_trade_service):
+    """The environment fallback is gone.
+
+    A stored credential now makes manual unlocking refused outright, so a
+    fallback to that same credential has nothing left to fall back to. The tool
+    forwards exactly what the caller supplied, and the service decides.
+    """
     with patch.dict(os.environ, {"MOOMOO_TRADE_PASSWORD": "env_password"}, clear=True):
-        result = await call_tool("unlock_trade")
+        await call_tool("unlock_trade")
+
+    mock_trade_service.unlock_trade.assert_called_once_with(
+        password=None, password_md5=None
+    )
+
+
+@pytest.mark.asyncio
+async def test_unlock_trade_forwards_the_supplied_password(
+    call_tool, mock_trade_service
+):
+    await call_tool("unlock_trade", {"password": "supplied"})
+
+    mock_trade_service.unlock_trade.assert_called_once_with(
+        password="supplied", password_md5=None
+    )
+
+
+@pytest.mark.asyncio
+async def test_unlock_trade_result_states_that_the_unlock_persists(call_tool):
+    """Nothing re-locks on this path, so the caller has to know that."""
+    result = await call_tool("unlock_trade", {"password": "supplied"})
 
     payload = result.structured or result.json
     assert payload["status"] == "unlocked"
-    mock_trade_service.unlock_trade.assert_called_once_with(
-        password="env_password", password_md5=None
-    )
+    assert "PERSISTS" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_lock_trade_reports_the_halt_state(call_tool, mock_trade_service):
+    mock_trade_service.lock_trade.return_value = {
+        "status": "locked",
+        "execution_halted": False,
+        "halt_cleared": True,
+    }
+
+    result = await call_tool("lock_trade")
+
+    payload = result.structured or result.json
+    assert payload["status"] == "locked"
+    assert payload["execution_halted"] is False
+    assert payload["halt_cleared"] is True
 
 
 class TestGuidanceMatchesPolicy:
