@@ -58,12 +58,18 @@ current code and the SDK. They were checked against `main` at `f0ae2ef` and agai
 
 **Goals:**
 
-- Every order-mutating path goes through one pre-dispatch sequence, in this order:
+- Every order-mutating path goes through one pre-dispatch sequence, taking the
+  steps that apply to it, in this order:
   1. validate;
   2. check the halt;
   3. resolve the account;
   4. assess limits;
   5. unlock, dispatch and relock.
+
+  Steps 2 and 4 are for exposure-adding writes. An exposure-reducing one — a
+  cancellation, or a `CANCEL`/`DISABLE`/`DELETE` modification — skips both by
+  design: an operator facing a halt has to be able to pull orders, and pulling
+  one has no notional to measure.
 
   Every refusal happens before the single SDK write call. The halt comes before
   the account resolution because resolving the default `acc_id="0"` reads the
