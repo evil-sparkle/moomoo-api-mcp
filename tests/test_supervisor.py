@@ -510,10 +510,11 @@ class TestRememberedToken:
 
         assert has_remembered_token(str(tmp_path)) is True
 
-    # The probe also reaches a hardcoded /root, which the container's `opend`
-    # user may not stat. Python raises PermissionError there through 3.13 and
-    # answers False from 3.14 on, so on the image's 3.12 an unreadable
-    # directory crashed the supervisor instead of reading as "no account".
+    # An `OPEND_DATA_DIR` bind mount need not be owned by the container's
+    # uid 10001, and a directory it may not stat is one Python raises
+    # PermissionError on through 3.13 while answering False from 3.14 on. On
+    # the image's 3.12 that crashed the supervisor instead of reading as
+    # "no account".
     @pytest.mark.skipif(
         os.geteuid() == 0, reason="root can stat a directory whatever its mode"
     )
