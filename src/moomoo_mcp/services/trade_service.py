@@ -1229,8 +1229,11 @@ class TradeService:
         """Place a new trading order.
 
         Every refusal happens before the single gateway write, in this order:
-        policy, order values, account, halt, limits. What comes back is one of
-        three outcomes — see :mod:`moomoo_mcp.services.order_errors`.
+        policy, order values, halt, account, limits. The halt comes before the
+        account because resolving the default ``acc_id="0"`` reads the account
+        list from the gateway, and a halted write is refused before any gateway
+        request at all. What comes back is one of three outcomes — see
+        :mod:`moomoo_mcp.services.order_errors`.
 
         Args:
             code: Stock code (e.g., 'US.AAPL').
