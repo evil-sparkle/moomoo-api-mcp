@@ -111,9 +111,10 @@ def _is_dir(path: Path) -> bool:
 
     `Path.is_dir()` answers False for a missing path, but through 3.13 it
     re-raises PermissionError for a directory the process may not stat; 3.14
-    began swallowing that too. The image runs 3.12.13 as `opend` while
-    `/root` stays 0700, so the probe below hits exactly that case, and a
-    probe that cannot see an account is the same as one that finds none.
+    began swallowing that too. The image runs 3.12.13 as uid 10001, and an
+    `OPEND_DATA_DIR` bind mount owned by anyone else is exactly such a
+    directory — where a probe that cannot see an account should answer the
+    same as one that finds none, not take the supervisor down.
     """
     try:
         return path.is_dir()
@@ -127,19 +128,22 @@ def has_remembered_token(home: str = DEFAULT_OPEND_HOME) -> bool:
     Mirrors the check the compose entrypoint used to make in shell. Getting it
     wrong in the permissive direction is the expensive mistake: OpenD would
     start, fail to log in, and sit there looking healthy.
+
+    `HOME` is the only place worth looking, upgrades from the image that ran
+    the gateway as root included. That image mounted the same `opend-data`
+    volume at `/root/.com.moomoo.OpenD`; it mounts at
+    `/home/opend/.com.moomoo.OpenD` now, so root-era state arrives under
+    `HOME` and the first probe below finds it. Whatever a root-era container
+    wrote *outside* that volume went with the container it was recreated from.
     """
     data = Path(home) / ".com.moomoo.OpenD"
     if _is_dir(data / "F3CNN" / "UserAccMap"):
         return True
     auth_list = data / "F3CNN" / "ftnet" / "auth_acc_list"
     try:
-        if any(auth_list.iterdir()):
-            return True
+        return any(auth_list.iterdir())
     except OSError:
-        pass
-    # Left from an older image that ran the gateway as root. Still worth
-    # honouring: the alternative is demanding an SMS code for nothing.
-    return _is_dir(Path("/root/.com.moomoo.OpenD/F3CNN/UserAccMap"))
+        return False
 
 
 def gateway_spec(environ: dict[str, str] | None = None) -> ChildSpec:
