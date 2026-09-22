@@ -60,12 +60,16 @@ current code and the SDK. They were checked against `main` at `f0ae2ef` and agai
 
 - Every order-mutating path goes through one pre-dispatch sequence, in this order:
   1. validate;
-  2. resolve the account;
-  3. check the halt;
+  2. check the halt;
+  3. resolve the account;
   4. assess limits;
   5. unlock, dispatch and relock.
 
-  Every refusal happens before the single SDK write call.
+  Every refusal happens before the single SDK write call. The halt comes before
+  the account resolution because resolving the default `acc_id="0"` reads the
+  account list from the gateway, and a halted write is refused before any
+  gateway request at all, read or write. The authoritative halt check is the one
+  inside the just-in-time lock; this one only saves the work.
 - The policy stays pure and unit-testable. Gathering the facts it needs, such as
   instrument data and the existing order, is the trade service's job.
 - Configuration is parsed and validated once, at process start, before any
@@ -440,9 +444,11 @@ These events are not transitions:
   cannot report a clear while a cancellation's relock is still pending. It returns
   `{status: "locked", execution_halted, halt_cleared}`.
 - **Gate.** The pre-dispatch sequence reads the state for REAL `place_order`,
-  `place_combo_order`, and `modify_order` `NORMAL`/`ENABLE`. `HALTED` raises a
-  `TradingPolicyError` naming the halt and `lock_trade`. `_not_sent` wraps it as
-  `OrderNotSentError`.
+  `place_combo_order`, and `modify_order` `NORMAL`/`ENABLE`, before it resolves
+  the account. `HALTED` raises a `TradingPolicyError` naming the halt and
+  `lock_trade`. `_not_sent` wraps it as `OrderNotSentError`. The authoritative
+  read is the one inside `_jit_lock`; this early one exists so a halted write
+  pays for no gateway request at all, the account-list read included.
 - **Report.** `HealthCheck.result()` adds `execution_halted`, `halted_since` and
   `halt_error` (= `last_lock_error`). It reads memory only, with no probe.
 

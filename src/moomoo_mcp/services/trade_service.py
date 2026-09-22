@@ -1283,10 +1283,13 @@ class TradeService:
             if not self.trade_ctx:
                 raise RuntimeError("Trade context not connected")
 
+            # Before the account resolution, not after: resolving the default
+            # ``acc_id="0"`` reads the account list from the gateway, and the
+            # halt refuses before any gateway request.
+            self._check_execution_halt(operation, trd_env)
             resolved_acc_id = self._resolve_account(
                 trd_env, self._get_market_from_code(code), acc_id
             )
-            self._check_execution_halt(operation, trd_env)
             self.policy.assess_order(
                 operation,
                 self._single_leg_facts(
@@ -1572,10 +1575,11 @@ class TradeService:
                 raise RuntimeError("Trade context not connected")
 
             legs = self._build_combo_legs(combo_legs)
+            # Ahead of the account resolution: see place_order.
+            self._check_execution_halt(operation, trd_env)
             resolved_acc_id = self._resolve_account(
                 trd_env, self._get_market_from_code(legs[0].code), acc_id
             )
-            self._check_execution_halt(operation, trd_env)
             self.policy.assess_order(
                 operation, self._combo_facts(operation, legs, price, qty, order_type)
             )
@@ -1796,12 +1800,15 @@ class TradeService:
             if not self.trade_ctx:
                 raise RuntimeError("Trade context not connected")
 
+            # Ahead of the account resolution: see place_order.
+            if requested_op in EXPOSING_MODIFY_OPS:
+                self._check_execution_halt(operation, trd_env)
+
             # No market: a modification names an order, and the order already
             # knows its instrument.
             resolved_acc_id = self._resolve_account(trd_env, None, acc_id)
 
             if requested_op in EXPOSING_MODIFY_OPS:
-                self._check_execution_halt(operation, trd_env)
                 existing = self._fetch_order(
                     operation, order_id, trd_env, resolved_acc_id
                 )
