@@ -510,6 +510,23 @@ class TestRememberedToken:
 
         assert has_remembered_token(str(tmp_path)) is True
 
+    # The probe also reaches a hardcoded /root, which the container's `opend`
+    # user may not stat. Python raises PermissionError there through 3.13 and
+    # answers False from 3.14 on, so on the image's 3.12 an unreadable
+    # directory crashed the supervisor instead of reading as "no account".
+    @pytest.mark.skipif(
+        os.geteuid() == 0, reason="root can stat a directory whatever its mode"
+    )
+    def test_an_unreadable_directory_does_not_count(self, tmp_path):
+        data = tmp_path / ".com.moomoo.OpenD"
+        (data / "F3CNN" / "UserAccMap").mkdir(parents=True)
+        data.chmod(0o000)
+
+        try:
+            assert has_remembered_token(str(tmp_path)) is False
+        finally:
+            data.chmod(0o700)
+
 
 class TestServerCommandLine:
     def test_the_server_runs_its_console_script(self):

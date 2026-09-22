@@ -106,6 +106,21 @@ class ChildSpec:
     env: dict[str, str] = field(default_factory=dict)
 
 
+def _is_dir(path: Path) -> bool:
+    """Whether `path` is a directory, reading one we cannot stat as absent.
+
+    `Path.is_dir()` answers False for a missing path, but through 3.13 it
+    re-raises PermissionError for a directory the process may not stat; 3.14
+    began swallowing that too. The image runs 3.12.13 as `opend` while
+    `/root` stays 0700, so the probe below hits exactly that case, and a
+    probe that cannot see an account is the same as one that finds none.
+    """
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def has_remembered_token(home: str = DEFAULT_OPEND_HOME) -> bool:
     """Whether OpenD has state a `-login_by_remember=1` start could use.
 
@@ -114,7 +129,7 @@ def has_remembered_token(home: str = DEFAULT_OPEND_HOME) -> bool:
     start, fail to log in, and sit there looking healthy.
     """
     data = Path(home) / ".com.moomoo.OpenD"
-    if (data / "F3CNN" / "UserAccMap").is_dir():
+    if _is_dir(data / "F3CNN" / "UserAccMap"):
         return True
     auth_list = data / "F3CNN" / "ftnet" / "auth_acc_list"
     try:
@@ -124,7 +139,7 @@ def has_remembered_token(home: str = DEFAULT_OPEND_HOME) -> bool:
         pass
     # Left from an older image that ran the gateway as root. Still worth
     # honouring: the alternative is demanding an SMS code for nothing.
-    return Path("/root/.com.moomoo.OpenD/F3CNN/UserAccMap").is_dir()
+    return _is_dir(Path("/root/.com.moomoo.OpenD/F3CNN/UserAccMap"))
 
 
 def gateway_spec(environ: dict[str, str] | None = None) -> ChildSpec:
