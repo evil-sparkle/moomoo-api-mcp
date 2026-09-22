@@ -857,6 +857,84 @@ class TestExecutionHalt:
         assert lock_issued.is_set()
 
 
+class TestHaltRefusesBeforeAnyGatewayRequest:
+    """The contract says "before any gateway request", so the read counts too.
+
+    Resolving the default ``acc_id="0"`` asks the gateway for the account list.
+    Checked after that resolution, a halted write still put a request on the
+    connection before being turned away — no mutation, but not what the spec
+    says either.
+    """
+
+    @staticmethod
+    def _halted_with_accounts(ctx: MagicMock) -> TradeService:
+        service = TestExecutionHalt._halted_service(ctx)
+        ctx.get_acc_list.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [{"acc_id": 123, "trd_env": "REAL", "trdmarket_auth": ["US"]}]
+            ),
+        )
+        return service
+
+    def test_a_halted_placement_resolves_no_account(self, mock_trade_ctx):
+        service = self._halted_with_accounts(mock_trade_ctx)
+
+        with pytest.raises(OrderNotSentError, match="halted"):
+            _place(service, acc_id="0")
+
+        mock_trade_ctx.get_acc_list.assert_not_called()
+
+    def test_a_halted_combo_placement_resolves_no_account(self, mock_trade_ctx):
+        service = self._halted_with_accounts(mock_trade_ctx)
+
+        with pytest.raises(OrderNotSentError, match="halted"):
+            service.place_combo_order(
+                combo_legs=[
+                    {"code": "US.A", "trd_side": "BUY", "qty_ratio": 1},
+                    {"code": "US.B", "trd_side": "SELL", "qty_ratio": 1},
+                ],
+                price=1.0,
+                qty=1,
+                trd_env="REAL",
+                acc_id="0",
+            )
+
+        mock_trade_ctx.get_acc_list.assert_not_called()
+
+    @pytest.mark.parametrize("op", ["NORMAL", "ENABLE"])
+    def test_a_halted_exposing_modification_resolves_no_account(
+        self, mock_trade_ctx, op
+    ):
+        service = self._halted_with_accounts(mock_trade_ctx)
+
+        with pytest.raises(OrderNotSentError, match="halted"):
+            service.modify_order(
+                order_id="123456",
+                modify_order_op=op,
+                price=1.0,
+                trd_env="REAL",
+                acc_id="0",
+            )
+
+        mock_trade_ctx.get_acc_list.assert_not_called()
+        mock_trade_ctx.order_list_query.assert_not_called()
+
+    def test_a_permitted_write_still_resolves_the_default_account(self, mock_trade_ctx):
+        """The refusal moved; resolution itself did not."""
+        service = self._halted_with_accounts(mock_trade_ctx)
+        mock_trade_ctx.modify_order.return_value = (
+            RET_OK,
+            pd.DataFrame([{"order_id": "123456"}]),
+        )
+        mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
+
+        service.cancel_order(order_id="123456", trd_env="REAL", acc_id="0")
+
+        mock_trade_ctx.get_acc_list.assert_called_once()
+        assert mock_trade_ctx.modify_order.call_args.kwargs["acc_id"] == 123
+
+
 class TestHaltIsScopedToRealWrites:
     """The halt guards the REAL gateway, so it is REAL writes it refuses.
 
