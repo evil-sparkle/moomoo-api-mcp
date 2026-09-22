@@ -250,6 +250,34 @@ def check_basicinfo_takes_code_list() -> tuple[bool, str]:
     )
 
 
+def check_basicinfo_ignores_stock_type_with_a_code_list() -> tuple[bool, str]:
+    """An explicit `code_list` makes `market` and `stock_type` irrelevant.
+
+    The adapter reads a classification in one call per market and trusts each
+    returned row's own `stock_type`. That is only correct because the request
+    packer, given a non-empty code_list, sets `market = 0` and `secType = 0` and
+    lets the security list drive the query. If a future SDK starts honouring
+    `stock_type` as a filter, one call would silently return a narrowed set and
+    the adapter would refuse instruments it should have valued -- so the
+    behaviour is pinned here rather than assumed.
+    """
+    source = inspect.getsource(quote_query.StockBasicInfoQuery.pack_req)
+    lines = [" ".join(line.split()) for line in source.splitlines()]
+    guarded = "query_code = code_list is not None and len(code_list) > 0" in lines
+    zeroes_market = "req.c2s.market = 0" in lines
+    zeroes_sec_type = "req.c2s.secType = 0" in lines
+    holds = guarded and zeroes_market and zeroes_sec_type
+    return (
+        holds,
+        "StockBasicInfoQuery.pack_req sets market=0 and secType=0 when code_list "
+        "is non-empty, so the explicit security list drives the query and one "
+        "call returns every requested code with its own stock_type"
+        if holds
+        else f"packer changed: guarded={guarded} market0={zeroes_market} "
+        f"secType0={zeroes_sec_type}",
+    )
+
+
 def check_basicinfo_returns_stock_type() -> tuple[bool, str]:
     doc = inspect.getdoc(OpenQuoteContext.get_stock_basicinfo) or ""
     return ("stock_type" in doc, "get_stock_basicinfo documents a stock_type column")
@@ -447,6 +475,11 @@ CHECKS: Sequence[tuple[str, str, Callable[[], tuple[bool, str]]]] = (
         "get_stock_basicinfo returns stock_type",
         "Decision 3 (classification source)",
         check_basicinfo_returns_stock_type,
+    ),
+    (
+        "an explicit code_list makes market and stock_type irrelevant",
+        "Decision 3 (one classification call per market)",
+        check_basicinfo_ignores_stock_type_with_a_code_list,
     ),
     (
         "SecurityType defines STOCK, ETF and DRVT",
