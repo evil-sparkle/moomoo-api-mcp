@@ -438,6 +438,30 @@ def _place(service: TradeService, **overrides):
     return service.place_order(**kwargs)
 
 
+class _LockArrival:
+    """Wraps the service's just-in-time lock to report a thread arriving at it.
+
+    A concurrency test needs to know that the second writer has crossed its
+    early halt check and reached the lock — the exact point the race turns on.
+    Sleeping for a while only assumes it. This sets ``arrived`` from inside the
+    named thread, immediately before the acquire, so the test can wait on the
+    fact instead of on a duration.
+    """
+
+    def __init__(self, lock, thread_name: str, arrived: threading.Event):
+        self._lock = lock
+        self._thread_name = thread_name
+        self._arrived = arrived
+
+    def __enter__(self):
+        if threading.current_thread().name == self._thread_name:
+            self._arrived.set()
+        return self._lock.__enter__()
+
+    def __exit__(self, *exc_info):
+        return self._lock.__exit__(*exc_info)
+
+
 class TestJustInTimeUnlock:
     """Unlock, dispatch, relock — and what each failure means."""
 
@@ -833,6 +857,88 @@ class TestExecutionHalt:
         assert lock_issued.is_set()
 
 
+class TestHaltIsScopedToRealWrites:
+    """The halt guards the REAL gateway, so it is REAL writes it refuses.
+
+    A failed relock says the REAL gateway may still be unlocked. A SIMULATE
+    write neither unlocks it nor can add live exposure, so refusing one would
+    take away the only environment still safe to use while an operator works
+    out what went wrong — and the accepted contract scopes the refusal to REAL.
+    """
+
+    def test_a_simulate_placement_is_allowed_while_halted(self, mock_trade_ctx):
+        service = TestExecutionHalt._halted_service(mock_trade_ctx)
+
+        result = _place(service, trd_env="SIMULATE", acc_id=999)
+
+        assert result["order_id"] == "1"
+        mock_trade_ctx.place_order.assert_called_once()
+
+    def test_a_permitted_simulate_write_does_not_touch_the_gateway_lock(
+        self, mock_trade_ctx
+    ):
+        """It is not a just-in-time write, so there is nothing to unlock."""
+        service = TestExecutionHalt._halted_service(mock_trade_ctx)
+
+        _place(service, trd_env="SIMULATE", acc_id=999)
+
+        mock_trade_ctx.unlock_trade.assert_not_called()
+
+    def test_a_permitted_simulate_write_leaves_the_halt_in_place(self, mock_trade_ctx):
+        """Only lock_trade clears it; letting a paper order through is not a
+        sign that the gateway can be locked again."""
+        service = TestExecutionHalt._halted_service(mock_trade_ctx)
+
+        _place(service, trd_env="SIMULATE", acc_id=999)
+
+        assert service.execution_state["execution_halted"] is True
+
+    @pytest.mark.parametrize("op", ["NORMAL", "ENABLE"])
+    def test_a_simulate_exposing_modification_is_allowed_while_halted(
+        self, mock_trade_ctx, op
+    ):
+        service = TestExecutionHalt._halted_service(mock_trade_ctx)
+        mock_trade_ctx.modify_order.return_value = (
+            RET_OK,
+            pd.DataFrame([{"order_id": "123456"}]),
+        )
+
+        service.modify_order(
+            order_id="123456",
+            modify_order_op=op,
+            price=1.0,
+            trd_env="SIMULATE",
+            acc_id=999,
+        )
+
+        mock_trade_ctx.modify_order.assert_called_once()
+
+    def test_a_real_placement_is_still_refused_while_halted(self, mock_trade_ctx):
+        """The narrowing must not reach the writes the halt exists for."""
+        service = TestExecutionHalt._halted_service(mock_trade_ctx)
+
+        with pytest.raises(OrderNotSentError, match="halted"):
+            _place(service)
+
+        mock_trade_ctx.place_order.assert_not_called()
+
+    def test_the_in_lock_check_lets_a_simulate_write_through(self, mock_trade_ctx):
+        """The authoritative check, exercised directly."""
+        service = _credentialed_service(mock_trade_ctx)
+        service._execution.record_relock_failure("lock refused")
+
+        receipt, relock_error = service._dispatch_write(
+            "SIMULATE",
+            "place_order",
+            lambda: (RET_OK, pd.DataFrame([{"order_id": "1"}])),
+            lambda _data: {"order_id": "1"},
+            adds_exposure=True,
+        )
+
+        assert receipt == {"order_id": "1"}
+        assert relock_error is None
+
+
 class TestHaltIsCheckedInsideTheLock:
     """A write queued behind another cannot slip past a halt it caused.
 
@@ -847,6 +953,7 @@ class TestHaltIsCheckedInsideTheLock:
         service = _credentialed_service(mock_trade_ctx)
         first_is_dispatching = threading.Event()
         release_first = threading.Event()
+        second_is_at_the_lock = threading.Event()
         unlock_calls: list[bool] = []
 
         def unlock_trade(**kwargs):
@@ -864,6 +971,9 @@ class TestHaltIsCheckedInsideTheLock:
 
         mock_trade_ctx.unlock_trade.side_effect = unlock_trade
         mock_trade_ctx.place_order.side_effect = slow_place_order
+        service._jit_lock = _LockArrival(  # type: ignore[assignment]
+            service._jit_lock, "writer-b", second_is_at_the_lock
+        )
 
         first: dict = {}
         second: dict = {}
@@ -880,15 +990,19 @@ class TestHaltIsCheckedInsideTheLock:
             except Exception as exc:  # noqa: BLE001 - recorded for the assertion
                 second["error"] = exc
 
-        writer_a = threading.Thread(target=run_first)
+        writer_a = threading.Thread(target=run_first, name="writer-a")
         writer_a.start()
         assert first_is_dispatching.wait(timeout=2)
 
-        # B has now passed its own pre-dispatch checks — the service was ARMED
-        # when it looked — and is queued for the lock A holds.
-        writer_b = threading.Thread(target=run_second)
+        writer_b = threading.Thread(target=run_second, name="writer-b")
         writer_b.start()
-        time.sleep(0.1)
+
+        # Wait for proof, not for a duration: B has passed its own pre-dispatch
+        # checks — the service was ARMED when it looked — and has reached the
+        # lock A holds. A sleep here only assumed that, so on a loaded runner B
+        # could instead start after the halt and be turned away by the early
+        # check, leaving the test green with the in-lock check deleted.
+        assert second_is_at_the_lock.wait(timeout=2)
 
         release_first.set()
         writer_a.join(timeout=2)

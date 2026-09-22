@@ -58,8 +58,8 @@ async def place_order(
     when no market price is available.
 
     HALT: if a re-lock after an earlier order failed, execution is HALTED and
-    this call is refused. Cancellations stay allowed. lock_trade is the only way
-    to clear a halt.
+    this call is refused for trd_env='REAL'. SIMULATE stays allowed, as do
+    cancellations. lock_trade is the only way to clear a halt.
 
     THREE OUTCOMES: an error says which one happened.
     - "no order was sent": refused before anything was dispatched. Safe to fix
@@ -192,8 +192,8 @@ async def place_combo_order(
       because there is no net package price to measure.
 
     HALT: if a re-lock after an earlier order failed, execution is HALTED and
-    this call is refused. Cancellations stay allowed. lock_trade is the only way
-    to clear a halt.
+    this call is refused for trd_env='REAL'. SIMULATE stays allowed, as do
+    cancellations. lock_trade is the only way to clear a halt.
 
     THREE OUTCOMES: an error says which one happened.
     - "no order was sent": refused before anything was dispatched. Safe to fix
@@ -368,8 +368,9 @@ async def modify_order(
     are not checked against limits.
 
     HALT: if a re-lock after an earlier order failed, execution is HALTED and
-    'NORMAL' and 'ENABLE' are refused. 'CANCEL', 'DISABLE' and 'DELETE' stay
-    allowed. lock_trade is the only way to clear a halt.
+    'NORMAL' and 'ENABLE' are refused for trd_env='REAL'. SIMULATE stays
+    allowed, as do 'CANCEL', 'DISABLE' and 'DELETE'. lock_trade is the only way
+    to clear a halt.
 
     THREE OUTCOMES: an error says which one happened.
     - "no order was sent": refused before anything was dispatched. Safe to fix

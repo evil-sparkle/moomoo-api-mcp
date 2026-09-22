@@ -258,12 +258,17 @@ therefore requires an explicit lock-only request.
 request:
 
 - REAL order placements;
-- combo placements;
-- `NORMAL` and `ENABLE` modifications.
+- REAL combo placements;
+- REAL `NORMAL` and `ENABLE` modifications.
 
 REAL `cancel_order` calls, and `CANCEL`, `DISABLE` and `DELETE` modifications, SHALL
 remain permitted, so an operator can still reduce exposure. They still use the
 just-in-time unlock and relock.
+
+`SIMULATE` writes SHALL remain permitted while `HALTED`. The halt records that the
+REAL gateway may still be unlocked; a `SIMULATE` write does not use the
+just-in-time unlock and cannot add live exposure, so it is not what the halt
+guards against. A permitted `SIMULATE` write SHALL NOT clear the halt.
 
 **On relock failure**, the write's reported outcome SHALL be unchanged:
 
@@ -293,6 +298,13 @@ operator pause. A persistent pause is a separate, later capability.
   modification is requested
 - **THEN** the service SHALL refuse it as not sent before any gateway request
 - **AND** the error SHALL name the halt and `lock_trade` as the way to clear it
+
+#### Scenario: A SIMULATE write is allowed while halted
+
+- **GIVEN** the service is `HALTED`
+- **WHEN** a `SIMULATE` `place_order` or `NORMAL` modification is requested
+- **THEN** the service SHALL dispatch it without unlocking the gateway
+- **AND** the state SHALL remain `HALTED`
 
 #### Scenario: Cancellation allowed while halted
 

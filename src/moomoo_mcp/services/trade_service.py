@@ -987,12 +987,25 @@ class TradeService:
             return False
         return self.has_trade_credential
 
-    def _check_execution_halt(self, operation: str) -> None:
-        """Refuse an exposure-adding write while the service is halted.
+    def _check_execution_halt(self, operation: str, trd_env: str) -> None:
+        """Refuse a REAL exposure-adding write while the service is halted.
+
+        The halt records that a REAL relock failed, so the REAL gateway may
+        still be unlocked. A SIMULATE write does not use the just-in-time
+        unlock and cannot add live exposure, so it is not what the halt guards
+        against, and the accepted contract scopes the refusal to REAL writes.
+        Refusing paper writes as well would take away the one environment an
+        operator can still safely use while working out what went wrong.
+
+        Args:
+            operation: Name of the operation, used in the refusal.
+            trd_env: The environment the write targets. Only REAL is governed.
 
         Raises:
-            TradingPolicyError: If the execution state is HALTED.
+            TradingPolicyError: If the write is REAL and the state is HALTED.
         """
+        if str(trd_env).strip().upper() != "REAL":
+            return
         if not self._execution.halted:
             return
         state = self._execution.snapshot()
@@ -1001,7 +1014,8 @@ class TradeService:
             f"an earlier write failed at {state['halted_since']} "
             f"({state['halt_error']}), so the gateway may still be unlocked. "
             "Call lock_trade to lock the gateway and clear the halt; it is the "
-            "only way to clear it. Cancellations remain permitted while halted."
+            "only way to clear it. Cancellations and SIMULATE writes remain "
+            "permitted while halted."
         )
 
     def _dispatch_write(
@@ -1027,9 +1041,10 @@ class TradeService:
             call: Issues the SDK write and returns its ``(ret, data)``.
             convert: Turns a successful payload into the receipt.
             adds_exposure: Whether this write can add exposure, and so must be
-                refused while the service is halted. Cancellations and the
-                exposure-reducing modifications pass False: an operator facing a
-                halt still has to be able to pull orders.
+                refused while the service is halted and the write is REAL.
+                Cancellations and the exposure-reducing modifications pass
+                False: an operator facing a halt still has to be able to pull
+                orders.
 
         Returns:
             The receipt, and the relock error if the relock failed.
@@ -1055,8 +1070,11 @@ class TradeService:
                 # and halt the service while the second is still queued for this
                 # lock. Re-reading here is what stops the second one dispatching
                 # new exposure after the halt began.
+                #
+                # The check itself is scoped to REAL writes; a SIMULATE write
+                # queued behind a REAL one is not what the halt guards against.
                 with not_sent(operation):
-                    self._check_execution_halt(operation)
+                    self._check_execution_halt(operation, trd_env)
 
             if uses_jit:
                 try:
@@ -1268,7 +1286,7 @@ class TradeService:
             resolved_acc_id = self._resolve_account(
                 trd_env, self._get_market_from_code(code), acc_id
             )
-            self._check_execution_halt(operation)
+            self._check_execution_halt(operation, trd_env)
             self.policy.assess_order(
                 operation,
                 self._single_leg_facts(
@@ -1557,7 +1575,7 @@ class TradeService:
             resolved_acc_id = self._resolve_account(
                 trd_env, self._get_market_from_code(legs[0].code), acc_id
             )
-            self._check_execution_halt(operation)
+            self._check_execution_halt(operation, trd_env)
             self.policy.assess_order(
                 operation, self._combo_facts(operation, legs, price, qty, order_type)
             )
@@ -1783,7 +1801,7 @@ class TradeService:
             resolved_acc_id = self._resolve_account(trd_env, None, acc_id)
 
             if requested_op in EXPOSING_MODIFY_OPS:
-                self._check_execution_halt(operation)
+                self._check_execution_halt(operation, trd_env)
                 existing = self._fetch_order(
                     operation, order_id, trd_env, resolved_acc_id
                 )

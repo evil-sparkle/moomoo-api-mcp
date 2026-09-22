@@ -390,8 +390,9 @@ async def lock_trade(
 
     This is also the ONLY way to clear an execution halt. The server halts when
     a re-lock after an order fails, because the gateway may then still be
-    unlocked: while halted it refuses new placements, combo placements and
-    NORMAL/ENABLE modifications, and allows cancellations.
+    unlocked: while halted it refuses REAL placements, REAL combo placements
+    and REAL NORMAL/ENABLE modifications, and allows cancellations and
+    SIMULATE writes.
 
     A successful call locks the gateway and clears the halt. A REFUSED call
     leaves the halt exactly as it was — it never reports a clear it did not
