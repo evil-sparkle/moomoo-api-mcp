@@ -30,6 +30,7 @@ context: |
   | Syntax and type-check target | 3.10 | `pyproject.toml` ruff `target-version = "py310"`, basedpyright `pythonVersion = "3.10"` |
   | Interpreter in the image | 3.12.13, uv-managed | `Dockerfile` `UV_PYTHON` |
   | Interpreter in CI tests | 3.12 | `.github/workflows/ci.yml` `test` job |
+  | Interpreter for local development | 3.12 | `.python-version` |
   | MCP SDK | `mcp>=1.10.0,<2` (FastMCP; 2.x renamed it) | `pyproject.toml` |
   | Moomoo SDK | `moomoo-api>=10.10.7008` | `pyproject.toml` |
   | Package manager | uv, locked by `uv.lock` | |
