@@ -109,11 +109,11 @@ class ChildSpec:
 def _is_dir(path: Path) -> bool:
     """Whether `path` is a directory, reading one we cannot stat as absent.
 
-    `Path.is_dir()` answers False for a missing path, but on Python 3.12 it
-    re-raises PermissionError for a directory the process may not stat; 3.13
-    began swallowing that too. The container runs as `opend` while `/root`
-    stays 0700, so the probe below hits exactly that case, and a probe that
-    cannot see an account is the same as one that finds none.
+    `Path.is_dir()` answers False for a missing path, but through 3.13 it
+    re-raises PermissionError for a directory the process may not stat; 3.14
+    began swallowing that too. The image runs 3.12.13 as `opend` while
+    `/root` stays 0700, so the probe below hits exactly that case, and a
+    probe that cannot see an account is the same as one that finds none.
     """
     try:
         return path.is_dir()
