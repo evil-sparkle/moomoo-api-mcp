@@ -39,10 +39,13 @@ def _quote_ctx(snapshots: list[dict], classifications: dict[str, str]) -> MagicM
     ctx.get_market_snapshot.return_value = (0, pd.DataFrame(snapshots))
 
     def basicinfo(market, stock_type, code_list):  # noqa: ARG001 - SDK signature
+        # Mirrors the real packer: with a non-empty code_list the SDK sets
+        # market=0 and secType=0, so stock_type is ignored and every requested
+        # code comes back once, carrying its own classification.
         rows = [
-            {"code": code, "stock_type": stock_type}
+            {"code": code, "stock_type": classifications[code]}
             for code in code_list
-            if classifications.get(code) == stock_type
+            if code in classifications
         ]
         return 0, pd.DataFrame(rows or [], columns=pd.Index(["code", "stock_type"]))
 
@@ -174,6 +177,50 @@ class TestAdapter:
         for call in ctx.get_stock_basicinfo.call_args_list:
             assert call.kwargs["code_list"] == ["US.AAPL"]
             assert call.kwargs["market"] == "US"
+
+    def test_the_classification_costs_one_call_per_market(self):
+        """It used to ask once per candidate type.
+
+        With a non-empty code_list the SDK ignores market and stock_type and
+        lets the security list drive the query, so those were three identical
+        requests — three times the latency on the order path, and three times
+        the chance of a fail-closed refusal.
+        """
+        ctx = _quote_ctx([_snapshot()], {"US.AAPL": "STOCK"})
+        adapter = InstrumentAdapter(lambda: ctx)
+
+        adapter(["US.AAPL"])
+
+        assert ctx.get_stock_basicinfo.call_count == 1
+
+    def test_codes_are_grouped_into_one_call_per_market(self):
+        ctx = _quote_ctx(
+            [_snapshot(), _snapshot(code="US.SPY"), _snapshot(code="HK.00700")],
+            {"US.AAPL": "STOCK", "US.SPY": "ETF", "HK.00700": "STOCK"},
+        )
+        adapter = InstrumentAdapter(lambda: ctx)
+
+        adapter(["US.AAPL", "US.SPY", "HK.00700"])
+
+        assert ctx.get_stock_basicinfo.call_count == 2
+        markets = {
+            call.kwargs["market"] for call in ctx.get_stock_basicinfo.call_args_list
+        }
+        assert markets == {"US", "HK"}
+
+    def test_one_call_still_classifies_mixed_types(self):
+        """An equity and an ETF in the same request keep their own types."""
+        ctx = _quote_ctx(
+            [_snapshot(), _snapshot(code="US.SPY")],
+            {"US.AAPL": "STOCK", "US.SPY": "ETF"},
+        )
+        adapter = InstrumentAdapter(lambda: ctx)
+
+        facts = {
+            item.code: item.classification for item in adapter(["US.AAPL", "US.SPY"])
+        }
+
+        assert facts == {"US.AAPL": "STOCK", "US.SPY": "ETF"}
 
     def test_an_option_is_refused_while_the_multiplier_is_unverified(self):
         """Which broker field carries an option's monetary multiplier has not

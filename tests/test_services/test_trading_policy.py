@@ -448,6 +448,62 @@ class TestLimitConfiguration:
         )
 
 
+class TestCapMappingIsImmutable:
+    """A validated cap cannot be edited back into an unvalidated one.
+
+    `frozen=True` stops the field being reassigned, not the dict behind it being
+    mutated. Without a defensive copy a caller could insert `nan` after
+    validation and reintroduce the comparison bypass the validation exists to
+    prevent -- every comparison against `nan` is false, so the cap would
+    silently stop applying.
+    """
+
+    def test_the_mapping_cannot_be_mutated_after_validation(self):
+        caps = {"USD": 1000.0}
+        policy = TradingPolicy(TradingMode.REAL, max_order_notional=caps)
+
+        with pytest.raises(TypeError):
+            policy.max_order_notional["USD"] = float("nan")  # type: ignore[index]
+
+    def test_mutating_the_original_dict_does_not_reach_the_policy(self):
+        caps = {"USD": 1000.0}
+        policy = TradingPolicy(TradingMode.REAL, max_order_notional=caps)
+
+        caps["USD"] = float("nan")
+        caps["EUR"] = float("inf")
+
+        assert policy.max_order_notional == {"USD": 1000.0}
+
+    def test_a_cap_that_survived_still_refuses_an_over_limit_order(self):
+        """The point of the copy: the guardrail keeps working."""
+        caps = {"USD": 1000.0}
+        policy = TradingPolicy(
+            TradingMode.REAL, max_order_notional=caps, real_acc_ids=frozenset({456})
+        )
+        caps["USD"] = float("nan")
+
+        with pytest.raises(TradingPolicyError, match="exceeds"):
+            policy.assess_order("place_order", _order(qty=11, price=100.0))
+
+    @pytest.mark.parametrize("currency", ["US", "USDD", "US1", "", "  "])
+    def test_direct_construction_validates_the_currency_key(self, currency):
+        """from_env checked these; direct construction did not."""
+        with pytest.raises(TradingModeConfigError, match="three-letter currency code"):
+            TradingPolicy(TradingMode.REAL, max_order_notional={currency: 1000.0})
+
+    def test_direct_construction_upper_cases_the_currency_key(self):
+        policy = TradingPolicy(TradingMode.REAL, max_order_notional={"usd": 1000.0})
+
+        assert policy.max_order_notional == {"USD": 1000.0}
+
+    def test_direct_construction_rejects_a_duplicate_after_normalization(self):
+        with pytest.raises(TradingModeConfigError, match="more than once"):
+            TradingPolicy(
+                TradingMode.REAL,
+                max_order_notional={"usd": 1000.0, "USD": 2000.0},
+            )
+
+
 class TestRealAccountAllowlist:
     """MOOMOO_REAL_ACC_IDS is required in REAL mode and ignored elsewhere."""
 

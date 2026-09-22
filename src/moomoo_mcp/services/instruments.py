@@ -59,10 +59,10 @@ from moomoo_mcp.services.trading_policy import (
 # lands. See openspec/changes/harden-trading-safeguards/verification.md.
 OPTION_MONETARY_MULTIPLIER_FIELD: str | None = None
 
-# The classification filters get_stock_basicinfo accepts. It filters on the
-# request, so the codes have to be asked for under each candidate type rather
-# than fetched once and sorted out afterwards.
-CLASSIFICATION_FILTERS = ("STOCK", "ETF", "DRVT")
+# The classifications this server can value. Not a query filter: with an
+# explicit code_list the gateway returns each instrument's own stock_type in
+# one call, and the policy decides what it will value.
+VALUABLE_CLASSIFICATIONS = ("STOCK", "ETF", "DRVT")
 
 InstrumentLookup = Callable[[Sequence[str]], list[InstrumentFacts]]
 
@@ -178,12 +178,22 @@ class InstrumentAdapter:
     def _classifications(
         self, quote_ctx: OpenQuoteContext, codes: list[str]
     ) -> dict[str, str]:
-        """Ask for the classification of exactly these codes.
+        """Ask for the classification of exactly these codes, in one call.
 
-        ``get_stock_basicinfo`` filters by market and by type, so the codes are
-        grouped by market prefix and asked for under each candidate type. The
-        explicit ``code_list`` is what keeps this a targeted read instead of an
-        enumeration of every instrument on a venue.
+        One call per market, not one per candidate type. With a non-empty
+        ``code_list`` the SDK's request packer sets ``market = 0`` and
+        ``secType = 0`` and lets the explicit security list drive the query, so
+        the ``market`` and ``stock_type`` arguments are ignored and asking three
+        times under three types sent the identical request three times. That
+        tripled the latency on the order path and tripled the chance of a
+        fail-closed refusal, for nothing.
+
+        ``verify_sdk_facts.py`` checks that packer behaviour, so an SDK change
+        that starts honouring ``stock_type`` fails loudly rather than silently
+        narrowing what comes back here.
+
+        The explicit ``code_list`` is still what keeps this a targeted read
+        rather than an enumeration of every instrument on a venue.
         """
         by_market: dict[str, list[str]] = {}
         for code in codes:
@@ -197,16 +207,19 @@ class InstrumentAdapter:
 
         found: dict[str, str] = {}
         for market, group in by_market.items():
-            for stock_type in CLASSIFICATION_FILTERS:
-                ret, data = quote_ctx.get_stock_basicinfo(
-                    market=market, stock_type=stock_type, code_list=group
-                )
-                rows = _rows(f"get_stock_basicinfo({market}, {stock_type})", ret, data)
-                for row in rows:
-                    code = str(row.get("code"))
-                    reported = row.get("stock_type")
-                    if code in group and isinstance(reported, str) and reported:
-                        found[code] = reported.strip().upper()
+            # stock_type is ignored while code_list is non-empty, as above. It
+            # is passed only because the parameter is positional-ish in the SDK
+            # signature; every returned row carries its own stock_type, which is
+            # what gets read.
+            ret, data = quote_ctx.get_stock_basicinfo(
+                market=market, stock_type="STOCK", code_list=group
+            )
+            rows = _rows(f"get_stock_basicinfo({market})", ret, data)
+            for row in rows:
+                code = str(row.get("code"))
+                reported = row.get("stock_type")
+                if code in group and isinstance(reported, str) and reported:
+                    found[code] = reported.strip().upper()
         return found
 
     def _facts(

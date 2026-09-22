@@ -600,6 +600,7 @@ class TestRelockAlwaysAttempted:
                 "place_order",
                 lambda: mock_trade_ctx.place_order(),
                 exploding_convert,
+                adds_exposure=True,
             )
 
         mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
@@ -830,6 +831,155 @@ class TestExecutionHalt:
         writer.join(timeout=2)
         locker.join(timeout=2)
         assert lock_issued.is_set()
+
+
+class TestHaltIsCheckedInsideTheLock:
+    """A write queued behind another cannot slip past a halt it caused.
+
+    The pre-dispatch halt check alone is not enough: two writes can both read
+    ARMED, and the first one's relock can then fail and halt the service while
+    the second is still queued for the just-in-time lock. Without a re-check
+    inside that lock, the second one dispatches new exposure after the halt
+    began — which is exactly what the halt exists to stop.
+    """
+
+    def test_a_queued_write_is_refused_after_the_first_one_halts(self, mock_trade_ctx):
+        service = _credentialed_service(mock_trade_ctx)
+        first_is_dispatching = threading.Event()
+        release_first = threading.Event()
+        unlock_calls: list[bool] = []
+
+        def unlock_trade(**kwargs):
+            is_unlock = kwargs.get("is_unlock", True)
+            unlock_calls.append(is_unlock)
+            if is_unlock:
+                return RET_OK, None
+            # The relock: fail it, which halts the service.
+            return RET_ERROR, "lock refused"
+
+        def slow_place_order(**_kwargs):
+            first_is_dispatching.set()
+            release_first.wait(timeout=2)
+            return RET_OK, pd.DataFrame([{"order_id": "A"}])
+
+        mock_trade_ctx.unlock_trade.side_effect = unlock_trade
+        mock_trade_ctx.place_order.side_effect = slow_place_order
+
+        first: dict = {}
+        second: dict = {}
+
+        def run_first():
+            try:
+                first["result"] = _place(service)
+            except Exception as exc:  # noqa: BLE001 - recorded for the assertion
+                first["error"] = exc
+
+        def run_second():
+            try:
+                second["result"] = _place(service)
+            except Exception as exc:  # noqa: BLE001 - recorded for the assertion
+                second["error"] = exc
+
+        writer_a = threading.Thread(target=run_first)
+        writer_a.start()
+        assert first_is_dispatching.wait(timeout=2)
+
+        # B has now passed its own pre-dispatch checks — the service was ARMED
+        # when it looked — and is queued for the lock A holds.
+        writer_b = threading.Thread(target=run_second)
+        writer_b.start()
+        time.sleep(0.1)
+
+        release_first.set()
+        writer_a.join(timeout=2)
+        writer_b.join(timeout=2)
+
+        # A is acknowledged, with the halt reported alongside its receipt.
+        assert first["result"]["order_id"] == "A"
+        assert first["result"]["execution_halted"] is True
+        assert service.execution_state["execution_halted"] is True
+
+        # B is refused, and never reached the gateway.
+        assert isinstance(second.get("error"), OrderNotSentError)
+        assert "halted" in str(second["error"])
+        assert mock_trade_ctx.place_order.call_count == 1
+
+    def test_a_queued_cancellation_still_goes_through(self, mock_trade_ctx):
+        """Reducing exposure stays permitted, which is the point of the gate."""
+        service = _credentialed_service(mock_trade_ctx)
+        service._execution.record_relock_failure("lock refused")
+        mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
+        mock_trade_ctx.modify_order.return_value = (
+            RET_OK,
+            pd.DataFrame([{"order_id": "123456"}]),
+        )
+
+        service.cancel_order(order_id="123456", trd_env="REAL", acc_id=123)
+
+        mock_trade_ctx.modify_order.assert_called_once()
+
+    def test_the_in_lock_check_refuses_before_unlocking(self, mock_trade_ctx):
+        """A halted write must not even unlock the gateway."""
+        service = _credentialed_service(mock_trade_ctx)
+        service._execution.record_relock_failure("lock refused")
+        mock_trade_ctx.reset_mock()
+
+        with pytest.raises(OrderNotSentError, match="halted"):
+            service._dispatch_write(
+                "REAL",
+                "place_order",
+                lambda: (RET_OK, pd.DataFrame([{"order_id": "1"}])),
+                lambda _data: {"order_id": "1"},
+                adds_exposure=True,
+            )
+
+        mock_trade_ctx.unlock_trade.assert_not_called()
+
+
+class TestAcknowledgedButEmptyReceipt:
+    """RET_OK with no rows is not a placed order anyone can find."""
+
+    def test_an_empty_payload_is_an_unreadable_receipt(self, mock_trade_ctx):
+        """It used to return a result holding only the routing, which reads as a
+        successful order with no identifier in it."""
+        mock_trade_ctx.place_order.return_value = (RET_OK, pd.DataFrame([]))
+        service = TradeService(policy=REAL_POLICY)
+        service.trade_ctx = mock_trade_ctx
+
+        with pytest.raises(OrderReceiptUnreadableError) as excinfo:
+            _place(service, trd_env="SIMULATE")
+
+        message = str(excinfo.value)
+        assert "acknowledged" in message
+        assert "do not resend" in message.lower()
+        assert "get_orders" in message
+
+    def test_an_empty_combo_payload_is_an_unreadable_receipt(self, mock_trade_ctx):
+        mock_trade_ctx.place_combo_order.return_value = (RET_OK, pd.DataFrame([]))
+        service = TradeService(policy=REAL_POLICY)
+        service.trade_ctx = mock_trade_ctx
+
+        with pytest.raises(OrderReceiptUnreadableError, match="Do not resend"):
+            service.place_combo_order(
+                combo_legs=[
+                    {"code": "US.A", "trd_side": "BUY", "qty_ratio": 1},
+                    {"code": "US.B", "trd_side": "SELL", "qty_ratio": 1},
+                ],
+                price=2.5,
+                qty=1,
+                trd_env="SIMULATE",
+                acc_id=123,
+            )
+
+    def test_an_empty_modification_payload_is_an_unreadable_receipt(
+        self, mock_trade_ctx
+    ):
+        mock_trade_ctx.modify_order.return_value = (RET_OK, pd.DataFrame([]))
+        service = TradeService(policy=REAL_POLICY)
+        service.trade_ctx = mock_trade_ctx
+
+        with pytest.raises(OrderReceiptUnreadableError, match="Do not resend"):
+            service.cancel_order(order_id="123456", trd_env="SIMULATE", acc_id=123)
 
 
 class TestLockAtRest:

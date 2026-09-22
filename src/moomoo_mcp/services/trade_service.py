@@ -1010,6 +1010,8 @@ class TradeService:
         operation: str,
         call: Callable[[], tuple[Any, Any]],
         convert: Callable[[Any], dict],
+        *,
+        adds_exposure: bool,
     ) -> tuple[dict, str | None]:
         """Run one order-mutating gateway call, and classify what came back.
 
@@ -1024,13 +1026,17 @@ class TradeService:
             operation: Name of the operation, used in every message.
             call: Issues the SDK write and returns its ``(ret, data)``.
             convert: Turns a successful payload into the receipt.
+            adds_exposure: Whether this write can add exposure, and so must be
+                refused while the service is halted. Cancellations and the
+                exposure-reducing modifications pass False: an operator facing a
+                halt still has to be able to pull orders.
 
         Returns:
             The receipt, and the relock error if the relock failed.
 
         Raises:
-            OrderNotSentError: If the just-in-time unlock failed. No write was
-                attempted.
+            OrderNotSentError: If the halt is in effect, or the just-in-time
+                unlock failed. No write was attempted.
             OrderOutcomeUnknownError: If the call started and nothing
                 acknowledged it.
             OrderReceiptUnreadableError: If the gateway acknowledged the request
@@ -1039,6 +1045,19 @@ class TradeService:
         uses_jit = self._uses_jit_unlock(trd_env)
 
         with self._jit_lock:
+            if adds_exposure:
+                # The authoritative halt check, inside the serialized region.
+                #
+                # The caller checks it too, early, to avoid paying for an
+                # account resolution and an instrument lookup on a service that
+                # is already halted. That check alone is not enough: two writes
+                # can both read ARMED, and then the first one's relock can fail
+                # and halt the service while the second is still queued for this
+                # lock. Re-reading here is what stops the second one dispatching
+                # new exposure after the halt began.
+                with not_sent(operation):
+                    self._check_execution_halt(operation)
+
             if uses_jit:
                 try:
                     assert self.trade_ctx is not None
@@ -1288,13 +1307,28 @@ class TradeService:
                 remark=remark,
             ),
             lambda data: self._first_record(operation, data),
+            adds_exposure=True,
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
     @staticmethod
     def _first_record(operation: str, data: Any) -> dict:
+        """The receipt's single row, or a refusal to invent one.
+
+        An acknowledged response carrying no rows is not a receipt: there is no
+        order identifier in it. Returning an empty dict would have produced a
+        result holding only the routing, which reads as a placed order that
+        nobody can find. Raising here makes it an acknowledged-but-unreadable
+        receipt, which is what it is -- the caller is told not to resend and to
+        look the order up instead.
+        """
         records = as_frame(operation, data).to_dict("records")
-        return dict(records[0]) if records else {}
+        if not records:
+            raise ValueError(
+                "the gateway acknowledged the request but returned no rows, so "
+                "it carries no order identifier"
+            )
+        return dict(records[0])
 
     def _with_routing(
         self,
@@ -1545,13 +1579,20 @@ class TradeService:
                 remark=remark,
             ),
             lambda data: self._first_combo_record(operation, data),
+            adds_exposure=True,
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
     @staticmethod
     def _first_combo_record(operation: str, data: Any) -> dict:
+        """As :meth:`_first_record`, for a package's receipt."""
         records = _plain_combo_legs(as_frame(operation, data).to_dict("records"))
-        return dict(records[0]) if records else {}
+        if not records:
+            raise ValueError(
+                "the gateway acknowledged the package but returned no rows, so "
+                "it carries no order identifier"
+            )
+        return dict(records[0])
 
     # The account-impact fields comboorder_tradinginfo_query returns. Listed
     # here rather than passed through wholesale so a caller sees a stable set of
@@ -1794,6 +1835,8 @@ class TradeService:
                 acc_id=resolved_acc_id,
             ),
             lambda data: self._first_record("modify_order", data),
+            # NORMAL and ENABLE restore exposure; the rest only reduce it.
+            adds_exposure=requested_op in EXPOSING_MODIFY_OPS,
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
@@ -1868,6 +1911,8 @@ class TradeService:
                 acc_id=resolved_acc_id,
             ),
             lambda data: self._first_record(operation, data),
+            # A cancellation reduces exposure, so it is permitted while halted.
+            adds_exposure=False,
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 

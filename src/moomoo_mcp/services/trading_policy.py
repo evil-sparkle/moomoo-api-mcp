@@ -17,6 +17,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 
 from moomoo_mcp.services.validation import FIXED_LIMIT_TYPES, NO_FIXED_LIMIT_TYPES
 
@@ -270,19 +271,42 @@ class TradingPolicy:
     real_acc_ids: frozenset[int] = frozenset()
 
     def __post_init__(self) -> None:
-        """Validate the limits, however the policy was built.
+        """Validate the limits, however the policy was built, and freeze them.
 
         Direct construction is covered too, not only ``from_env``. A limit of
         ``nan`` is the reason: every comparison against it is false, so an
         unvalidated ``nan`` does not raise anywhere -- it silently switches the
         limit off, which is the opposite of what configuring a limit means.
+
+        The currency keys get the same check ``from_env`` applies, so a policy
+        built in code cannot hold a cap under a key no instrument will ever be
+        valued in -- a cap that silently applies to nothing.
+
+        The mapping is then replaced with an immutable snapshot. ``frozen=True``
+        stops the field being reassigned but not the dict behind it being
+        mutated, so without this a caller could insert ``nan`` after validation
+        and reintroduce exactly the comparison bypass above.
         """
         if self.max_order_qty is not None:
             _require_positive_finite(ENV_MAX_ORDER_QTY, "limit", self.max_order_qty)
+
+        validated: dict[str, float] = {}
         for currency, amount in self.max_order_notional.items():
-            _require_positive_finite(
-                ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY, f"{currency} cap", amount
+            code = str(currency).strip().upper()
+            if len(code) != 3 or not code.isalpha():
+                raise TradingModeConfigError(
+                    f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY}: {currency!r} is not a "
+                    "three-letter currency code."
+                )
+            if code in validated:
+                raise TradingModeConfigError(
+                    f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY}: {code} appears more "
+                    "than once. A currency can have only one cap."
+                )
+            validated[code] = _require_positive_finite(
+                ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY, f"{code} cap", amount
             )
+        object.__setattr__(self, "max_order_notional", MappingProxyType(validated))
 
     @property
     def notional_cap_configured(self) -> bool:
