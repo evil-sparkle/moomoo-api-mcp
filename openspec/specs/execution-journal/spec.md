@@ -291,6 +291,13 @@ and SHALL NOT retry that invocation automatically.
   the first one left it
 - **AND** the price-only operation SHALL NOT restore the quantity from an earlier
   reading
+- **AND** an acknowledgement without an order observation SHALL NOT establish that
+  the first modification's fields are visible
+- **AND** if a fresh order read still differs from the acknowledged modification's
+  quantity or price, the dependent modification SHALL be refused before its dispatch
+  marker, including after restart; no stale field SHALL be merged into a new request
+- **AND** identical retries SHALL keep returning the recorded outcome without replay
+
 
 #### Scenario: The target order is read authoritatively inside the serialized region
 

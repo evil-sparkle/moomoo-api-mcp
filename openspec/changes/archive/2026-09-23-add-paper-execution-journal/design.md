@@ -905,3 +905,20 @@ operator capability safely.
 Secret-file constraints preclude modifying configuration environment files.
 The complete non-secret variable template and operator procedures are instead in
 `docs/paper-execution.md`, linked from the deployment and state guides and README.
+
+## PR review adaptation: modification visibility
+
+An acknowledgement is separate from observing the requested order state. Before a
+dependent modification, compare a fresh target read with each outstanding
+acknowledged modification for that account/order. Differing or missing quantity or
+price refuses the dependent intent before its dispatch marker; never merge stale
+fields and never automatically replay the refused token. Cancellation does not
+inherit this visibility-only refusal, though existing recovery gates still apply.
+
+Schema 2 retains this guard across restart and atomically upgrades schema 1 without
+losing identities or outcomes. Earlier confirmed guards retire only in the same
+transaction as their successor's acknowledged outcome; a failed preparation or
+outcome commit cannot silently remove them. A latest acknowledgement still needs
+fresh matching evidence before the next modification. Multiple conflicting old
+acknowledgements remain conservative refusals. Actual provider timing is unverified
+and is added to provider-follow-up task 2.5.

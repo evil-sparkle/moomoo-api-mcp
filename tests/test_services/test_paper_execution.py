@@ -32,7 +32,9 @@ class Broker:
 
     def _call(self, kind, request):
         # A second connection can obtain the writer lock throughout gateway IO.
-        with sqlite3.connect(self.path, timeout=0) as conn:
+        # Another admission thread may hold a short transaction concurrently.
+        # A transaction spanning this gateway call would still time out here.
+        with sqlite3.connect(self.path, timeout=0.5) as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT state, marker FROM operations ORDER BY rowid DESC LIMIT 1"
@@ -804,3 +806,111 @@ def test_decimal_notional_just_above_cap_is_not_rounded_down(rig):
     assert broker.calls == []
     row = store.lookup("place")
     assert row is not None and row["state"] == "REFUSED" and row["marker"] == 0
+
+
+class DelayedObservationBroker(Broker):
+    """Acknowledge a modification before publishing its new order fields."""
+
+    def __init__(self, path):
+        super().__init__(path)
+        self.pending_observations = {}
+
+    def modify_order(self, **request):
+        if request["modify_order_op"] != "NORMAL":
+            return super().modify_order(**request)
+        order_id = request["order_id"]
+        before = self.orders[order_id].copy()
+        result, _ = super().modify_order(**request)
+        assert result == RET_OK
+        self.pending_observations[order_id] = self.orders[order_id].copy()
+        self.orders[order_id] = before
+        return result, pd.DataFrame([{"order_id": order_id}])
+
+    def publish(self, order_id):
+        self.orders[order_id] = self.pending_observations.pop(order_id)
+
+
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize(
+    "first_patch,next_patch",
+    [
+        ({"qty": 50}, {"price": "80"}),
+        ({"price": "80"}, {"qty": 50}),
+    ],
+)
+def test_acknowledgement_does_not_authorize_merge_from_old_order_fields(
+    rig, restart, first_patch, next_patch
+):
+    paper, service, original, store = rig
+    broker = DelayedObservationBroker(original.path)
+    service.trade_ctx = broker
+    target(broker)
+    broker.orders["77"].update(qty=100, price=50)
+    first = mutate(paper, "first-change", **first_patch)
+    assert first["state"] == "ACKNOWLEDGED"
+    assert first["receipt"] == {"order_id": "77"}
+    assert first["modification_observed"] is False
+    assert broker.orders["77"]["qty"] == 100
+    assert broker.orders["77"]["price"] == 50
+    if restart:
+        store.close()
+        store = ExecutionStore(broker.path)
+        paper = PaperExecution(
+            cast(TradeService, cast(object, service)), store, frozenset({123})
+        )
+    try:
+        with pytest.raises(OrderNotSentError) as refusal:
+            mutate(paper, "dependent-refused", **next_patch)
+        assert "not yet observed" in str(refusal.value)
+        assert len(broker.calls) == 1
+        refused = store.lookup("dependent-refused")
+        assert refused is not None
+        assert refused["state"] == "REFUSED" and refused["marker"] == 0
+        # Retrying the acknowledged operation never dispatches or claims visibility.
+        assert mutate(paper, "first-change", **first_patch) == first
+        broker.publish("77")
+        # A REFUSED token remains refused. A newly authorized intent uses a new ID.
+        assert mutate(paper, "dependent-refused", **next_patch)["state"] == "REFUSED"
+        result = mutate(paper, "dependent-after-observation", **next_patch)
+        assert result["state"] == "ACKNOWLEDGED"
+        assert len(broker.calls) == 2
+        assert broker.calls[-1][1]["qty"] == 50
+        assert broker.calls[-1][1]["price"] == "80"
+        previous = store.lookup("first-change")
+        assert previous is not None and previous["modification_observed"] == 1
+    finally:
+        store.close()
+
+
+def test_pending_visibility_does_not_prevent_individual_cancellation(rig):
+    paper, service, original, _ = rig
+    broker = DelayedObservationBroker(original.path)
+    service.trade_ctx = broker
+    target(broker)
+    mutate(paper, "quantity-change", qty=1)
+    result = mutate(paper, "cancel", "CANCEL")
+    assert result["state"] == "ACKNOWLEDGED"
+    assert len(broker.calls) == 2
+    assert broker.calls[-1][0] == "CANCEL"
+
+
+def test_failed_successor_preparation_does_not_retire_prior_visibility_guard(rig):
+    paper, service, original, store = rig
+    broker = DelayedObservationBroker(original.path)
+    service.trade_ctx = broker
+    target(broker)
+    broker.orders["77"].update(qty=100, price=50)
+    mutate(paper, "reduce", qty=50)
+    broker.publish("77")
+    classify = service.instrument_lookup
+    service.instrument_lookup = lambda _codes: []
+    with pytest.raises(OrderNotSentError):
+        mutate(paper, "bad-instrument", price="80")
+    assert len(store.unobserved_modifications(123, "00077")) == 1
+    service.instrument_lookup = classify
+    # A subsequent read may regress; no acknowledged successor replaced the guard.
+    broker.orders["77"]["qty"] = 100
+    with pytest.raises(OrderNotSentError) as refusal:
+        mutate(paper, "stale-again", price="80")
+    assert "not yet observed" in str(refusal.value)
+    assert len(broker.calls) == 1

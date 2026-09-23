@@ -44,3 +44,13 @@ or changing the existing recovery contract to make a test pass.
   the missing prerequisite recorded.
 - Retention changes over time → date observations and scope them to the tested
   account, market, SDK and OpenD versions.
+
+## Review follow-up: acknowledgement and order visibility
+
+The PR review identified an unmeasured timing boundary: a successful modification
+response may precede a subsequent order query reflecting its new fields. An
+adversarial double now separates those events. Development guards dependent
+modifications until a fresh target observation matches the earlier requested total
+quantity and limit price, including across restarts. This guard does not claim
+causality or prove fill status. The provider's actual acknowledgement/query timing
+remains unverified and must be recorded by task 2.5 before unattended execution.

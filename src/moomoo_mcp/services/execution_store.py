@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from moomoo_mcp.services.execution_identity import fingerprint_request
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TERMINAL = ("ACKNOWLEDGED", "RECONCILED", "REFUSED", "TERMINAL_ACCOUNTED")
 
 
@@ -73,6 +73,7 @@ CREATE TABLE operations (
  state TEXT NOT NULL, disposition TEXT NOT NULL,
  merged_request TEXT, receipt TEXT, broker_order_id TEXT, broker_status TEXT,
  evidence TEXT, error TEXT, marker INTEGER NOT NULL DEFAULT 0,
+ modification_observed INTEGER NOT NULL DEFAULT 0,
  created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE review_requirements (
@@ -87,7 +88,7 @@ CREATE TABLE recovery_audit (
  observed_state TEXT NOT NULL, previous_state TEXT NOT NULL,
  timestamp TEXT DEFAULT CURRENT_TIMESTAMP
 );
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 COMMIT;
 """)
                 directory = os.open(self._path.parent, os.O_RDONLY)
@@ -110,18 +111,34 @@ COMMIT;
                     version = connection.execute("PRAGMA user_version").fetchone()[0]
                 finally:
                     connection.close()
-                if version != SCHEMA_VERSION:
+                if version not in (1, SCHEMA_VERSION):
                     raise ExecutionStoreError(
                         f"Unsupported journal schema {version}; "
                         f"expected {SCHEMA_VERSION}"
                     )
-            with self._connection() as conn:
+            with self._connection(verify=False) as conn:
                 if conn.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                     raise ExecutionStoreError("Journal integrity check failed")
                 if conn.execute("SELECT environment FROM metadata").fetchall() != [
                     ("SIMULATE",)
                 ]:
                     raise ExecutionStoreError("Journal environment is not SIMULATE")
+                if version == 1:
+                    # Old acknowledgements carry no proof of broker visibility.
+                    # Preserve them, conservatively unobserved, in an atomic upgrade.
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        conn.execute(
+                            "ALTER TABLE operations ADD COLUMN modification_observed "
+                            "INTEGER NOT NULL DEFAULT 0"
+                        )
+                        conn.execute("PRAGMA user_version = 2")
+                        conn.execute("COMMIT")
+                    except BaseException:
+                        if conn.in_transaction:
+                            conn.execute("ROLLBACK")
+                        raise
+
             with self._transaction() as conn:
                 conn.execute("INSERT INTO epochs(epoch) VALUES (?)", (self.epoch,))
                 conn.execute(
@@ -220,6 +237,23 @@ COMMIT;
         with self._connection() as conn:
             return self._row(conn, operation_id)
 
+    def unobserved_modifications(self, account: int, order_id: str) -> list[dict]:
+        """Acknowledgement alone does not establish the new broker order fields."""
+        with self._connection() as conn:
+            identifiers = conn.execute(
+                "SELECT operation_id FROM operations WHERE account=? "
+                "AND kind='MODIFY' AND state='ACKNOWLEDGED' "
+                "AND modification_observed=0",
+                (str(account),),
+            ).fetchall()
+            rows = [self._row(conn, identifier[0]) for identifier in identifiers]
+            return [
+                row
+                for row in rows
+                if row is not None
+                and int(json.loads(row["request"])["order_id"]) == int(order_id)
+            ]
+
     def admit(
         self,
         operation_id: str,
@@ -287,6 +321,7 @@ COMMIT;
         receipt: dict | None = None,
         error: str | None = None,
         reason: str | None = None,
+        observed_modifications: list[str] | None = None,
     ) -> None:
         encoded = json.dumps(receipt, allow_nan=False) if receipt is not None else None
         with self._transaction() as conn:
@@ -314,6 +349,14 @@ COMMIT;
                 conn.execute(
                     "INSERT OR IGNORE INTO review_requirements VALUES (?,?)",
                     (operation_id, reason),
+                )
+            if state == "ACKNOWLEDGED" and observed_modifications:
+                # Retain the earlier guard until its acknowledged successor is
+                # durable. A failed preparation or outcome write cannot retire it.
+                conn.executemany(
+                    "UPDATE operations SET modification_observed=1 "
+                    "WHERE operation_id=? AND kind='MODIFY' AND state='ACKNOWLEDGED'",
+                    [(identifier,) for identifier in observed_modifications],
                 )
 
     def review(self) -> dict:

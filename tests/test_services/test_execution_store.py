@@ -294,3 +294,31 @@ def test_newer_wal_schema_does_not_checkpoint_or_rewrite_files(tmp_path):
         with pytest.raises(ExecutionStoreError):
             ExecutionStore(path)
         assert {file: file.read_bytes() for file in files} == before
+
+
+def test_v1_migration_preserves_acknowledged_modification_as_unobserved(tmp_path):
+    path = tmp_path / "journal.db"
+    store = ExecutionStore(path, create=True)
+    store.review()
+    old_epoch = store.epoch
+    store.admit("modify", old_epoch, 123, "MODIFY", "{}", {"order_id": "77", "qty": 50})
+    store.mark_dispatch("modify", {"order_id": "77", "qty": 50, "price": "50"})
+    store.outcome("modify", "ACKNOWLEDGED", "ACKNOWLEDGED", receipt={"order_id": "77"})
+    store.close()
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE operations DROP COLUMN modification_observed")
+        conn.execute("PRAGMA user_version=1")
+    migrated = ExecutionStore(path)
+    try:
+        assert migrated.review()["state"] == "READY"
+        pending = migrated.unobserved_modifications(123, "77")
+        assert len(pending) == 1
+        assert pending[0]["admission_epoch"] == old_epoch
+        assert pending[0]["state"] == "ACKNOWLEDGED"
+        assert pending[0]["modification_observed"] == 0
+        assert migrated.unobserved_modifications(456, "77") == []
+        assert migrated.unobserved_modifications(123, "88") == []
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone() == (2,)
+    finally:
+        migrated.close()
