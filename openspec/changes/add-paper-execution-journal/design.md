@@ -830,7 +830,7 @@ What is **not** guaranteed:
    retention measurement in parallel; an unknown window never proves absence.
 4. Obtain separate authorization for implementation.
 5. Add `execution-data` volume and configuration.
-6. Run automated suites (`U01`–`U18`, `C01`–`C04`).
+6. Run automated suites (`U01`–`U20`, `C01`–`C04`).
 7. Obtain separate authorization for paper-provider verification (`M01`–`M04`).
 8. Rollback: Redeploy previous image. Volume remains unmounted; `opend-data` intact.
 
