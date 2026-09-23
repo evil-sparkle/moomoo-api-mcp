@@ -191,6 +191,33 @@ class TestAccountSelection:
         assert ctx.comboorder_tradinginfo_query.call_args.kwargs["acc_id"] == 789
         assert preview["acc_id"] == 789
 
+    def test_visible_hk_and_us_accounts_keep_preview_market_aware(self, service, ctx):
+        ctx.get_acc_list.return_value = (
+            0,
+            pd.DataFrame(
+                [
+                    {
+                        "acc_id": 101,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["HK"],
+                    },
+                    {
+                        "acc_id": 202,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["US"],
+                    },
+                ]
+            ),
+        )
+
+        preview = service.preview_combo_order(
+            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="SIMULATE"
+        )
+
+        assert preview["acc_id"] == 202
+        assert ctx.comboorder_tradinginfo_query.call_args.kwargs["acc_id"] == 202
+        assert_no_writes(ctx)
+
     def test_matches_the_account_placement_would_choose(self, ctx):
         acc_frame = pd.DataFrame(
             [{"acc_id": 789, "trd_env": "SIMULATE", "market_auth": ["US"]}]

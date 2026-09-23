@@ -14,6 +14,7 @@ HEALTHY = {
     "checked_at": "2026-09-10T12:00:00Z",
     "quote": {"status": "ok", "logged_in": True},
     "trade": {"status": "ok", "account_count": 2},
+    "trade_market": "NONE",
     "gateway_version": "9.2.5208",
 }
 
@@ -167,7 +168,31 @@ class TestCheckHealthEndToEnd:
         assert payload["checked_at"].endswith("Z")
         assert payload["quote"]["status"] == "ok"
         assert payload["trade"] == {"status": "ok", "account_count": 1}
+        assert payload["trade_market"] == "NONE"
         assert payload["gateway_version"] == "9.2.5208"
+
+    @pytest.mark.asyncio
+    async def test_trade_market_crosses_mcp_when_gateway_is_unavailable(
+        self, call_tool, live_context
+    ):
+        trade_service = live_context.trade_service
+        trade_service.trading_market = "US"
+        live_context.moomoo_service.quote_ctx.get_global_state.return_value = (
+            -1,
+            "connection unavailable",
+        )
+        trade_service.trade_ctx.get_acc_list.return_value = (
+            -1,
+            "connection unavailable",
+        )
+
+        result = await call_tool("check_health")
+
+        assert result.structured["trade_market"] == "US"
+        assert result.structured["status"] == "disconnected"
+        assert live_context.moomoo_service.quote_ctx.get_global_state.call_count == 1
+        assert trade_service.trade_ctx.get_acc_list.call_count == 1
+        assert "acc_id" not in repr(result.structured)
 
     @pytest.mark.asyncio
     async def test_stuck_gateway_times_out_without_stalling_mcp(

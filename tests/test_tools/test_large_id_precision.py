@@ -216,6 +216,10 @@ class TestAccountToolsThroughMcp:
     async def test_account_summary_covers_nested_positions(
         self, call_tool, mock_trade_service
     ):
+        mock_trade_service.resolve_read_account.return_value = (
+            "SIMULATE",
+            ACCOUNT_ID,
+        )
         mock_trade_service.get_assets.return_value = {
             "acc_id": ACCOUNT_ID,
             "cash": 500.0,
@@ -234,6 +238,15 @@ class TestAccountToolsThroughMcp:
         assert payload["positions"][0]["combo_id"] == str(LEG_ID)
         assert payload["positions"][1]["position_id"] is None
         assert payload["positions"][1]["qty"] == 3
+        mock_trade_service.resolve_read_account.assert_called_once_with(
+            trd_env="SIMULATE", acc_id="0"
+        )
+        mock_trade_service.get_assets.assert_called_once_with(
+            trd_env="SIMULATE", acc_id=ACCOUNT_ID
+        )
+        mock_trade_service.get_positions.assert_called_once_with(
+            trd_env="SIMULATE", acc_id=ACCOUNT_ID
+        )
 
     @pytest.mark.asyncio
     async def test_service_records_are_not_mutated_by_the_tool(
@@ -377,6 +390,10 @@ class TestRetrievalToRequestRoundtrip:
         ctx = MagicMock()
         service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
         service.trade_ctx = ctx
+        ctx.get_acc_list.return_value = (
+            0,
+            pd.DataFrame([{"acc_id": 123, "trd_env": "SIMULATE"}]),
+        )
 
         # 1. Retrieval, as the strategy view returns it.
         ctx.position_list_query.return_value = (

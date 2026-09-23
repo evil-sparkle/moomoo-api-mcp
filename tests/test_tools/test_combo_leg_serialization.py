@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
-from moomoo import ComboLeg
+from moomoo import RET_OK, ComboLeg
 
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
@@ -86,6 +86,10 @@ def _plain_row(**overrides):
 def trade_ctx_context(mcp_app_context):
     """A real TradeService on a mocked SDK, wired into the lifespan context."""
     trade_ctx = MagicMock()
+    trade_ctx.get_acc_list.return_value = (
+        RET_OK,
+        pd.DataFrame([{"acc_id": ACCOUNT_ID, "trd_env": "SIMULATE"}]),
+    )
     service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
     service.trade_ctx = trade_ctx
     mcp_app_context.trade_service = service

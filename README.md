@@ -36,6 +36,7 @@ This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/m
     "checked_at": "2026-09-10T12:00:00Z",
     "quote": { "status": "ok", "logged_in": true },
     "trade": { "status": "error", "reason": "gateway_error", "error": "trade svr not ready" },
+    "trade_market": "NONE",
     "gateway_version": "9.2.5208"
   }
   ```
@@ -44,7 +45,8 @@ This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/m
 
 ### Account
 
-- `get_accounts`: List all trading accounts (REAL and SIMULATE).
+- `get_accounts`: List accounts across markets and environments, or filter one
+  response with `market="US"` and `trd_env="SIMULATE"`.
 - `get_account_summary`: Get a complete summary of assets and positions for an account.
 - `get_assets`: Retrieve account assets (cash, market value, buying power).
 - `get_positions`: Get current stock positions with P/L data.
@@ -216,6 +218,7 @@ MOOMOO_LOGIN_ACCOUNT=12345678
 MOOMOO_LOGIN_REGION=sg        # sg (Singapore), us, hk, etc.
 MOOMOO_SECURITY_FIRM=FUTUSG   # FUTUSG (Singapore), FUTUINC (US), etc.
 MOOMOO_TRADING_MODE=READ_ONLY  # READ_ONLY (default), SIMULATE, or REAL
+MOOMOO_TRADING_MARKET=NONE     # NONE (all securities markets) or HK, US, CN, HKCC, SG, AU, JP, MY, CA
 ```
 
 > **Security Note**: You **do not need to store your login password** in `.env`. When `MOOMOO_LOGIN_BY_REMEMBER=1` (default), OpenD authenticates headlessly using the encrypted token stored in `opend-data`.
@@ -320,6 +323,7 @@ To enable **REAL account** access, you must securely provide your credentials.
 | Variable                    | Description                                                           | Example       |
 | --------------------------- | --------------------------------------------------------------------- | ------------- |
 | `MOOMOO_TRADING_MODE`       | Which writes this server may issue. Default `READ_ONLY`.              | `SIMULATE`    |
+| `MOOMOO_TRADING_MARKET`     | Trade account discovery filter. Default `NONE`; use `HK` for the former HK-only scope. | `NONE` |
 | `MOOMOO_TRADE_PASSWORD`     | Your trading password (plain text)                                    | `123456`      |
 | `MOOMOO_TRADE_PASSWORD_MD5` | MD5 hash of 6-digit trade PIN (alternative to plain text)             | `e10adc...`   |
 | `MOOMOO_SECURITY_FIRM`      | Your broker region (e.g., FUTUSG, FUTUINC)                            | `FUTUSG`      |
@@ -388,7 +392,38 @@ layer, before any request reaches OpenD.
   for REAL account data. The mode caps what the server will attempt; it does not
   grant anything.
 
-`check_health` reports the configured mode as `trading_mode`.
+`check_health` reports the configured mode as `trading_mode` and the account
+discovery filter as `trade_market`, even when OpenD is unavailable.
+
+#### Trade account discovery and explicit targeting
+
+`MOOMOO_TRADING_MARKET` configures the single trade context for the process.
+It defaults to `NONE`, asking the provider to return all securities markets
+available to the configured login and firm. This replaces the SDK's previous
+implicit `HK` discovery filter. Set `MOOMOO_TRADING_MARKET=HK` to retain that
+former scope. Accepted values are `NONE`, `HK`, `US`, `CN`, `HKCC`, `SG`, `AU`,
+`JP`, `MY`, and `CA`. Changing it requires restarting the process.
+
+The filter controls discovery only. It does not grant or restrict trading
+permission, change `MOOMOO_TRADING_MODE`, or limit quote-market queries. These
+settings describe different things: `MOOMOO_LOGIN_REGION=sg` selects the OpenD
+login region, `MOOMOO_SECURITY_FIRM=FUTUSG` selects the securities firm, `US`
+is an account market, and `SIMULATE` is a trading environment.
+
+Use a response filter to locate the account, then pass its exact string ID to
+the next read or write:
+
+```text
+get_accounts(market="US", trd_env="SIMULATE")
+get_account_summary(trd_env="SIMULATE", acc_id="<exact returned account ID>")
+```
+
+An account authorized for several markets appears once per response. A
+`market="US"` filter cannot create a US account when the configured context
+returns none. Account-bound reads resolve `acc_id="0"` only when exactly one
+account matches `trd_env`; zero or several matches fail before the account
+query. An explicit ID must still belong to that environment. The resolver for
+reads does not use the REAL write allowlist.
 
 ### 3. Configure Claude Desktop
 
@@ -506,6 +541,13 @@ When using this MCP server, AI agents **MUST**:
    - Pass `trd_env='SIMULATE'` parameter explicitly.
    - No unlock is required for simulation accounts.
 
+4. **Select and bind an account explicitly** when more than one account can
+   match the requested environment. For a US paper read, call
+   `get_accounts(market="US", trd_env="SIMULATE")`, then pass the exact string
+   `acc_id` returned to `get_account_summary`, `get_assets`, `get_positions`, or
+   order-history reads. `market` and `trd_env` filters are discovery filters;
+   they do not change the process connection or authorize a write.
+
 ### Workflow Example
 
 ```text
@@ -603,6 +645,17 @@ Previously the server relied on the presence of a trade password to imply
 simulation-only operation, but nothing enforced that: tool defaults were `REAL`
 and any caller could submit a live order. The mode now decides, and the password
 no longer implies anything about it.
+
+### Trade account market selection changes the discovery default
+
+`MOOMOO_TRADING_MARKET` now defaults to `NONE` instead of the SDK's implicit
+`HK`, so `get_accounts()` can return both HK and US accounts when the provider
+exposes them. Deployments that need the old discovery scope can set
+`MOOMOO_TRADING_MARKET=HK`. This is a breaking discovery change: zero-ID reads
+that used to let the SDK pick its first account now fail if multiple accounts
+match `trd_env`. Call `get_accounts` and use its exact string ID. This does not
+change mutation authorization, REAL allowlists, trading-mode gates, or order
+limits.
 
 ### Account, position, and combo identifiers are strings
 

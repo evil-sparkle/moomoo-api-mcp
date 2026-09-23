@@ -160,9 +160,10 @@ class MoomooService:
         Returns:
             Health dictionary with the overall ``status`` and ``host``, the UTC
             ``checked_at`` observation time, per-service ``quote`` and ``trade``
-            results, the configured ``trading_mode``, and ``gateway_version``
-            when the gateway reports one. Connectivity says nothing about
-            whether trading is unlocked or any market is authorized.
+            results, the configured ``trading_mode`` and ``trade_market``, and
+            ``gateway_version`` when the gateway reports one. Connectivity
+            says nothing about whether trading is unlocked or any market is
+            authorized.
         """
         return self.start_health_check(
             trade_service=trade_service, deadline=deadline
@@ -221,6 +222,9 @@ class HealthCheck:
             "trade": trade_result,
             "trading_mode": (
                 self.trade_service.policy.mode.value if self.trade_service else None
+            ),
+            "trade_market": (
+                self.trade_service.trading_market if self.trade_service else None
             ),
             "gateway_version": quote_result.get("gateway_version"),
         }

@@ -1,11 +1,16 @@
 """Tests for account tools through MCP dispatch and LLM guidance verification."""
 
+import asyncio
 import os
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
+from moomoo import RET_OK
 
+from moomoo_mcp.server import mcp
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.account import (
     get_account_summary,
     get_accounts,
@@ -15,6 +20,126 @@ from moomoo_mcp.tools.account import (
     get_positions,
     unlock_trade,
 )
+
+UNSAFE_ACCOUNT_ID = 9007199254740993
+
+
+@pytest.mark.asyncio
+async def test_get_accounts_schema_has_optional_filters():
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+    schema = tools["get_accounts"].inputSchema
+
+    assert {"market", "trd_env"}.issubset(schema["properties"])
+    assert "market" not in schema.get("required", [])
+    assert "trd_env" not in schema.get("required", [])
+
+
+@pytest.mark.asyncio
+async def test_get_accounts_without_arguments_preserves_shape_and_exact_id(
+    call_tool, mock_trade_service
+):
+    mock_trade_service.get_accounts.return_value = [
+        {
+            "acc_id": UNSAFE_ACCOUNT_ID,
+            "trd_env": "SIMULATE",
+            "trdmarket_auth": ["US"],
+            "is_real": False,
+        }
+    ]
+
+    result = await call_tool("get_accounts")
+
+    assert result.structured["result"] == [
+        {
+            "acc_id": str(UNSAFE_ACCOUNT_ID),
+            "trd_env": "SIMULATE",
+            "trdmarket_auth": ["US"],
+            "is_real": False,
+        }
+    ]
+    mock_trade_service.get_accounts.assert_called_once_with(market=None, trd_env=None)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_market_filters_do_not_leak_to_discovery_or_mutations(
+    call_tool, mcp_app_context
+):
+    provider_accounts = pd.DataFrame(
+        [
+            {"acc_id": 101, "trd_env": "SIMULATE", "trdmarket_auth": ["HK"]},
+            {"acc_id": 202, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]},
+        ]
+    )
+    trade_ctx = MagicMock()
+    trade_ctx.get_acc_list.return_value = (RET_OK, provider_accounts)
+    service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
+    service.trade_ctx = trade_ctx
+    mcp_app_context.trade_service = service
+
+    with patch(
+        "moomoo_mcp.services.trade_service.OpenSecTradeContext"
+    ) as context_factory:
+        hk_result, us_result = await asyncio.gather(
+            call_tool("get_accounts", {"market": "HK", "trd_env": "SIMULATE"}),
+            call_tool("get_accounts", {"market": "US", "trd_env": "SIMULATE"}),
+        )
+        all_result = await call_tool("get_accounts")
+        mutation_account = service._resolve_account("SIMULATE", "US", "0")
+
+    assert [item["acc_id"] for item in hk_result.structured["result"]] == ["101"]
+    assert [item["acc_id"] for item in us_result.structured["result"]] == ["202"]
+    assert [item["acc_id"] for item in all_result.structured["result"]] == [
+        "101",
+        "202",
+    ]
+    assert mutation_account == 202
+    assert trade_ctx.get_acc_list.call_count == 4
+    context_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_account_summary_resolves_once_and_passes_a_concrete_id(
+    call_tool, mock_trade_service
+):
+    mock_trade_service.resolve_read_account.return_value = ("SIMULATE", 123)
+    mock_trade_service.get_assets.return_value = {"cash": 10.0}
+    mock_trade_service.get_positions.return_value = []
+
+    await call_tool("get_account_summary", {"trd_env": "simulate"})
+
+    mock_trade_service.resolve_read_account.assert_called_once_with(
+        trd_env="simulate", acc_id="0"
+    )
+    mock_trade_service.get_assets.assert_called_once_with(
+        trd_env="SIMULATE", acc_id=123
+    )
+    mock_trade_service.get_positions.assert_called_once_with(
+        trd_env="SIMULATE", acc_id=123
+    )
+
+
+@pytest.mark.asyncio
+async def test_account_summary_does_not_switch_if_account_disappears(
+    call_tool, mcp_app_context
+):
+    trade_ctx = MagicMock()
+    trade_ctx.get_acc_list.side_effect = [
+        (RET_OK, pd.DataFrame([{"acc_id": 101, "trd_env": "SIMULATE"}])),
+        (RET_OK, pd.DataFrame([{"acc_id": 101, "trd_env": "SIMULATE"}])),
+        (RET_OK, pd.DataFrame([{"acc_id": 202, "trd_env": "SIMULATE"}])),
+    ]
+    trade_ctx.accinfo_query.return_value = (RET_OK, pd.DataFrame([{"cash": 10.0}]))
+    service = TradeService()
+    service.trade_ctx = trade_ctx
+    mcp_app_context.trade_service = service
+
+    with pytest.raises(Exception) as excinfo:
+        await call_tool("get_account_summary", {"trd_env": "SIMULATE"})
+
+    assert "not available" in str(excinfo.value)
+    assert trade_ctx.accinfo_query.call_args.kwargs["acc_id"] == 101
+    trade_ctx.position_list_query.assert_not_called()
+    assert trade_ctx.get_acc_list.call_count == 3
 
 
 @pytest.fixture

@@ -34,6 +34,9 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
           ('READ_ONLY', 'SIMULATE', or 'REAL'). It says which writes the server
           will issue at all, which is separate from whether the gateway would
           accept one.
+        - trade_market: The configured MOOMOO_TRADING_MARKET discovery filter
+          ('NONE' for all securities markets or one named market). It reports
+          configuration, not account availability or trading permission.
         - gateway_version: OpenD version when the gateway reports one, else null.
     """
     lifespan_context = ctx.request_context.lifespan_context

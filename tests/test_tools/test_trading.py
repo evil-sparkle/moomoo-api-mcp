@@ -409,6 +409,10 @@ class TestComboPreviewThroughMcp:
                 columns=self.IMPACT_COLUMNS,
             ),
         )
+        context.get_acc_list.return_value = (
+            0,
+            pd.DataFrame([{"acc_id": 456, "trd_env": "REAL"}]),
+        )
         return context
 
     @pytest.fixture

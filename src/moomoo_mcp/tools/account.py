@@ -11,10 +11,19 @@ from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
 @mcp.tool()
-async def get_accounts(ctx: Context[ServerSession, AppContext]) -> list[dict]:
-    """Get list of trading accounts.
+async def get_accounts(
+    ctx: Context[ServerSession, AppContext],
+    market: str | None = None,
+    trd_env: str | None = None,
+) -> list[dict]:
+    """Get accounts available through this process's configured trade context.
 
-    Returns list of account dictionaries with acc_id, trd_env (REAL/SIMULATE), etc.
+    Optional filters are applied to this response only. ``market="NONE"``
+    means all markets returned by the provider context. A named market such as
+    ``"US"`` matches account market authorizations; ``trd_env`` accepts
+    ``"REAL"`` or ``"SIMULATE"``. These filters neither change the shared
+    connection nor grant trading permission. Use the exact returned account ID
+    with subsequent read or trading tools.
 
     IMPORTANT: This returns both REAL and SIMULATE accounts. Listing accounts is
     a read and never requires unlocking. Reading a REAL account's data through
@@ -22,7 +31,14 @@ async def get_accounts(ctx: Context[ServerSession, AppContext]) -> list[dict]:
     unlock_trade for why calling it up front can fail unnecessarily.
 
     Returns:
-        List of account dictionaries containing acc_id, trd_env, and other metadata.
+        List of account dictionaries containing acc_id, trd_env, and other
+        provider metadata. No matching accounts returns an empty list; provider
+        errors remain errors.
+
+    Args:
+        market: Optional securities market filter: NONE, HK, US, CN, HKCC, SG,
+            AU, JP, MY, or CA. Omit it to retain all provider-returned markets.
+        trd_env: Optional account environment filter: REAL or SIMULATE.
 
         NOTE: acc_id is returned as a decimal STRING, not a number. It is a
         64-bit value that a JSON client parsing numbers as doubles would
@@ -31,7 +47,11 @@ async def get_accounts(ctx: Context[ServerSession, AppContext]) -> list[dict]:
         to a number at any point.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    accounts = await run_blocking(trade_service.get_accounts)
+    accounts = await run_blocking(
+        trade_service.get_accounts,
+        market=market,
+        trd_env=trd_env,
+    )
     await ctx.info(f"Retrieved {len(accounts)} accounts")
     return serialize_identifiers(accounts)
 
@@ -57,6 +77,12 @@ async def get_account_summary(
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
+    than one market can be visible, so select an account with get_accounts and
+    pass its exact string ID. Explicit IDs must belong to the requested
+    environment. Read resolution does not use the REAL write allowlist.
+
     Args:
         trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
             testing). See the note above on unlocking before reading REAL data.
@@ -71,12 +97,17 @@ async def get_account_summary(
         quantities remain numbers. Pass identifiers on unchanged, as strings.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
+    trd_env, resolved_acc_id = await run_blocking(
+        trade_service.resolve_read_account,
+        trd_env=trd_env,
+        acc_id=acc_id,
+    )
 
     assets = await run_blocking(
-        trade_service.get_assets, trd_env=trd_env, acc_id=acc_id
+        trade_service.get_assets, trd_env=trd_env, acc_id=resolved_acc_id
     )
     positions = await run_blocking(
-        trade_service.get_positions, trd_env=trd_env, acc_id=acc_id
+        trade_service.get_positions, trd_env=trd_env, acc_id=resolved_acc_id
     )
 
     await ctx.info(
@@ -110,6 +141,12 @@ async def get_assets(
       READ_ONLY trading mode unlock is denied outright, so calling it first
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
+
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
+    than one market can be visible, so select an account with get_accounts and
+    pass its exact string ID. Explicit IDs must belong to the requested
+    environment. Read resolution does not use the REAL write allowlist.
 
     Args:
         trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
@@ -158,6 +195,12 @@ async def get_positions(
       READ_ONLY trading mode unlock is denied outright, so calling it first
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
+
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
+    than one market can be visible, so select an account with get_accounts and
+    pass its exact string ID. Explicit IDs must belong to the requested
+    environment. Read resolution does not use the REAL write allowlist.
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL').
@@ -227,6 +270,12 @@ async def get_max_tradable(
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
+    than one market can be visible, so select an account with get_accounts and
+    pass its exact string ID. Explicit IDs must belong to the requested
+    environment. Read resolution does not use the REAL write allowlist.
+
     Args:
         order_type: Order type (e.g., 'NORMAL', 'LIMIT', 'MARKET').
         code: Stock code (e.g., 'US.AAPL').
@@ -292,6 +341,12 @@ async def get_cash_flow(
       READ_ONLY trading mode unlock is denied outright, so calling it first
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
+
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
+    than one market can be visible, so select an account with get_accounts and
+    pass its exact string ID. Explicit IDs must belong to the requested
+    environment. Read resolution does not use the REAL write allowlist.
 
     Args:
         clearing_date: Filter by clearing date ('YYYY-MM-DD'). Some brokers

@@ -49,6 +49,9 @@ async def place_order(
     matching the environment, authorized for the market, and, in REAL, on the
     configured allowlist. Zero or several eligible accounts is a refusal that
     lists the candidates by their last four digits; name one with acc_id.
+    MOOMOO_TRADING_MARKET controls which accounts the process context discovers;
+    changing it requires a restart. It does not grant trading permission or
+    change the trading-mode policy.
 
     LIMITS: when a notional cap is configured, the order is valued as
     reference price x quantity x contract multiplier, in the instrument's own
@@ -277,6 +280,8 @@ async def preview_combo_order(
     It resolves the account exactly as place_combo_order does, so it previews
     the account the placement would reach, and refuses where the placement would
     refuse rather than previewing an account the order could not use.
+    The process-wide MOOMOO_TRADING_MARKET setting controls discovery scope; it
+    does not grant trading permission or change the trading-mode policy.
 
     Args:
         combo_legs: Same format as place_combo_order. Each leg is a dict:
@@ -359,6 +364,9 @@ async def modify_order(
     for the environment, and, in REAL, on the configured allowlist. Zero or
     several eligible accounts is a refusal that lists the candidates by their
     last four digits; name one with acc_id.
+    MOOMOO_TRADING_MARKET controls which accounts the process context discovers;
+    changing it requires a restart. It does not grant trading permission or
+    change the trading-mode policy.
 
     LIMITS: 'NORMAL' and 'ENABLE' are checked as the order that WOULD RESULT,
     not as the fields you sent. The existing order is fetched, your changes are
@@ -442,6 +450,9 @@ async def cancel_order(
     for the environment, and, in REAL, on the configured allowlist. Zero or
     several eligible accounts is a refusal that lists the candidates by their
     last four digits; name one with acc_id.
+    MOOMOO_TRADING_MARKET controls which accounts the process context discovers;
+    changing it requires a restart. It does not grant trading permission or
+    change the trading-mode policy.
 
     HALT: cancellation stays ALLOWED while execution is halted. Reducing
     exposure is exactly what an operator needs during a halt. lock_trade is
@@ -493,6 +504,12 @@ async def get_orders(
       accessing their REAL trading account before proceeding.
     - Only use SIMULATE if the user explicitly requests it.
 
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. If the configured market scope exposes several,
+    call get_accounts and pass the exact returned string ID. Explicit IDs must
+    belong to the requested environment. Read resolution does not use the REAL
+    write allowlist.
+
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.
         status_filter_list: Filter by order statuses. Options:
@@ -540,6 +557,12 @@ async def get_deals(
       accessing their REAL trading account before proceeding.
     - Only use SIMULATE if the user explicitly requests it.
 
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. If the configured market scope exposes several,
+    call get_accounts and pass the exact returned string ID. Explicit IDs must
+    belong to the requested environment. Read resolution does not use the REAL
+    write allowlist.
+
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.
         trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
@@ -580,6 +603,12 @@ async def get_history_orders(
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
     - Only use SIMULATE if the user explicitly requests it.
+
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. If the configured market scope exposes several,
+    call get_accounts and pass the exact returned string ID. Explicit IDs must
+    belong to the requested environment. Read resolution does not use the REAL
+    write allowlist.
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.
@@ -622,6 +651,12 @@ async def get_history_deals(
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
     - Only use SIMULATE if the user explicitly requests it.
+
+    Account-bound reads resolve acc_id='0' only when exactly one discovered
+    account matches trd_env. If the configured market scope exposes several,
+    call get_accounts and pass the exact returned string ID. Explicit IDs must
+    belong to the requested environment. Read resolution does not use the REAL
+    write allowlist.
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.

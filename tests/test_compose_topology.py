@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -44,6 +45,14 @@ PROD_ENV = {
 
 def _compose_available() -> bool:
     """Whether the Compose CLI is usable. It needs no daemon to render config."""
+    standalone = shutil.which("docker-compose")
+    if standalone is not None:
+        probe = subprocess.run(
+            [standalone, "version"],
+            capture_output=True,
+            cwd=ROOT,
+        )
+        return probe.returncode == 0
     if shutil.which("docker") is None:
         return False
     probe = subprocess.run(
@@ -56,27 +65,34 @@ def _compose_available() -> bool:
 
 def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
     """Return the configuration Compose actually resolves for these files."""
+    standalone = shutil.which("docker-compose")
+    command = [standalone] if standalone else ["docker", "compose"]
     files: list[str] = []
     for overlay in overlays:
         files += ["-f", overlay]
-    result = subprocess.run(
-        # An empty env file, because Compose otherwise reads the developer's
-        # own .env and these assertions would depend on an untracked file.
-        [
-            "docker",
-            "compose",
-            "--env-file",
-            os.devnull,
-            *files,
-            "config",
-            "--format",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-        env={**os.environ, **(env or {})},
-    )
+    with tempfile.TemporaryDirectory(prefix="moomoo-compose-config-") as docker_config:
+        result = subprocess.run(
+            # An empty env file and isolated HOME/DOCKER_CONFIG keep these
+            # topology checks independent of private local configuration.
+            [
+                *command,
+                "--env-file",
+                os.devnull,
+                *files,
+                "config",
+                "--format",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            env={
+                "PATH": os.environ.get("PATH", os.defpath),
+                "HOME": str(ROOT),
+                "DOCKER_CONFIG": docker_config,
+                **(env or {}),
+            },
+        )
     if result.returncode != 0:
         raise AssertionError(
             f"docker compose config failed for {files}: {result.stderr.strip()}"
@@ -99,9 +115,13 @@ class ComposeTopologyTest(unittest.TestCase):
                     "unchecked. CI must not pass without it."
                 )
             raise unittest.SkipTest("docker compose is not installed")
-        cls.config = _render("docker-compose.yml")
+        cls.config = _render(
+            "docker-compose.yml", env={"MOOMOO_TRADING_MARKET": "NONE"}
+        )
         cls.prod = _render(
-            "docker-compose.yml", "docker-compose.prod.yml", env=PROD_ENV
+            "docker-compose.yml",
+            "docker-compose.prod.yml",
+            env={**PROD_ENV, "MOOMOO_TRADING_MARKET": "NONE"},
         )
 
     def _service(self, config: dict | None = None) -> dict:
@@ -144,6 +164,29 @@ class ComposeTopologyTest(unittest.TestCase):
 
         self.assertEqual(environment["MOOMOO_OPEND_HOST"], "127.0.0.1")
         self.assertEqual(str(environment["MOOMOO_OPEND_PORT"]), "11111")
+
+    def test_trade_market_default_and_operator_override_reach_both_compose_files(self):
+        self.assertEqual(
+            self._service()["environment"]["MOOMOO_TRADING_MARKET"], "NONE"
+        )
+        self.assertEqual(
+            self._service(self.prod)["environment"]["MOOMOO_TRADING_MARKET"],
+            "NONE",
+        )
+
+        base_hk = _render("docker-compose.yml", env={"MOOMOO_TRADING_MARKET": "HK"})
+        production_hk = _render(
+            "docker-compose.yml",
+            "docker-compose.prod.yml",
+            env={**PROD_ENV, "MOOMOO_TRADING_MARKET": "HK"},
+        )
+        self.assertEqual(
+            self._service(base_hk)["environment"]["MOOMOO_TRADING_MARKET"], "HK"
+        )
+        self.assertEqual(
+            self._service(production_hk)["environment"]["MOOMOO_TRADING_MARKET"],
+            "HK",
+        )
 
     def test_the_listener_is_not_an_operator_setting(self):
         """`OPEND_API_IP` let a deployment widen an unauthenticated API by
