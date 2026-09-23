@@ -106,6 +106,43 @@ finish_deploy() {
   local previous_commit=""
   local previous_env=""
   local has_previous_env=false
+  local previous_image=""
+
+  cleanup_images() {
+    local current_image images repository image_repository tag image_id
+    repository="$registry/moomoo-api-mcp"
+    # Inspect the actual container: --prepare may have overwritten the saved
+    # tag, and mutable tags may no longer identify the image it was using.
+    if [ -z "$previous_image" ]; then
+      echo 'Skipping image cleanup: no previous container image was identified.' >&2
+      return 0
+    fi
+    if ! current_image="$(docker --context rootless container inspect \
+      --format '{{.Image}}' moomoo-api-mcp)" || [ -z "$current_image" ]; then
+      echo 'Skipping image cleanup: could not identify the current container image.' >&2
+      return 0
+    fi
+    # A redeploy of the same image must not evict the older rollback image.
+    if [ "$current_image" = "$previous_image" ]; then
+      return 0
+    fi
+    if ! images="$(docker --context rootless image ls --no-trunc \
+      --format '{{.Repository}} {{.Tag}} {{.ID}}' "$repository")"; then
+      echo 'Skipping image cleanup: could not list local images.' >&2
+      return 0
+    fi
+    while read -r image_repository tag image_id; do
+      [ "$image_repository" = "$repository" ] || continue
+      [ "$tag" != '<none>' ] && [ -n "$tag" ] || continue
+      [ "$image_id" != "$current_image" ] || continue
+      [ "$image_id" != "$previous_image" ] || continue
+      # Remove repository tags, never force image-ID deletion: shared tags
+      # in other repositories and images used by containers stay protected.
+      docker --context rootless image rm "$repository:$tag" \
+        || echo "Could not remove old app image $repository:$tag; continuing." >&2
+    done <<< "$images"
+    return 0
+  }
 
   rollback() {
     local started_services="${1:-true}"
@@ -127,6 +164,8 @@ finish_deploy() {
   }
 
   if [ "$prepare" = false ]; then
+    previous_image="$(docker --context rootless container inspect \
+      --format '{{.Image}}' moomoo-api-mcp 2>/dev/null)" || previous_image=""
     previous_commit="$(git rev-parse HEAD)"
     if [ -f .deploy.env ]; then
       previous_env="$(cat .deploy.env)"
@@ -164,6 +203,7 @@ finish_deploy() {
       echo "Deploy verified: ${short} as ${image_tag}" >&2
       ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp \
         || echo 'Could not collect the moomoo-mcp logs.' >&2
+      cleanup_images
     else
       echo "Deploy verification failed for ${short}; see the reason above." >&2
       # Diagnostics only: failing to collect them must not stop the rollback.

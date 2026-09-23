@@ -122,6 +122,26 @@ if name == "aws":
     else:
         print("sha256:test-digest")
 if name == "docker":
+    if args[2:4] == ["container", "inspect"]:
+        if os.environ.get("DOCKER_TEST_FAIL_INSPECT") == "1":
+            sys.exit(1)
+        calls = pathlib.Path(os.environ["CALL_LOG"]).read_text().splitlines()
+        inspections = sum("container" in json.loads(line)[1] for line in calls)
+        if (inspections > 1
+                and os.environ.get("DOCKER_TEST_FAIL_CURRENT_INSPECT") == "1"):
+            sys.exit(1)
+        key = (
+            "DOCKER_TEST_PREVIOUS_IMAGE" if inspections == 1
+            else "DOCKER_TEST_CURRENT_IMAGE"
+        )
+        default_image = "sha256:previous" if inspections == 1 else "sha256:current"
+        print(os.environ.get(key, default_image))
+    if args[2:4] == ["image", "ls"]:
+        if os.environ.get("DOCKER_TEST_FAIL_LIST") == "1":
+            sys.exit(1)
+        print(os.environ.get("DOCKER_TEST_IMAGES", ""))
+    if args[2:4] == ["image", "rm"] and os.environ.get("DOCKER_TEST_FAIL_RM") == "1":
+        sys.exit(1)
     if os.environ.get("DOCKER_TEST_FAIL") == "1":
         sys.exit(1)
     if "config" in args:
@@ -197,7 +217,7 @@ if name == "curl":
         return [
             args[args.index("docker-compose.prod.yml") + 1]
             for name, args, _ in self.calls()
-            if name == "docker"
+            if name == "docker" and "compose" in args
         ]
 
     def save_previous_deploy(self):
@@ -215,6 +235,90 @@ if name == "curl":
         newer_commit = self.git("rev-parse", "HEAD").strip()
         self.git("checkout", "--quiet", "--detach", self.commit)
         return newer_commit
+
+    def image_removals(self):
+        return [
+            args[-1]
+            for name, args, _ in self.calls()
+            if name == "docker" and args[2:4] == ["image", "rm"]
+        ]
+
+    def seed_images(self):
+        repo = f"{REGISTRY}/moomoo-api-mcp"
+        self.env["DOCKER_TEST_IMAGES"] = "\n".join(
+            [
+                f"{repo} current sha256:current",
+                f"{repo} current-alias sha256:current",
+                f"{repo} previous sha256:previous",
+                f"{repo} previous-alias sha256:previous",
+                f"{repo} old sha256:old",
+                f"{repo} older sha256:older",
+                f"{repo}-other old sha256:other",
+                "other-registry/moomoo-api-mcp old sha256:other",
+                "<none> <none> sha256:dangling",
+            ]
+        )
+        return repo
+
+    def test_cleanup_keeps_both_images_and_their_aliases(self):
+        repo = self.seed_images()
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.image_removals(), [f"{repo}:old", f"{repo}:older"])
+        calls = self.calls()
+        probe = next(i for i, call in enumerate(calls) if call[0] == "curl")
+        for i, (name, args, _) in enumerate(calls):
+            if name == "docker" and args[2:4] == ["image", "rm"]:
+                self.assertGreater(i, probe)
+                self.assertEqual(args[:2], ["--context", "rootless"])
+                self.assertNotIn("--force", args)
+
+    def test_cleanup_skipped_on_prepare_and_failed_deployments(self):
+        self.seed_images()
+        for mode in ("prepare", "CONFIG", "PULL", "UP_ALWAYS", "verify"):
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                overrides = {}
+                if mode == "verify":
+                    overrides["CURL_TEST_FAIL"] = "1"
+                elif mode != "prepare":
+                    overrides[f"DOCKER_TEST_FAIL_{mode}"] = "1"
+                with mock.patch.dict(self.env, overrides):
+                    result = self.deploy(*(["--prepare"] if mode == "prepare" else []))
+                self.assertEqual(result.returncode == 0, mode == "prepare")
+                self.assertEqual(self.image_removals(), [])
+                self.assertFalse(
+                    any(
+                        args[2:4] == ["image", "ls"]
+                        for name, args, _ in self.calls()
+                        if name == "docker"
+                    )
+                )
+
+    def test_cleanup_failures_do_not_fail_verified_deployment(self):
+        repo = self.seed_images()
+        for failure in ("INSPECT", "CURRENT_INSPECT", "LIST", "RM"):
+            with self.subTest(failure=failure):
+                self.log.unlink(missing_ok=True)
+                with mock.patch.dict(self.env, {f"DOCKER_TEST_FAIL_{failure}": "1"}):
+                    result = self.deploy()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Deploy verified", result.stderr)
+                if failure == "RM":
+                    self.assertEqual(
+                        self.image_removals(), [f"{repo}:old", f"{repo}:older"]
+                    )
+                    self.assertIn("Could not remove old app image", result.stderr)
+                else:
+                    self.assertEqual(self.image_removals(), [])
+                    self.assertIn("Skipping image cleanup", result.stderr)
+
+    def test_same_image_redeploy_preserves_older_rollback_image(self):
+        self.seed_images()
+        self.env["DOCKER_TEST_CURRENT_IMAGE"] = "sha256:previous"
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.image_removals(), [])
 
     def test_git_helper_ignores_inherited_git_environment(self):
         """Inherited GIT_* variables must not redirect the fixture's git calls.
@@ -316,7 +420,11 @@ if name == "curl":
         self.assertEqual(
             self.compose_commands(), ["config", "pull", "up", "config", "logs"]
         )
-        docker = [args for name, args, _ in self.calls() if name == "docker"]
+        docker = [
+            args
+            for name, args, _ in self.calls()
+            if name == "docker" and "compose" in args
+        ]
         self.assertEqual(docker[2][-3:], ["up", "-d", "--remove-orphans"])
         self.assertIn("moomoo-mcp", docker[4])
 
@@ -534,7 +642,11 @@ if name == "curl":
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
         self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
 
-        docker = [args for name, args, _ in self.calls() if name == "docker"]
+        docker = [
+            args
+            for name, args, _ in self.calls()
+            if name == "docker" and "compose" in args
+        ]
         up_calls = [
             args for args in docker if args[-3:] == ["up", "-d", "--remove-orphans"]
         ]
@@ -588,7 +700,11 @@ if name == "curl":
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
         self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
 
-        docker = [args for name, args, _ in self.calls() if name == "docker"]
+        docker = [
+            args
+            for name, args, _ in self.calls()
+            if name == "docker" and "compose" in args
+        ]
         up_calls = [
             args for args in docker if args[-3:] == ["up", "-d", "--remove-orphans"]
         ]
