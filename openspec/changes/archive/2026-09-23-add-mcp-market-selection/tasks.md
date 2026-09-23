@@ -86,7 +86,7 @@
 - [x] 5.2 Remove duplicate summary account resolution while retaining explicit-ID
   SDK validation and failure on account disappearance; simplify repeated guidance
   and test setup without dropping coverage.
-- [ ] 5.3 Re-run the full local gates, review the final diff, sync this change's
+- [x] 5.3 Re-run the full local gates, review the final diff, sync this change's
   three delta specs, and archive stage 1.1 in the implementation PR.
 
 Review verification (2026-09-23): `uv run pytest -q` passed with 1,076 passed,
