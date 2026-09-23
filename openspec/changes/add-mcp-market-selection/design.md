@@ -102,9 +102,10 @@ its REAL allowlist behavior belongs to write eligibility. Reads continue to obey
 their existing access behavior without requiring REAL write permission. Combo
 preview already has its own specified placement-style resolver; retain it.
 
-`get_account_summary` resolves once, then supplies that ID to both constituent
-reads. They may revalidate membership, but must never resolve zero independently.
-Account disappearance between calls fails the summary; it does not switch accounts.
+`get_account_summary` resolves once in the service, then supplies that ID to both
+private query helpers. The SDK revalidates membership before each detail request;
+the application does not repeat discovery. SDK contract tests cover disappearance
+before either query. A missing account fails the summary without switching IDs.
 
 Stage 1 placement still uses instrument market and environment to narrow candidates;
 modify/cancel still refuse ambiguity without an explicit ID. Discovery filters do

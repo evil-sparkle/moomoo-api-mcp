@@ -2,11 +2,12 @@
 
 import asyncio
 import os
+from functools import partial
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-from moomoo import RET_OK
+from moomoo import RET_OK, OpenSecTradeContext, TrdCategory, TrdMarket
 
 from moomoo_mcp.server import mcp
 from moomoo_mcp.services.trade_service import TradeService
@@ -98,48 +99,71 @@ async def test_concurrent_market_filters_do_not_leak_to_discovery_or_mutations(
 
 
 @pytest.mark.asyncio
-async def test_account_summary_resolves_once_and_passes_a_concrete_id(
-    call_tool, mock_trade_service
+@pytest.mark.parametrize("acc_id", ["0", str(UNSAFE_ACCOUNT_ID)])
+@pytest.mark.parametrize("disappears_at", [None, 1, 2])
+async def test_account_summary_binds_once_and_sdk_revalidates(
+    call_tool, mcp_app_context, acc_id, disappears_at
 ):
-    mock_trade_service.resolve_read_account.return_value = ("SIMULATE", 123)
-    mock_trade_service.get_assets.return_value = {"cash": 10.0}
-    mock_trade_service.get_positions.return_value = []
-
-    await call_tool("get_account_summary", {"trd_env": "simulate"})
-
-    mock_trade_service.resolve_read_account.assert_called_once_with(
-        trd_env="simulate", acc_id="0"
-    )
-    mock_trade_service.get_assets.assert_called_once_with(
-        trd_env="SIMULATE", acc_id=123
-    )
-    mock_trade_service.get_positions.assert_called_once_with(
-        trd_env="SIMULATE", acc_id=123
-    )
-
-
-@pytest.mark.asyncio
-async def test_account_summary_does_not_switch_if_account_disappears(
-    call_tool, mcp_app_context
-):
-    trade_ctx = MagicMock()
-    trade_ctx.get_acc_list.side_effect = [
-        (RET_OK, pd.DataFrame([{"acc_id": 101, "trd_env": "SIMULATE"}])),
-        (RET_OK, pd.DataFrame([{"acc_id": 101, "trd_env": "SIMULATE"}])),
-        (RET_OK, pd.DataFrame([{"acc_id": 202, "trd_env": "SIMULATE"}])),
+    # Run the real SDK query and membership methods with only transport mocked.
+    # This guards the SDK contract on which the summary's single resolution relies.
+    trade_ctx = MagicMock(spec=OpenSecTradeContext)
+    trade_ctx._OpenTradeContextBase__trd_category = TrdCategory.SECURITY
+    trade_ctx._OpenTradeContextBase__trd_mkt = TrdMarket.NONE
+    for method in (
+        "accinfo_query",
+        "position_list_query",
+        "_check_acc_id_and_acc_index",
+        "_check_acc_id_exist",
+        "_check_trd_env",
+        "_check_stock_code",
+    ):
+        getattr(trade_ctx, method).side_effect = partial(
+            getattr(OpenSecTradeContext, method), trade_ctx
+        )
+    accounts = [
+        (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "acc_id": UNSAFE_ACCOUNT_ID
+                        if disappears_at is None or i < disappears_at
+                        else 202,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["US"],
+                    }
+                ]
+            ),
+        )
+        for i in range(3)
     ]
-    trade_ctx.accinfo_query.return_value = (RET_OK, pd.DataFrame([{"cash": 10.0}]))
+    trade_ctx.get_acc_list.side_effect = accounts
+    query = trade_ctx._get_sync_query_processor.return_value
+    query.return_value = (RET_OK, "", [])
     service = TradeService()
     service.trade_ctx = trade_ctx
     mcp_app_context.trade_service = service
 
-    with pytest.raises(Exception) as excinfo:
-        await call_tool("get_account_summary", {"trd_env": "SIMULATE"})
-
-    assert "not available" in str(excinfo.value)
-    assert trade_ctx.accinfo_query.call_args.kwargs["acc_id"] == 101
-    trade_ctx.position_list_query.assert_not_called()
-    assert trade_ctx.get_acc_list.call_count == 3
+    if disappears_at is None:
+        result = await call_tool(
+            "get_account_summary", {"trd_env": "simulate", "acc_id": acc_id}
+        )
+        assert result.structured == {"assets": {}, "positions": []}
+        assert trade_ctx.get_acc_list.call_count == 3  # One resolver + two SDK checks.
+        assert query.call_count == 2
+    else:
+        with pytest.raises(Exception) as excinfo:
+            await call_tool(
+                "get_account_summary", {"trd_env": "simulate", "acc_id": acc_id}
+            )
+        assert "Nonexisting acc_id" in str(excinfo.value)
+        assert trade_ctx.get_acc_list.call_count == disappears_at + 1
+        assert query.call_count == disappears_at - 1
+    for call in trade_ctx._check_acc_id_and_acc_index.call_args_list:
+        assert call.args == ("SIMULATE", UNSAFE_ACCOUNT_ID, 0)
+    for call in query.call_args_list:
+        assert call.kwargs["acc_id"] == UNSAFE_ACCOUNT_ID
+    trade_ctx._get_acc_id_by_acc_index.assert_not_called()
 
 
 @pytest.fixture
