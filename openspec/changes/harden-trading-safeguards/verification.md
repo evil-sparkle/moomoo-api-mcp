@@ -35,6 +35,11 @@ quote decoding and policy compatibility; it is not an order submission or an
 independent currency measurement. No account query, unlock or order mutation was
 issued by this follow-up. The running MCP service and deployed image were unchanged.
 
+After rebasing onto main with PR #31 merged, the full suite passed: 1,093 tests,
+1 skipped, 72 subtests; Ruff check/format and basedpyright passed; strict OpenSpec
+validation passed 25/25. The isolated container smoke test passed before that
+rebase; the PR's CI checks validate the final combined image separately.
+
 Task 1.1 is complete. Task 1.2a is also complete using the authorized GTC/GTD
 provider evidence already recorded in Stage 2. Task 1.2's after-close retention
 observation is the only remaining Stage 1 task; do not archive before it is recorded.
