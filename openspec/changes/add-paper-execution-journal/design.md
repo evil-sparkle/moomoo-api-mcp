@@ -825,8 +825,9 @@ What is **not** guaranteed:
 
 1. Land `harden-trading-safeguards`.
 2. Re-check delta specs against landed Stage 1 specs.
-3. Run task group 1 against a real paper account to verify provider facts and resolve
-   the GTC conflict.
+3. Complete tasks 1.0–1.3 and 1.5–1.6 against a real paper account to verify
+   provider facts and resolve the GTC conflict. Continue task 1.4's after-close
+   retention measurement in parallel; an unknown window never proves absence.
 4. Obtain separate authorization for implementation.
 5. Add `execution-data` volume and configuration.
 6. Run automated suites (`U01`–`U18`, `C01`–`C04`).

@@ -2,14 +2,16 @@
 
 Nothing here is implemented, and no journal runtime milestone is claimed. Tasks
 1.0 and 1.5 record repository validation and a **planning decision**, respectively.
-Task 1.3 records observed paper-order fields from the authorized Stage 1 live run.
-Other provider prerequisites remain open; these checks do not replace the later
+Tasks 1.1–1.3 and 1.6 record observed provider behavior. Task 1.4 remains open
+for the after-close retention measurement; these checks do not replace the later
 end-to-end journal tests.
 
-Task groups 1, 10 and 11 gate the others: implementation begins only after group 1
-resolves the provider facts and the prerequisite reconciliation, and after
-implementation is separately authorized. Group 11 requires its own authorization
-again.
+Tasks 1.0–1.3 and 1.5–1.6 establish the provider facts and prerequisite
+reconciliation needed before implementation. Task 1.4 is a parallel observation,
+not a development gate: short or unknown retention leaves uncertain operations
+unresolved and execution-blocking under the existing design. Implementation
+still needs its separate authorization, and group 11 needs authorization again
+for end-to-end provider tests.
 
 ## Test layers
 
@@ -56,7 +58,8 @@ under the decision it affects.
 - [ ] 1.4 Measure how long a paper order stays queryable after it reaches a terminal
   state, by order query and by history-order query. Verify by recording both windows.
   This replaces the prerequisite's multi-day GTC question in a form a `DAY`-only
-  provider can answer.
+  provider can answer. It may complete after development starts; no reconciliation
+  rule may infer order absence from an expired or empty query.
 - [x] 1.5 GTC planning conflict resolved by Stage 1 commit `04ec53d`:
   task 1.2 now measures terminal DAY-order retention; non-DAY testing is
   optional and separately authorized. This records the planning decision;
