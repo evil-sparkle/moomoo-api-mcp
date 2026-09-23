@@ -121,7 +121,10 @@ jobs:
             if [ "${path}" = ".github/workflows/ci.yml" ] \
               || [ "${path}" = ".dockerignore" ] \
               || [ "${path}" = "docker-compose.yml" ] \
-              || [ "${path}" = "docker-compose.prod.yml" ]; then
+              || [ "${path}" = "docker-compose.prod.yml" ] \
+              || [ "${path}" = "docker-compose.paper.yml" ] \
+              || [ "${path}" = "scripts/test-paper-container.sh" ] \
+              || [ "${path}" = "tests/fixtures/paper_container_checks.py" ]; then
               mcp=true
               continue
             fi
@@ -225,6 +228,13 @@ jobs:
       - name: Run the container smoke test
         run: |
           ./scripts/smoke-test.sh
+      - name: Verify persistent paper execution in isolated containers
+        run: |
+          # smoke-test builds this image and removes only its containers/volumes.
+          # A second image identity exercises recreation across an image update.
+          printf 'FROM moomoo-smoke-moomoo-mcp\nLABEL paper-container-check=recreated\n' | \
+            docker build -t moomoo-paper-recreated -
+          ./scripts/test-paper-container.sh moomoo-smoke-moomoo-mcp moomoo-paper-recreated
 
   # One image, because the gateway and the server now ship together. The
   # moomoo-opend ECR repository is no longer written to; leave it in place until

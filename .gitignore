@@ -110,6 +110,7 @@ docker-compose.*.yml
 !docker-compose.yml
 !docker-compose.prod.yml
 !docker-compose.smoke.yml
+!docker-compose.paper.yml
 docs/deploy-*.md
 !docs/deploy-vps.md
 .deploy.env

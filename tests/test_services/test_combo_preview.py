@@ -220,21 +220,23 @@ class TestAccountSelection:
 
     def test_matches_the_account_placement_would_choose(self, ctx):
         acc_frame = pd.DataFrame(
-            [{"acc_id": 789, "trd_env": "SIMULATE", "market_auth": ["US"]}]
+            [{"acc_id": 789, "trd_env": "REAL", "market_auth": ["US"]}]
         )
         ctx.get_acc_list.return_value = (0, acc_frame)
         ctx.place_combo_order.return_value = (
             0,
             pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}]),
         )
-        svc = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
+        svc = TradeService(
+            policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({789}))
+        )
         svc.trade_ctx = ctx
 
         svc.preview_combo_order(
-            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="SIMULATE"
+            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="REAL"
         )
         svc.place_combo_order(
-            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="SIMULATE"
+            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="REAL"
         )
 
         previewed = ctx.comboorder_tradinginfo_query.call_args.kwargs["acc_id"]

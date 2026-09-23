@@ -20,6 +20,7 @@ from moomoo import (
 )
 
 from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.health import (
     SYNC_CONNECT_TIMEOUT_SECONDS,
     BoundedProbe,
@@ -36,6 +37,7 @@ from moomoo_mcp.services.order_errors import (
     outcome_unknown_message,
     receipt_unreadable_message,
 )
+from moomoo_mcp.services.paper_execution import PaperExecution
 from moomoo_mcp.services.sdk_response import as_frame
 from moomoo_mcp.services.trading_market import (
     DEFAULT_TRADING_MARKET,
@@ -205,6 +207,8 @@ class TradeService:
         trade_password: str | None = None,
         trade_password_md5: str | None = None,
         instrument_lookup: InstrumentLookup | None = None,
+        execution_store: ExecutionStore | None = None,
+        simulated_account_allowlist: frozenset[int] = frozenset(),
     ):
         """Initialize TradeService.
 
@@ -246,11 +250,18 @@ class TradeService:
         self.instrument_lookup = instrument_lookup
         self.trade_ctx: OpenSecTradeContext | None = None
         self._trade_probe = BoundedProbe("trade")
+        self._journal_probe = BoundedProbe("journal")
         self._connect_lock = threading.Lock()
         self._jit_lock = threading.RLock()
         self._connect_future: Future | None = None
         self._closed = False
         self._execution = _ExecutionState()
+        self.paper = (
+            PaperExecution(self, execution_store, simulated_account_allowlist)
+            if execution_store is not None
+            and self.policy.mode is not TradingMode.READ_ONLY
+            else None
+        )
 
     @property
     def has_trade_credential(self) -> bool:
@@ -622,6 +633,7 @@ class TradeService:
         constructor is still retrying.
         """
         self._trade_probe.close()
+        self._journal_probe.close()
         with self._connect_lock:
             # Set before releasing the lock so a worker that is still retrying
             # closes whatever it eventually builds instead of publishing it.
@@ -631,6 +643,10 @@ class TradeService:
             self.trade_ctx = None
         if trade_ctx:
             trade_ctx.close()
+
+        if self.paper is not None:
+            with self.paper.lock:
+                self.paper.store.close()
 
     def probe_trade(self) -> dict[str, Any]:
         """Actively check trade connectivity with a read-only account listing.
@@ -1385,10 +1401,45 @@ class TradeService:
             aux_price=aux_price,
         )
 
+    def _paper_execute(
+        self,
+        kind: str,
+        params: dict,
+        operation_id: str | None,
+        admission_epoch: str | None,
+        acc_id: int | str,
+    ) -> dict:
+        with not_sent("paper " + kind):
+            self.policy.check_write(kind, "SIMULATE")
+            if self.paper is None:
+                raise ValueError(
+                    "Persistent paper journal is not configured; no "
+                    "unjournaled paper writes are permitted"
+                )
+        return self.paper.execute(
+            kind,
+            params,
+            operation_id=operation_id,
+            admission_epoch=admission_epoch,
+            acc_id=acc_id,
+        )
+
+    def start_journal_health(self) -> Future:
+        return self._journal_probe.submit(self.journal_health)
+
+    def collect_journal_health(self, future: Future) -> dict:
+        result = self._journal_probe.collect(future, 0)
+        if "state" not in result:
+            return {"state": "JOURNAL_BLOCKED", "storage_error": result}
+        return result
+
+    def journal_health(self) -> dict:
+        return self.paper.health() if self.paper else {"state": "DISABLED"}
+
     def place_order(
         self,
         code: str,
-        price: float,
+        price: float | str,
         qty: int,
         trd_side: str,
         order_type: str = "NORMAL",
@@ -1402,6 +1453,8 @@ class TradeService:
         trd_env: str,
         acc_id: int | str = "0",
         remark: str = "",
+        operation_id: str | None = None,
+        admission_epoch: str | None = None,
     ) -> dict:
         """Place a new trading order.
 
@@ -1440,9 +1493,32 @@ class TradeService:
             OrderReceiptUnreadableError: If the gateway acknowledged the request
                 and its receipt could not be read.
         """
+        if str(trd_env).strip().upper() == "SIMULATE":
+            return self._paper_execute(
+                "PLACE",
+                {
+                    "code": code,
+                    "price": price,
+                    "qty": qty,
+                    "trd_side": trd_side,
+                    "order_type": order_type,
+                    "time_in_force": time_in_force,
+                    "adjust_limit": adjust_limit,
+                    "aux_price": aux_price,
+                    "trail_type": trail_type,
+                    "trail_value": trail_value,
+                    "trail_spread": trail_spread,
+                    "remark": remark,
+                },
+                operation_id,
+                admission_epoch,
+                acc_id,
+            )
         operation = "place_order"
         with not_sent(operation):
             self.policy.check_write(operation, trd_env)
+            if isinstance(price, str):
+                raise ValueError("REAL price must be numeric")
             validate_order_values(
                 operation,
                 order_type=order_type,
@@ -1744,6 +1820,12 @@ class TradeService:
             OrderReceiptUnreadableError: If the gateway acknowledged the request
                 and its receipt could not be read.
         """
+        if str(trd_env).strip().upper() == "SIMULATE":
+            with not_sent("paper place_combo_order"):
+                self.policy.check_write("place_combo_order", trd_env)
+                raise ValueError(
+                    "Combo orders are outside version 1 paper execution scope"
+                )
         operation = "place_combo_order"
         with not_sent(operation):
             self.policy.check_write(operation, trd_env)
@@ -1934,11 +2016,13 @@ class TradeService:
         order_id: str,
         modify_order_op: str,
         qty: int | None = None,
-        price: float | None = None,
+        price: float | str | None = None,
         adjust_limit: float = 0,
         *,
         trd_env: str,
         acc_id: int | str = "0",
+        operation_id: str | None = None,
+        admission_epoch: str | None = None,
     ) -> dict:
         """Modify an existing order.
 
@@ -1971,6 +2055,34 @@ class TradeService:
             OrderReceiptUnreadableError: If the gateway acknowledged the request
                 and its receipt could not be read.
         """
+        if str(trd_env).strip().upper() == "SIMULATE":
+            with not_sent("paper modify_order"):
+                self.policy.check_write("modify_order", "SIMULATE")
+                if modify_order_op not in {"NORMAL", "CANCEL"}:
+                    raise ValueError(
+                        "Paper execution supports price/quantity modifications "
+                        "and individual cancellations only"
+                    )
+                if modify_order_op == "CANCEL" and (
+                    qty is not None or price is not None or adjust_limit != 0
+                ):
+                    raise ValueError(
+                        "Paper cancellation does not accept a price or quantity patch"
+                    )
+            params: dict[str, Any] = {"order_id": order_id}
+            if modify_order_op == "NORMAL":
+                params["adjust_limit"] = adjust_limit
+                if qty is not None:
+                    params["qty"] = qty
+                if price is not None:
+                    params["price"] = price
+            return self._paper_execute(
+                "CANCEL" if modify_order_op == "CANCEL" else "MODIFY",
+                params,
+                operation_id,
+                admission_epoch,
+                acc_id,
+            )
         requested_op = str(modify_order_op).strip().upper()
         operation = f"modify_order ({requested_op})"
 
@@ -2066,6 +2178,8 @@ class TradeService:
         *,
         trd_env: str,
         acc_id: int | str = "0",
+        operation_id: str | None = None,
+        admission_epoch: str | None = None,
     ) -> dict:
         """Cancel an existing order.
 
@@ -2091,6 +2205,10 @@ class TradeService:
             OrderReceiptUnreadableError: If the gateway acknowledged the request
                 and its receipt could not be read.
         """
+        if str(trd_env).strip().upper() == "SIMULATE":
+            return self._paper_execute(
+                "CANCEL", {"order_id": order_id}, operation_id, admission_epoch, acc_id
+            )
         operation = "cancel_order"
         with not_sent(operation):
             self.policy.check_write(operation, trd_env)

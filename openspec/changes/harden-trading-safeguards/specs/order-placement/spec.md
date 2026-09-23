@@ -14,6 +14,23 @@ The system MUST allow placing orders with `code`, `side`, `qty`, `price`,
 - A successful result SHALL include the `acc_id` and `trd_env` the order was
   submitted against.
 
+A placement that is journaled paper execution SHALL additionally:
+
+- carry a non-empty, caller-supplied `operation_id` and a valid `admission_epoch`,
+  as defined by `execution-journal` › Operation Admission and Execution Identity;
+- express its price as a strict decimal string;
+- have its admission and intent persisted in state `ADMITTED` before safety checks,
+  and commit its dispatch marker (`DISPATCHING`) only after all safety checks pass;
+- record pre-dispatch safety and limit refusals as `REFUSED` with local disposition
+  `NOT_SENT` without committing a dispatch marker;
+- return an immediate bounded response (`IN_FLIGHT`) if an identical request is
+  retried while dispatch is currently executing;
+- be restricted to the version 1 paper scope in `trading-policy` › Version 1 Paper
+  Execution Scope. Order types outside that scope are refused rather than dispatched.
+
+The result of a journaled placement SHALL report the operation's local state
+alongside the broker receipt, and SHALL keep the two distinguishable.
+
 #### Scenario: Place Limit Buy Order
 
 - **GIVEN** the user wants to buy 100 shares of HK.00700 at 350.0
@@ -24,9 +41,10 @@ The system MUST allow placing orders with `code`, `side`, `qty`, `price`,
 
 #### Scenario: Place Market Buy Order
 
-- **GIVEN** the user wants to buy 100 shares of US.AAPL at market price
+- **GIVEN** the user wants to buy 100 shares of US.AAPL at market price outside
+  journaled paper execution
 - **WHEN** they call `place_order(code='US.AAPL', trd_side='BUY', qty=100,
-  price=0.0, order_type='MARKET', trd_env='SIMULATE')`
+  price=0.0, order_type='MARKET', trd_env='REAL', acc_id='<allowed account>')`
 - **THEN** the order SHALL be submitted
 - **AND** the tool SHALL return the order ID
 
@@ -35,6 +53,52 @@ The system MUST allow placing orders with `code`, `side`, `qty`, `price`,
 - **WHEN** an agent calls `place_order` without `trd_env`
 - **THEN** the call SHALL fail as a missing required argument
 - **AND** no gateway request SHALL be made
+
+#### Scenario: Journaled paper placement persists admission then checks before dispatching
+
+- **GIVEN** journaled paper execution is active for an allowlisted simulated account
+- **WHEN** a caller places a US stock `NORMAL` `DAY` order with
+  `operation_id='op-p1'`, `admission_epoch='epoch-1'`, an explicit
+  `trd_env='SIMULATE'`, and a decimal-string price
+- **THEN** the operation SHALL be persisted in state `ADMITTED` before pre-dispatch
+  limit checks run
+- **AND** the dispatch marker (`DISPATCHING`) SHALL be committed only after checks
+  pass, prior to the SDK mutation invocation
+- **AND** the result SHALL report the broker receipt and the operation's local state
+  distinguishably
+
+#### Scenario: Pre-dispatch limit refusal records refused not sent without dispatch marker
+
+- **GIVEN** journaled paper execution is active
+- **WHEN** a caller places an order whose notional value exceeds the configured limit
+- **THEN** the operation SHALL be recorded in the journal as `REFUSED` with local
+  disposition `NOT_SENT`
+- **AND** no dispatch marker SHALL be committed
+- **AND** no gateway request SHALL be made
+
+#### Scenario: In-flight retry returns immediate bounded response
+
+- **GIVEN** a journaled placement `op-p2` is currently in state `DISPATCHING`
+- **WHEN** the caller re-sends the identical placement with `operation_id='op-p2'`
+- **THEN** the system SHALL return an immediate bounded in-flight response
+- **AND** SHALL NOT block or initiate a second gateway request
+
+#### Scenario: Market order is refused under journaled paper execution
+
+- **GIVEN** journaled paper execution is active
+- **WHEN** a caller requests `order_type='MARKET'` with `trd_env='SIMULATE'`
+- **THEN** the placement SHALL be refused before any gateway request
+- **AND** the error SHALL state that version 1 paper execution supports `NORMAL`
+  limit orders only
+- **AND** the placement SHALL NOT be dispatched unjournaled
+
+#### Scenario: Repeated placement returns the stored receipt
+
+- **GIVEN** a journaled placement with `operation_id='op-p1'` was admitted and
+  acknowledged
+- **WHEN** the caller re-sends the identical placement with `operation_id='op-p1'`
+- **THEN** the system SHALL return the stored receipt
+- **AND** SHALL NOT make a second SDK mutation invocation
 
 ## ADDED Requirements
 

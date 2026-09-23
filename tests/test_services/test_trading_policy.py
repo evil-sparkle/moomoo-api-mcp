@@ -5,7 +5,9 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
+from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.order_errors import OrderNotSentError
+from moomoo_mcp.services.paper_execution import PaperExecution
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import (
     ENV_VAR,
@@ -84,16 +86,17 @@ def _combo_legs():
     ]
 
 
-def _invoke(service: TradeService, operation: str, trd_env: str):
+def _invoke(service: TradeService, operation: str, trd_env: str, **tokens):
     """Call one guarded write on ``service``."""
     if operation == "place_order":
         return service.place_order(
             code="US.AAPL",
-            price=100.0,
+            price="100" if tokens else 100.0,
             qty=1,
             trd_side="BUY",
             trd_env=trd_env,
             acc_id=456,
+            **tokens,
         )
     if operation == "place_combo_order":
         return service.place_combo_order(
@@ -104,12 +107,13 @@ def _invoke(service: TradeService, operation: str, trd_env: str):
             order_id="1",
             modify_order_op="NORMAL",
             qty=2,
-            price=1.0,
+            price="1" if tokens else 1.0,
             trd_env=trd_env,
             acc_id=456,
+            **tokens,
         )
     if operation == "cancel_order":
-        return service.cancel_order(order_id="1", trd_env=trd_env, acc_id=456)
+        return service.cancel_order(order_id="1", trd_env=trd_env, acc_id=456, **tokens)
     raise AssertionError(f"unknown operation {operation}")
 
 
@@ -162,25 +166,57 @@ class TestWriteMatrix:
     @pytest.mark.parametrize("operation", WRITE_OPERATIONS)
     @pytest.mark.parametrize("mode", ALL_MODES)
     @pytest.mark.parametrize("trd_env", ENVIRONMENTS)
-    def test_matrix(self, ctx, operation, mode, trd_env):
+    def test_matrix(self, ctx, operation, mode, trd_env, tmp_path):
         service = _service(mode, ctx)
+        store = None
+        tokens = {}
+        if trd_env == "SIMULATE" and mode is not TradingMode.READ_ONLY:
+            store = ExecutionStore(tmp_path / "paper.sqlite3", create=True)
+            service.paper = PaperExecution(service, store, frozenset({456}))
+            service.instrument_lookup = lambda codes: [
+                InstrumentFacts(
+                    code=codes[0], classification="STOCK", monetary_multiplier=1.0
+                )
+            ]
+            ctx.get_acc_list.return_value = (
+                0,
+                pd.DataFrame(
+                    [{"acc_id": 456, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]}]
+                ),
+            )
+            order = ctx.order_list_query.return_value[1]
+            order.loc[0, "time_in_force"] = "DAY"
+            order.loc[0, "fill_outside_rth"] = False
+            order.loc[0, "session"] = "RTH"
+            tokens = {
+                "operation_id": "matrix-operation",
+                "admission_epoch": store.epoch,
+            }
+        try:
+            if (mode, trd_env) in ALLOWED_WRITES and not (
+                trd_env == "SIMULATE" and operation == "place_combo_order"
+            ):
+                _invoke(service, operation, trd_env, **tokens)
+                sdk_method = (
+                    "modify_order" if operation == "cancel_order" else operation
+                )
+                getattr(ctx, sdk_method).assert_called_once()
+                return
 
-        if (mode, trd_env) in ALLOWED_WRITES:
-            _invoke(service, operation, trd_env)
-            assert ctx.method_calls, "an allowed write must reach the gateway"
-            return
+            with pytest.raises(OrderNotSentError) as excinfo:
+                _invoke(service, operation, trd_env, **tokens)
 
-        with pytest.raises(OrderNotSentError) as excinfo:
-            _invoke(service, operation, trd_env)
-
-        # Denied writes make zero gateway calls — not even an account lookup.
-        assert ctx.method_calls == []
-        assert operation.split("_")[0] in str(excinfo.value)
-        assert "no order was sent" in str(excinfo.value)
-        # The refusal keeps the policy error that caused it, so a caller can
-        # still branch on why as well as on what.
-        assert isinstance(excinfo.value.__cause__, TradingPolicyError)
-        assert service.policy.mode is mode
+            assert ctx.method_calls == []
+            assert operation.split("_")[0] in str(excinfo.value).lower()
+            assert "no order was sent" in str(excinfo.value)
+            if (mode, trd_env) not in ALLOWED_WRITES:
+                assert isinstance(excinfo.value.__cause__, TradingPolicyError)
+            else:
+                assert "outside" in str(excinfo.value).lower()
+            assert service.policy.mode is mode
+        finally:
+            if store is not None:
+                store.close()
 
     @pytest.mark.parametrize("mode", ALL_MODES)
     def test_denied_write_does_not_query_accounts(self, ctx, mode):

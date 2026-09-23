@@ -1,0 +1,15 @@
+# Opt in to durable paper execution in either SIMULATE or REAL mode.
+# Keep the same Compose project and execution-data volume when switching modes.
+services:
+  moomoo-mcp:
+    volumes:
+      - execution-data:/var/lib/moomoo-mcp/data
+    environment:
+      - MOOMOO_SIMULATED_ACC_IDS=${MOOMOO_SIMULATED_ACC_IDS:-}
+      - MOOMOO_JOURNAL_PATH=/var/lib/moomoo-mcp/data/execution.sqlite3
+      - MOOMOO_CREATE_JOURNAL=${MOOMOO_CREATE_JOURNAL:-0}
+      - MOOMOO_JOURNAL_LOCK_WAIT_MS=${MOOMOO_JOURNAL_LOCK_WAIT_MS:-5000}
+      - MCP_OPERATOR_TOKEN=${MCP_OPERATOR_TOKEN:-}
+
+volumes:
+  execution-data:

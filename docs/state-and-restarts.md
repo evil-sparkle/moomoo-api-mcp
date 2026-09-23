@@ -46,15 +46,20 @@ and the exposure above.
 | --- | --- | --- | --- | --- |
 | MCP bearer token | `.env` on the host, read as an env var | yes | yes | yes |
 | MCP session | nothing — the server keeps none | yes | yes | yes |
+| Paper execution journal and recovery audit | Optional `execution-data` volume | yes | yes; fresh admission epoch and recovery review | yes; preserve the same volume |
 | OpenD device authorization, remembered login | `opend-data` volume | yes | yes | **yes** |
 | OpenD's live login to Moomoo | OpenD process memory | no — re-logs in, ~30s | no | no |
 | OpenD trade unlock | OpenD process memory | no — comes back locked | no | no |
 | Execution halt (`ARMED`/`HALTED`) | MCP server process memory | yes | **no — a new process starts `ARMED`** | no |
 | Gateway connections, quote subscriptions | MCP server process memory | yes — the SDK reconnects and replays | no — reopened on the next request | no |
 
-The only row that is genuinely persistent is the third, and it is the one that
-matters: without it every deploy would demand a fresh interactive login with an
-SMS code.
+The OpenD authorization volume prevents every deploy from demanding another
+interactive login with an SMS code. The separate paper journal preserves execution
+identity, outcomes and recovery obligations. Both SIMULATE and REAL deployments
+use that same paper journal; READ_ONLY does not open it. Real-order journaling is
+not implemented in Stage 2. See [persistent paper execution](paper-execution.md)
+for the optional overlay, initialization, consistent backups and recovery rules.
+Never replace or reset a journal to clear an unresolved execution.
 
 ### The `opend-data` volume
 

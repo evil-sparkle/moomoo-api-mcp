@@ -20,6 +20,12 @@ from moomoo_mcp.settings import (
     load_settings,
 )
 
+SIMULATE_ENV = {
+    "MOOMOO_TRADING_MODE": "SIMULATE",
+    "MOOMOO_SIMULATED_ACC_IDS": "123",
+    "MOOMOO_JOURNAL_PATH": "/unused/paper.sqlite3",
+}
+
 REAL_ENV = {"MOOMOO_TRADING_MODE": "REAL", "MOOMOO_REAL_ACC_IDS": "456"}
 
 
@@ -166,7 +172,7 @@ class TestLockAtRest:
         assert load_settings(REAL_ENV).locks_gateway_at_rest is False
 
     def test_simulate_does_not_lock(self):
-        settings = load_settings({"MOOMOO_TRADING_MODE": "SIMULATE"})
+        settings = load_settings(SIMULATE_ENV)
         assert settings.locks_gateway_at_rest is False
 
 
@@ -201,7 +207,7 @@ class TestTransportAuthentication:
 
         assert "without authentication" in caplog.text
 
-    @pytest.mark.parametrize("env", [REAL_ENV, {"MOOMOO_TRADING_MODE": "SIMULATE"}])
+    @pytest.mark.parametrize("env", [REAL_ENV, SIMULATE_ENV])
     def test_the_opt_out_is_refused_outside_read_only(self, env):
         """A mode that can write must never serve an unauthenticated endpoint."""
         settings = load_settings(

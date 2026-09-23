@@ -618,3 +618,12 @@ Stage 1.1 market selection. See `verification.md` for the command/result record.
    intended, and is the migration's most likely surprise.
 10. After Stage 1 has been stable for a while, remove `MOOMOO_MAX_ORDER_NOTIONAL`
    from `.env`, which ends rollback compatibility for that setting.
+
+## Stage 2 contract carry-forward (2026-09-23)
+
+The implemented Stage 1 contracts have been synchronized into the main specs as a
+prerequisite for archiving Stage 2 development. This change remains active because
+its original live verification items remain incomplete. The overlapping placement
+and modification delta requirements carry forward the Stage 2 paper journal
+contracts so a later Stage 1 archive cannot revert them. This records specification
+synchronization only, not completion of the outstanding provider checks.

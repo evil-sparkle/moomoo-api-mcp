@@ -9,14 +9,21 @@ Defines transport session handling and gateway connection lifecycle for the MCP 
 ### Requirement: Stateless Streamable HTTP
 
 When served over the Streamable HTTP transport, the MCP server SHALL keep no
-per-client session state. It SHALL NOT issue a session id, SHALL NOT require one,
-SHALL ignore any session id a client presents, and SHALL process each request as
-already initialized. It SHALL answer each request with a single JSON response.
-When `MCP_AUTH_TOKEN` is configured, bearer authentication SHALL be evaluated on
-every request, independently of any session id. Statelessness is not access
-control: without a configured token the endpoint is unauthenticated. This
-requirement covers the Streamable HTTP transport only; the SSE and stdio
-transports are unaffected.
+per-client session state:
+
+- It SHALL NOT issue a session id, and SHALL NOT require one.
+- It SHALL ignore any session id a client presents.
+- It SHALL process each request as already initialized.
+- It SHALL answer each request with a single JSON response.
+
+Bearer authentication SHALL be evaluated on every request, independently of any
+session id. Statelessness is not access control. The endpoint SHALL NOT run
+unauthenticated, except under the explicit read-only development opt-out defined by
+the `configuration` capability.
+
+This requirement covers the Streamable HTTP transport only. The SSE and stdio
+transports are unaffected, apart from the startup authentication rule, which also
+applies to SSE.
 
 #### Scenario: No session id is issued
 

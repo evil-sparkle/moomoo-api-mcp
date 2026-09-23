@@ -1,6 +1,7 @@
 """Tests for the check_health MCP tool (R1)."""
 
 import threading
+from concurrent.futures import Future
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,7 +17,16 @@ HEALTHY = {
     "trade": {"status": "ok", "account_count": 2},
     "trade_market": "NONE",
     "gateway_version": "9.2.5208",
+    "execution_journal": {"state": "DISABLED"},
 }
+
+
+@pytest.fixture(autouse=True)
+def journal_health_mock(mock_trade_service):
+    future = Future()
+    future.set_result({"state": "DISABLED"})
+    mock_trade_service.start_journal_health.return_value = future
+    mock_trade_service.collect_journal_health.return_value = {"state": "DISABLED"}
 
 
 def stub_health(mock_moomoo_service: MagicMock, payload: dict) -> MagicMock:
@@ -24,7 +34,7 @@ def stub_health(mock_moomoo_service: MagicMock, payload: dict) -> MagicMock:
     check = MagicMock(spec=HealthCheck)
     check.futures = []
     check.remaining.return_value = 5.0
-    check.result.return_value = payload
+    check.result.return_value = dict(payload)
     mock_moomoo_service.start_health_check.return_value = check
     return check
 

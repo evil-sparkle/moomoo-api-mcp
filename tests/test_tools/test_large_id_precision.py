@@ -377,11 +377,13 @@ class TestRetrievalToRequestRoundtrip:
 
     def test_retrieved_ids_submit_without_precision_loss(self):
         ctx = MagicMock()
-        service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
+        service = TradeService(
+            policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123}))
+        )
         service.trade_ctx = ctx
         ctx.get_acc_list.return_value = (
             0,
-            pd.DataFrame([{"acc_id": 123, "trd_env": "SIMULATE"}]),
+            pd.DataFrame([{"acc_id": 123, "trd_env": "REAL"}]),
         )
 
         # 1. Retrieval, as the strategy view returns it.
@@ -405,7 +407,7 @@ class TestRetrievalToRequestRoundtrip:
             ),
         )
         rows = service.get_positions(
-            trd_env="SIMULATE", acc_id=123, show_option_strategy_view=True
+            trd_env="REAL", acc_id=123, show_option_strategy_view=True
         )
 
         # 2. Across the MCP boundary, into a double-parsing client and back.
@@ -433,7 +435,7 @@ class TestRetrievalToRequestRoundtrip:
             ],
             price=2.5,
             qty=1,
-            trd_env="SIMULATE",
+            trd_env="REAL",
             acc_id=123,
         )
 
@@ -445,7 +447,9 @@ class TestRetrievalToRequestRoundtrip:
         wire = _roundtrip_through_ieee754_client([{"position_id": UNSAFE_ID}])
 
         ctx = MagicMock()
-        service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
+        service = TradeService(
+            policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123}))
+        )
         service.trade_ctx = ctx
 
         # A double-parsed id arrives as a float, which is now refused outright
@@ -464,6 +468,6 @@ class TestRetrievalToRequestRoundtrip:
                 ],
                 price=2.5,
                 qty=1,
-                trd_env="SIMULATE",
+                trd_env="REAL",
                 acc_id=123,
             )

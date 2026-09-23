@@ -4,8 +4,9 @@ from typing import Any
 
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
+from pydantic import StrictInt
 
-from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.server import AppContext, mcp, operator_principal
 from moomoo_mcp.tools.offload import run_blocking
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
@@ -14,8 +15,8 @@ from moomoo_mcp.tools.serialization import serialize_identifiers
 async def place_order(
     ctx: Context[ServerSession, AppContext],
     code: str,
-    price: float,
-    qty: int,
+    price: str | float,
+    qty: StrictInt,
     trd_side: str,
     trd_env: str,
     order_type: str = "NORMAL",
@@ -27,8 +28,18 @@ async def place_order(
     trail_spread: float | None = None,
     acc_id: str = "0",
     remark: str = "",
+    operation_id: str | None = None,
+    admission_epoch: str | None = None,
 ) -> dict:
     """Place a new trading order.
+
+    Paper mutations require a caller-owned operation_id and admission_epoch from
+    check_health, and decimal-string prices. Preserve both token fields across
+    retries; never refresh a retired epoch or generate a replacement token for an
+    uncertain operation. Identical retries return stored state or IN_FLIGHT.
+    Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
+    regular hours. Journal or recovery blocking also refuses cancellations.
+    REAL-mode servers use the same configured paper journal for SIMULATE writes.
 
     CRITICAL: You MUST ask the user for explicit confirmation before calling this
     tool, especially if `trd_env` is 'REAL'. Display the full order details to the
@@ -129,6 +140,8 @@ async def place_order(
             trail_spread=trail_spread,
             trd_env=trd_env,
             acc_id=acc_id,
+            operation_id=operation_id,
+            admission_epoch=admission_epoch,
             remark=remark,
         )
     )
@@ -339,12 +352,22 @@ async def modify_order(
     order_id: str,
     modify_order_op: str,
     trd_env: str,
-    qty: int | None = None,
-    price: float | None = None,
+    qty: StrictInt | None = None,
+    price: str | float | None = None,
     adjust_limit: float = 0,
     acc_id: str = "0",
+    operation_id: str | None = None,
+    admission_epoch: str | None = None,
 ) -> dict:
     """Modify an existing order.
+
+    Paper mutations require a caller-owned operation_id and admission_epoch from
+    check_health, and decimal-string prices. Preserve both token fields across
+    retries; never refresh a retired epoch or generate a replacement token for an
+    uncertain operation. Identical retries return stored state or IN_FLIGHT.
+    Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
+    regular hours. Journal or recovery blocking also refuses cancellations.
+    REAL-mode servers use the same configured paper journal for SIMULATE writes.
 
     CRITICAL: You MUST ask the user for explicit confirmation before calling this
     tool, especially if `trd_env` is 'REAL'. Display the order_id and the new
@@ -419,6 +442,8 @@ async def modify_order(
             adjust_limit=adjust_limit,
             trd_env=trd_env,
             acc_id=acc_id,
+            operation_id=operation_id,
+            admission_epoch=admission_epoch,
         )
     )
 
@@ -429,8 +454,18 @@ async def cancel_order(
     order_id: str,
     trd_env: str,
     acc_id: str = "0",
+    operation_id: str | None = None,
+    admission_epoch: str | None = None,
 ) -> dict:
     """Cancel an existing order.
+
+    Paper mutations require a caller-owned operation_id and admission_epoch from
+    check_health, and decimal-string prices. Preserve both token fields across
+    retries; never refresh a retired epoch or generate a replacement token for an
+    uncertain operation. Identical retries return stored state or IN_FLIGHT.
+    Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
+    regular hours. Journal or recovery blocking also refuses cancellations.
+    REAL-mode servers use the same configured paper journal for SIMULATE writes.
 
     CRITICAL: You MUST ask the user for explicit confirmation before calling this
     tool, especially if `trd_env` is 'REAL'. Display the order_id to the user
@@ -484,6 +519,8 @@ async def cancel_order(
             order_id=order_id,
             trd_env=trd_env,
             acc_id=acc_id,
+            operation_id=operation_id,
+            admission_epoch=admission_epoch,
         )
     )
 
@@ -672,4 +709,77 @@ async def get_history_deals(
             trd_env=trd_env,
             acc_id=acc_id,
         )
+    )
+
+
+@mcp.tool()
+async def get_execution(
+    ctx: Context[ServerSession, AppContext], operation_id: str
+) -> dict:
+    """Read one journal-owned paper operation without broker I/O or replay."""
+    paper = ctx.request_context.lifespan_context.trade_service.paper
+    if paper is None:
+        raise ValueError("Paper journal is not configured")
+    row = await run_blocking(paper.store.lookup, operation_id)
+    if row is None:
+        raise ValueError("Operation is not owned by this journal")
+    return paper.result(row)
+
+
+@mcp.tool()
+async def reconcile_execution(
+    ctx: Context[ServerSession, AppContext], operation_id: str
+) -> dict:
+    """Query paper orders/history for one journal operation; never mutate orders.
+
+    Candidate matches and target presence do not prove mutation success. Recovered
+    dispatch markers still require operator acknowledgement after reconciliation.
+    """
+    paper = ctx.request_context.lifespan_context.trade_service.paper
+    if paper is None:
+        raise ValueError("Paper journal is not configured")
+    return await run_blocking(paper.reconcile, operation_id)
+
+
+@mcp.tool()
+async def acknowledge_recovery(
+    ctx: Context[ServerSession, AppContext],
+    operation_id: str,
+    operator_id: str,
+    recovery_epoch: str,
+    observed_state: str,
+    resolution: str,
+    reason: str,
+    evidence_reference: str,
+    accounted_facts: dict,
+) -> dict:
+    """Operator-only evidence-backed accounting of an uncertain paper mutation.
+
+    Authenticate HTTP using the separate MCP_OPERATOR_TOKEN, never the agent token.
+    operator_id must be 'operator', the authenticated principal. Stdio is refused.
+    Supply the current recovery_epoch and observed_state, resolution
+    TERMINAL_ACCOUNTED, a reason, and evidence_reference 'broker-order:<id>'.
+    accounted_facts must contain final_status, filled_quantity, average_fill_price,
+    remaining_executable_quantity (zero), and resulting_position. These facts are
+    checked against fresh broker order/history and position evidence. This records
+    exposure; it never claims the uncertain mutation succeeded or the account is flat.
+    Missing/ambiguous evidence stays blocked, with no absence or risk override.
+    """
+    principal = operator_principal.get()
+    if principal != "operator":
+        raise PermissionError("Separate authenticated operator capability required")
+    paper = ctx.request_context.lifespan_context.trade_service.paper
+    if paper is None:
+        raise ValueError("Paper journal is not configured")
+    return await run_blocking(
+        paper.acknowledge,
+        principal=principal,
+        operator_id=operator_id,
+        operation_id=operation_id,
+        recovery_epoch=recovery_epoch,
+        observed_state=observed_state,
+        resolution=resolution,
+        reason=reason,
+        evidence_reference=evidence_reference,
+        accounted_facts=accounted_facts,
     )

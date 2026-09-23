@@ -32,6 +32,8 @@ SERVICE_NAMES = {"trade_service", "market_data_service", "moomoo_service"}
 NON_BLOCKING_METHODS = {
     # Submits both probes to their own dedicated workers and returns a handle.
     "start_health_check",
+    "start_journal_health",
+    "collect_journal_health",
 }
 
 
@@ -164,7 +166,9 @@ class TestConcurrentRequests:
             return (0, pd.DataFrame([{"order_id": "1"}]))
 
         trade_ctx.place_order.side_effect = slow_place
-        service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
+        service = TradeService(
+            policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({456}))
+        )
         service.trade_ctx = trade_ctx
         mcp_app_context.trade_service = service
 
@@ -186,7 +190,7 @@ class TestConcurrentRequests:
                     "price": 1.0,
                     "qty": 1,
                     "trd_side": "BUY",
-                    "trd_env": "SIMULATE",
+                    "trd_env": "REAL",
                     "acc_id": "456",
                 },
             )

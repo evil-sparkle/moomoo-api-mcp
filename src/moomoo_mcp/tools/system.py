@@ -49,8 +49,10 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
     # parking a shared worker thread on them — keeps the event loop free to
     # answer while a stuck gateway is still being diagnosed.
     check = moomoo_service.start_health_check(trade_service=trade_service)
-    await await_futures(check.futures, check.remaining())
+    journal_future = trade_service.start_journal_health()
+    await await_futures((*check.futures, journal_future), check.remaining())
     status = check.result()
+    status["execution_journal"] = trade_service.collect_journal_health(journal_future)
 
     await ctx.info(f"Health check status: {status.get('status')}")
 
