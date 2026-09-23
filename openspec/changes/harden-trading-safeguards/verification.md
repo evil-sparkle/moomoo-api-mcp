@@ -1,5 +1,195 @@
 # Verification log
 
+## Official-documentation follow-up — 2026-09-23
+
+This follow-up supersedes the field-selection gap in the earlier live-run notes.
+The current [official OpenD snapshot documentation](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-market-snapshot.html)
+(version 10.11) defines `option_contract_size` as shares per contract and
+`option_contract_multiplier` as the contract multiplier. Its protocol definitions
+also keep these separate, without the pinned SDK docstring's index-only qualifier.
+Moomoo's [option-premium explanation](https://www.moomoo.com/ca/support/topic10_143)
+values premium using price, contract multiplier and number of contracts.
+
+The resulting implementation decision is to use `option_contract_multiplier` for
+premium valuation and keep contract size separate. The documentation establishes
+meaning; the existing independent position arithmetic confirms the sampled numeric
+values on the installed 10.10.7008 gateway/SDK. No version upgrade was performed.
+We do not need an adjusted contract merely to resolve which documented field to use.
+The prior inference favoring `option_contract_size` was incorrect.
+
+This is a documentary correction. The deployed adapter remains unchanged and still
+refuses capped options. Activation needs focused regression checks proving that
+valuation uses the multiplier when size differs, and refuses missing or invalid
+multipliers. Currency confirmation remains a separate unfinished part of task 1.1.
+
+## Live verification — 2026-09-23
+
+Verified Stage 1 source `e8b2c52f2d92cb3b9d27308a04942690ee1cd621`, Python 3.12,
+OpenD/SDK 10.10.7008. The local Linux/amd64 container was built from that commit;
+the VPS uses its published CI image. Account identifiers, credentials and raw
+account responses are omitted from this repository record.
+
+The operator authorized bounded SIMULATE checks, then explicitly authorized REAL
+reads and gateway locking only, and finally authorized direct VPS deployment.
+No unlock or REAL order was issued. Market-selection implementation belongs to the
+separate Stage 1.1 change.
+
+| Task | Result |
+| --- | --- |
+| 1.1 instrument facts | Snapshots, classifications and independent position arithmetic collected; field selection resolved by the follow-up above; adapter activation and full US currency confirmation remain open |
+| 1.2 terminal DAY-order retention | Current and historical queries passed immediately and three times later in the same session; after-close observation pending |
+| 1.2a non-DAY submission | Optional; not run |
+| 1.3 locked REAL reads | Lock and all seven reads passed |
+| 9.2 live paper safeguard sequence | Placement, not-sent over-cap modification, cancellation and non-halted health passed |
+| 9.3 VPS deployment | Stage 1 deployed; authenticated initialize and post-deployment checks passed |
+
+### Instrument reads and the remaining semantic gap
+
+At 12:13:35 UTC, `get_market_snapshot` returned:
+
+| Code | Last | Bid | Ask | Lot size | Contract size | Contract multiplier |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| US.AAPL | 339.75 | 340.5 | 340.6 | 1 | NaN | NaN |
+| US.SPY | 773.38 | 772.4 | 772.47 | 1 | NaN | NaN |
+| US.AAPL260925C340000 | 3 | 3 | 3.15 | 100 | 100 | 100 |
+| US.AAPL260925C415000 | 0.0001 | 0 | 0.01 | 100 | 100 | 100 |
+| US.QQQ260925P737000 | 1.27 | 1.25 | 1.28 | 100 | 100 | 100 |
+| US.QQQ260925P742000 | 2.26 | 2.29 | 2.32 | 100 | 100 | 100 |
+
+`get_stock_basicinfo` with that explicit code list returned every code: AAPL was
+`STOCK`, SPY `ETF`, and all four options `DRVT`. Option nominal value and underlying
+lot multiplier were `N/A`. The quiet AAPL 415 call reported volume zero and
+`update_time=2026-09-21 09:30:00`: no trades today does not imply all quote fields
+are absent. Its bid normalizes to absent; the positive stale last and ask remain
+usable under Stage 1's existing rule, which has no age threshold.
+
+Two matched QQQ option positions supplied independent `market_val`, `qty` and
+`nominal_price` values. `market_val / (qty * nominal_price)` was approximately 100
+for each, independently confirming the premium multiplier for those contracts.
+Both candidate snapshot fields also equalled 100. Therefore this arithmetic does
+**not** distinguish which field remains correct when contract deliverables differ
+from the premium multiplier. In particular, the previous prediction that
+`option_contract_multiplier` would be `N/A` for non-index options was contradicted
+by the gateway. The historical SDK evidence below is preserved as the earlier
+finding, not as a current observation. No global option-field activation was made.
+
+USD was present in the sampled US order/position responses. This is sample
+confirmation, not a proof that every instrument the supported US subset may admit
+has the same quote currency. Task 1.1 stays open for those two semantic conclusions.
+
+### Bounded paper order and retention
+
+The live harness used the unchanged Stage 1 `TradeService`, its real instrument
+adapter and an explicit US SDK context. The context was supplied by the harness
+because the current MCP server's default context does not discover the US paper
+account; this verifies Stage 1 service behavior, not Stage 1.1 MCP market routing.
+The wrapper rejected any mutation outside SIMULATE, the selected paper account,
+and the bounded order; it prohibited unlocking and recorded each SDK mutation.
+
+At 12:12:02 UTC it placed one `US.AAPL` BUY `NORMAL` order, quantity 1, price USD 1,
+`DAY`, with `acc_id="0"`, quantity cap 1 and notional cap USD 2. Automatic account
+resolution selected the sole eligible US paper account. A price-only modification
+to USD 3 raised `OrderNotSentError` with calculated notional USD 3 exceeding USD 2;
+the wrapper recorded **zero additional SDK mutations**. The only mutations were
+placement and cancellation. Cancellation was acknowledged, and both queries then
+returned `CANCELLED_ALL`, `dealt_qty=0`, `dealt_avg_price=0`, and stored TIF `DAY`.
+
+| Observation (UTC) | Current-order query | Historical-order query |
+| --- | --- | --- |
+| 2026-09-23 12:12:03 | terminal order found | terminal order found |
+| 2026-09-23 12:13:09 | terminal order found | terminal order found |
+| 2026-09-23 12:20:01 | terminal order found | terminal order found |
+| 2026-09-23 12:33:01 | terminal order found | terminal order found |
+
+Both queries preserved the caller remark `s1-check-20260923-day`, broker order ID,
+code, side, quantity, price, status, submission/update timestamps and TIF. The
+history query was filtered by code/date and matched to the exact broker ID on the
+client, since it has no order-ID parameter. These are positive matches; an empty
+query would not prove that an uncertain submission never existed.
+
+The service health result at 12:12:03 UTC was `connected`, quote/trade `ok`,
+`logged_in: true`, `trading_mode: SIMULATE`, and `execution_halted: false`.
+Task 9.2's four live steps passed. The after-close retention observation must
+reuse this cancelled order; it must not resubmit the placement. Approximately 21 minutes of
+same-session visibility does not establish a maximum retention window.
+
+The one-shot harness and raw evidence are retained in the operator's local
+`stage1-verification-2026-09-23` evidence directory, outside Git. Its dispatch
+marker prevents an accidental repeat placement. While the local container remains
+available, the read-only follow-up is:
+
+```sh
+docker exec moomoo-stage2-local /app/.venv/bin/python /tmp/stage1-paper-check.py recheck
+```
+
+### REAL reads after an acknowledged lock
+
+At 12:13:01 UTC, the explicit US trade context acknowledged
+`unlock_trade(is_unlock=False)`. The following reads then succeeded without any
+unlock:
+
+| Service operation | Provider path | Result |
+| --- | --- | --- |
+| get_accounts | get_acc_list | RET_OK |
+| get_assets | accinfo_query, REAL | RET_OK |
+| get_positions | position_list_query, REAL | RET_OK |
+| get_orders | order_list_query, REAL | RET_OK |
+| get_deals | deal_list_query, REAL | RET_OK, empty result |
+| get_max_tradable | acctradinginfo_query, REAL | RET_OK |
+| preview_combo_order | Stage 1 service preview for a two-leg US option combo | success |
+
+The empty deal result is a successful read, not evidence of fills. The first six
+checks exercised their underlying SDK reads; preview exercised the service path.
+The VPS's deployed Stage 1 service subsequently acknowledged its public
+`lock_trade` method as well. No read-only JIT unlock is needed on this observed
+gateway. This does not simulate relock failure or prove HALTED recovery under a
+fault; those transitions remain covered by the automated tests.
+
+### VPS deployment and authentication
+
+The operator authorized SSH through the existing `robin-vultr` alias and direct
+deployment. The checkout is `/home/robin-vultr/moomoo`; rootless Docker runs
+container `moomoo-api-mcp`. It previously ran `c4b42c7`.
+
+The deployed commit is `e8b2c52f2d92cb3b9d27308a04942690ee1cd621`, image tag
+`e8b2c52`, digest
+`sha256:867dc574d2e657dd7f551f4c68e9193a244faab482f656e2b00440e9ed1a55fd`.
+[CI run 35734460223](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/35734460223)
+passed 964 tests with one skipped test, Ruff lint/format, basedpyright, strict
+OpenSpec validation, image publication and the container smoke test. This updates
+the earlier 928-test count recorded when Stage 1 was initially implemented.
+
+The production sequence was:
+
+1. `scripts/deploy.sh --prepare e8b2c52f2d92cb3b9d27308a04942690ee1cd621` checked
+   the ECR tag, checked out the target and pulled its image without restarting.
+2. A one-off container ran the target's `load_settings()` without starting OpenD
+   or the MCP server. It validated `READ_ONLY`, quantity cap 500, no notional cap,
+   streamable HTTP, configured authentication and `locks_gateway_at_rest: true`.
+3. `scripts/compose-prod.sh up -d --no-deps moomoo-mcp` recreated the service.
+   The named volume `moomoo_opend-data` remained mounted at
+   `/home/opend/.com.moomoo.OpenD`.
+4. `python3 scripts/deploy_verify.py verify --url http://127.0.0.1:8000/mcp
+   --timeout 90` confirmed MCP initialization with the configured token.
+5. An initialization request without authentication returned HTTP 401.
+6. A separate service probe in the deployed container used the installed Stage 1
+   code and configuration. Its public `lock_trade` returned `status: locked`,
+   `execution_halted: false`, `halt_cleared: false`. Health at 12:19:28 UTC was
+   `connected`, quote/trade `ok`, `logged_in: true`, mode `READ_ONLY`, and
+   `execution_halted: false`. This was a service probe, not an HTTP tool call.
+
+The container started at 12:18:57 UTC and still had zero restarts at the follow-up.
+The user systemd unit was active; only host-loopback MCP port 8000 was published.
+No secret file was viewed or edited, no gateway unlock was issued, and no REAL
+order test was run. The optional REAL-order step is not required for task 9.3.
+
+## Original offline verification — historical record
+
+The sections below describe the original implementation session, which had no
+gateway. Their pending statuses are superseded by the dated live results above
+and the current task checklist. They are retained to distinguish offline evidence
+from observations made later with account access.
+
 What task group 1 actually established, and what it could not.
 
 Two harnesses produce everything below.
