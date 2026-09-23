@@ -11,7 +11,7 @@ Two harnesses run them, and `verification.md` holds the evidence:
 `scripts/verify_gateway_facts.py` (operator-run, one authorization flag per
 non-read-only phase, no REAL-order path).
 
-- [ ] 1.1 Establish the instrument facts the assessment needs, for a US stock, a US
+- [x] 1.1 Establish the instrument facts the assessment needs, for a US stock, a US
   ETF and a US equity option.
   - From `get_market_snapshot`: `last_price`, `bid_price`, `ask_price`, `lot_size`,
     `option_contract_size` and `option_contract_multiplier`. Also record all three
@@ -36,16 +36,15 @@ non-read-only phase, no REAL-order path).
   Verify by recording each field and its source call, and by stating which of the two
   option fields carries the monetary multiplier and on what evidence.
 
-  **Status: partially established, updated 2026-09-23.** Live stock, ETF, equity
-  option and quiet-option snapshots and explicit-code classifications were recorded.
-  Two matched option positions independently imply a monetary multiplier of 100.
-  Current official OpenD field definitions plus Moomoo's premium formula select
-  `option_contract_multiplier`, correcting the inference from the pinned SDK's
-  index-only annotation. The documented field is populated in the live samples.
-  Field selection is resolved; adapter activation and focused regression checks
-  remain. USD was observed for sampled orders and positions, while the full
-  supported US subset still needs currency evidence. Keep this task open for the
-  remaining work. See `verification.md` and Decision 3.
+  **Status: completed, 2026-09-23.** Live snapshot/classification evidence and
+  independent option-position arithmetic are recorded in `verification.md`.
+  The adapter now uses the documented `option_contract_multiplier`, separately
+  from deliverable size, with invalid/missing values refused. Regression tests
+  cover differing size/multiplier values through single-order and combo assessment
+  and pre-dispatch service refusal. Official Moomoo product/currency documentation
+  confirms USD for the supported US stock/ETF/option subset, corroborated by live
+  order/position samples. A read-only live run of the updated adapter and policy
+  passed for AAPL, SPY and two AAPL option contracts. See Decisions 2 and 3.
 - [ ] 1.2 Measure how long a terminal paper order stays queryable, using a `DAY`
   order.
 
@@ -70,7 +69,7 @@ non-read-only phase, no REAL-order path).
   `history_order_list_query` accepts no `order_id`, so the history side filters by
   code and matches the id client-side.
 
-- [ ] 1.2a *(optional, separately authorized)* If the day-only constraint is to be
+- [x] 1.2a *(optional, separately authorized)* If the day-only constraint is to be
   tested rather than assumed, attempt one SIMULATE order with a non-`DAY` time in
   force and record the outcome.
 
@@ -81,6 +80,13 @@ non-read-only phase, no REAL-order path).
 
   This places an order and is not part of the required set. It requires its own
   authorization, and nothing in this change depends on its outcome.
+
+  **Status: completed, 2026-09-23, under the authorized Stage 2 provider checks.**
+  One-shot US paper `GTC` and `GTD` attempts returned `RET_ERROR` with the same
+  provider message, “Paper trading does not support GTC orders.” Immediate
+  US-scoped queries found no matching order, so no stored non-DAY TIF was observed.
+  No retry was made and these empty queries are not proof of absence. See the
+  Stage 2 design's dated Decision 9 observations for scope and exact semantics.
 - [x] 1.3 With the operator's confirmation, lock the live gateway (`lock_trade`),
   then call these REAL reads:
   - `get_accounts`, `get_assets`, `get_positions`, `get_orders` and `get_deals`;

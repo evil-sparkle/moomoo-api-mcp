@@ -1,5 +1,44 @@
 # Verification log
 
+## Instrument verification completed — 2026-09-23
+
+This section supersedes the open instrument work in the historical entries below.
+The source adapter now uses `option_contract_multiplier` for premium valuation
+and preserves `option_contract_size` independently. Missing, non-finite,
+non-positive and non-numeric multipliers refuse assessment. It does not substitute
+size or a hardcoded 100. Regression tests cover valid unequal field values,
+invalid/missing multipliers, single-order and combo caps, and a service refusal
+before any SDK placement or unlock.
+
+### Currency evidence for the supported US subset
+
+- Moomoo's [US stock/ETF product page](https://www.moomoo.com/au/invest/us-stock)
+  states that US stock/ETF orders require conversion to USD.
+- Moomoo Singapore's [Auto Currency Exchange documentation](https://www.moomoo.com/sg/support/topic5_1090)
+  identifies US stocks and US options as USD-settled products.
+- The Options Industry Council's [equity/index option premium explanation](https://www.optionseducation.org/advancedconcepts/equity-vs-index-options)
+  describes dollar-and-cent premiums, providing the quotation-unit cross-check.
+- The earlier live US order and stock/ETF/option position responses reported USD.
+
+Together, the broker's product-wide documentation and live corroboration establish
+USD for the server's currently supported US STOCK/ETF/DRVT valuation subset.
+This is not a claim that a market prefix alone determines currency or that other
+classifications or markets have been verified. No currency field was added to the
+snapshot; the policy continues to use its verified subset table.
+
+At 14:24:13 UTC, the updated source adapter was loaded in a separate Python process
+against the existing local OpenD. It queried AAPL, SPY, AAPL 2026-09-25 340 Call and
+AAPL 2026-09-25 415 Call. Classifications were STOCK, ETF, DRVT and DRVT; monetary
+multipliers were 1, 1, 100 and 100. Both option contract sizes were separately 100.
+Each passed a pure BUY limit assessment using the USD cap. This verifies live
+quote decoding and policy compatibility; it is not an order submission or an
+independent currency measurement. No account query, unlock or order mutation was
+issued by this follow-up. The running MCP service and deployed image were unchanged.
+
+Task 1.1 is complete. Task 1.2a is also complete using the authorized GTC/GTD
+provider evidence already recorded in Stage 2. Task 1.2's after-close retention
+observation is the only remaining Stage 1 task; do not archive before it is recorded.
+
 ## Official-documentation follow-up — 2026-09-23
 
 This follow-up supersedes the field-selection gap in the earlier live-run notes.
