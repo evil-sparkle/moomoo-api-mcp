@@ -125,6 +125,7 @@ MOOMOO_LOGIN_REGION=sg                         # match your account region
 
 # Trading safety
 MOOMOO_TRADING_MODE=READ_ONLY
+MOOMOO_TRADING_MARKET=NONE                     # account discovery: NONE, HK, US, CN, HKCC, SG, AU, JP, MY, CA
 MOOMOO_TRADE_PASSWORD_MD5=                     # blank until you intend to place orders
 MOOMOO_REAL_ACC_IDS=                           # required once MOOMOO_TRADING_MODE=REAL
 MOOMOO_MAX_ORDER_QTY=1000
@@ -158,13 +159,19 @@ time. Edit `.env` **before** deploying the new image:
 
 1. Set `MOOMOO_REAL_ACC_IDS` to the REAL account identifiers writes may target.
    Get them from `get_accounts`. Required in `REAL` mode.
-2. Add `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:<amount>`, plus any other
+2. `MOOMOO_TRADING_MARKET` now defaults to `NONE`, which discovers every
+   securities market returned for this login and firm. Set it to `HK` if you
+   need the former HK-only discovery scope. The filter does not authorize writes.
+3. Store exact account IDs from `get_accounts(market="US", trd_env="SIMULATE")`
+   and pass them unchanged to later reads. An `acc_id="0"` read now fails when
+   more than one account matches its environment.
+4. Add `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:<amount>`, plus any other
    currency you trade, if you use a notional cap. Leave the legacy
    `MOOMOO_MAX_ORDER_NOTIONAL` in place.
-3. Confirm `MCP_AUTH_TOKEN` is set.
-4. Deploy through the normal path, then call `check_health` and confirm
-   `execution_halted: false`.
-5. Place and cancel a SIMULATE order.
+5. Confirm `MCP_AUTH_TOKEN` is set.
+6. Deploy through the normal path, then call `check_health` and confirm
+   `execution_halted: false` and the expected `trade_market`.
+7. Place and cancel a SIMULATE order.
 
 **The crash-loop signal.** If `.env` was not migrated, the MCP process exits,
 the supervisor stops OpenD, and `restart: unless-stopped` restarts the
@@ -185,6 +192,15 @@ Two tool-facing changes the agent needs to know about: the write tools now
 require `trd_env`, and `modify_order`/`cancel_order` resolve the account before
 dispatch, so a call that relied on the gateway's own default for `acc_id="0"`
 must name an account when more than one is eligible.
+
+Account-bound reads now resolve `acc_id="0"` only when one account matches the
+requested `trd_env`; otherwise they fail before the account query and ask for an
+explicit ID. `get_accounts` accepts independent response filters, for example
+`get_accounts(market="US", trd_env="SIMULATE")`. Copy the returned string ID
+exactly into `get_assets`, `get_positions`, `get_orders`, or another read. The
+broker region (`MOOMOO_LOGIN_REGION=sg`), securities firm
+(`MOOMOO_SECURITY_FIRM=FUTUSG`), market (`US`), and trading environment
+(`SIMULATE` or `REAL`) are separate settings.
 
 ### 7. Prepare image, then perform interactive OpenD login
 

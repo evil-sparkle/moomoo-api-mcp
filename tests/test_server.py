@@ -130,6 +130,7 @@ class TestLifespanResilience:
         moomoo_service, trade_service = self._patched_services()
 
         with (
+            patch.dict(os.environ, {"MOOMOO_TRADING_MARKET": "US"}, clear=True),
             patch(
                 "moomoo_mcp.server.MoomooService", return_value=moomoo_service
             ) as quote_cls,
@@ -146,6 +147,7 @@ class TestLifespanResilience:
         assert first is second
         quote_cls.assert_called_once()
         trade_cls.assert_called_once()
+        assert trade_cls.call_args.kwargs["trading_market"] == "US"
         moomoo_service.connect.assert_called_once()
         trade_service.connect.assert_called_once()
         trade_service.close.assert_not_called()
@@ -209,6 +211,14 @@ class TestStartupTradingMode:
         captured, _ = await self._start({})
 
         assert captured["policy"].mode is TradingMode.READ_ONLY
+        assert captured["trading_market"] == "NONE"
+
+    @pytest.mark.parametrize("market", ["NONE", "US", "HK"])
+    @pytest.mark.asyncio
+    async def test_configured_market_reaches_the_service(self, market: str) -> None:
+        captured, _ = await self._start({"MOOMOO_TRADING_MARKET": market})
+
+        assert captured["trading_market"] == market
 
     @pytest.mark.asyncio
     async def test_configured_mode_reaches_the_service(self) -> None:
@@ -271,6 +281,7 @@ class TestStartupConfigurationFailure:
             {ENV_VAR: "REAL"},  # no allowlist
             {"MOOMOO_MAX_ORDER_NOTIONAL": "25000"},  # legacy variable alone
             {"MOOMOO_SECURITY_FIRM": "NOTAFIRM"},
+            {"MOOMOO_TRADING_MARKET": "USA"},
             {"MOOMOO_OPEND_PORT": "not-a-port"},
         ],
     )

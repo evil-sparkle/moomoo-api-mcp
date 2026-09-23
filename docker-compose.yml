@@ -52,6 +52,8 @@ services:
       # --- MCP server ---
       - MOOMOO_SECURITY_FIRM=${MOOMOO_SECURITY_FIRM:-FUTUSG}
       - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
+      # The process-owned trade context uses NONE for all-market discovery.
+      - MOOMOO_TRADING_MARKET=${MOOMOO_TRADING_MARKET:-NONE}
       - MOOMOO_TRADE_PASSWORD=${MOOMOO_TRADE_PASSWORD:-}
       - MOOMOO_TRADE_PASSWORD_MD5=${MOOMOO_TRADE_PASSWORD_MD5:-}
       # REAL writes may only target these accounts. Required in REAL mode.

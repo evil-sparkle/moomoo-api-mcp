@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Any
 
 from moomoo import (
@@ -36,6 +37,11 @@ from moomoo_mcp.services.order_errors import (
     receipt_unreadable_message,
 )
 from moomoo_mcp.services.sdk_response import as_frame
+from moomoo_mcp.services.trading_market import (
+    DEFAULT_TRADING_MARKET,
+    TRADING_MARKET_FILTERS,
+    VALID_TRADING_MARKETS,
+)
 from moomoo_mcp.services.trading_policy import (
     ENV_REAL_ACC_IDS,
     InstrumentFacts,
@@ -46,6 +52,7 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicyError,
 )
 from moomoo_mcp.services.validation import (
+    validate_choice,
     validate_order_values,
     validate_required_order_fields,
 )
@@ -193,6 +200,7 @@ class TradeService:
         host: str = "127.0.0.1",
         port: int = 11111,
         security_firm: str | None = None,
+        trading_market: str = DEFAULT_TRADING_MARKET,
         policy: TradingPolicy | None = None,
         trade_password: str | None = None,
         trade_password_md5: str | None = None,
@@ -205,6 +213,8 @@ class TradeService:
             port: Port number of OpenD gateway.
             security_firm: Securities firm identifier (e.g., 'FUTUSG' for Singapore,
                 'FUTUSECURITIES' for HK). If None, no filter is applied.
+            trading_market: The fixed securities-market filter used for account
+                discovery. It does not grant trading permission.
             policy: Trading policy governing which order environments this
                 service may write to. Defaults to read-only, so a service
                 constructed without an explicit intent cannot send an order.
@@ -221,6 +231,15 @@ class TradeService:
         self.host = host
         self.port = port
         self.security_firm = security_firm
+        candidate_market = (trading_market or "").strip().upper()
+        if not candidate_market:
+            candidate_market = DEFAULT_TRADING_MARKET
+        if candidate_market not in TRADING_MARKET_FILTERS:
+            raise ValueError(
+                f"Unsupported trading market {trading_market!r}. Valid values: "
+                f"{', '.join(VALID_TRADING_MARKETS)}."
+            )
+        self.trading_market = candidate_market
         self.policy = policy or TradingPolicy()
         self.trade_password = trade_password
         self.trade_password_md5 = trade_password_md5
@@ -452,7 +471,11 @@ class TradeService:
 
     def _open_trade_context(self) -> None:
         """Construct the SDK trade context and publish it when it is ready."""
-        kwargs = {"host": self.host, "port": self.port}
+        kwargs = {
+            "host": self.host,
+            "port": self.port,
+            "filter_trdmarket": TRADING_MARKET_FILTERS[self.trading_market],
+        }
 
         # Add security_firm if specified
         if self.security_firm:
@@ -641,12 +664,40 @@ class TradeService:
         """Collect a trade probe result within the remaining health deadline."""
         return self._trade_probe.collect(future, timeout)
 
-    def get_accounts(self) -> list[dict]:
+    def get_accounts(
+        self,
+        market: str | None = None,
+        trd_env: str | None = None,
+    ) -> list[dict]:
         """Get list of trading accounts.
+
+        Filters apply to this response only. They do not change the shared
+        trade context or select an account for a later request.
+
+        Args:
+            market: Optional securities market filter. ``NONE`` leaves the
+                provider's account list unfiltered.
+            trd_env: Optional ``REAL`` or ``SIMULATE`` environment filter.
 
         Returns:
             List of account dictionaries with acc_id, trd_env, etc.
+
+        Raises:
+            ValueError: If either supplied filter is blank or unsupported.
+            RuntimeError: If the trade context is unavailable or the provider
+                rejects the account-list query.
         """
+        normalized_market = (
+            validate_choice("market", market, VALID_TRADING_MARKETS)
+            if market is not None
+            else None
+        )
+        normalized_environment = (
+            validate_choice("trd_env", trd_env, ("REAL", "SIMULATE"))
+            if trd_env is not None
+            else None
+        )
+
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
@@ -654,7 +705,92 @@ class TradeService:
         if ret != RET_OK:
             raise RuntimeError(f"get_acc_list failed: {data}")
 
-        return as_frame("get_acc_list", data).to_dict("records")
+        accounts = as_frame("get_acc_list", data).to_dict("records")
+        if normalized_market not in (None, "NONE"):
+            filtered = []
+            for account in accounts:
+                market_auth = account.get("trdmarket_auth")
+                if isinstance(market_auth, (list, tuple, set, frozenset)) and (
+                    normalized_market in market_auth
+                ):
+                    filtered.append(account)
+            accounts = filtered
+        if normalized_environment is not None:
+            accounts = [
+                account
+                for account in accounts
+                if account.get("trd_env") == normalized_environment
+            ]
+        return accounts
+
+    @staticmethod
+    def _exact_account_id(value: Any, *, allow_zero: bool) -> int:
+        """Parse an account ID without passing through floating point."""
+        if isinstance(value, bool):
+            raise ValueError("acc_id must be an integer or decimal string.")
+        if isinstance(value, Integral):
+            parsed = int(value)
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text or not text.isdecimal():
+                raise ValueError("acc_id must be an integer or decimal string.")
+            parsed = int(text)
+        else:
+            raise ValueError("acc_id must be an integer or decimal string.")
+
+        minimum = 0 if allow_zero else 1
+        if parsed < minimum:
+            qualifier = "non-negative" if allow_zero else "positive"
+            raise ValueError(f"acc_id must be a {qualifier} integer.")
+        return parsed
+
+    def resolve_read_account(
+        self,
+        trd_env: str,
+        acc_id: int | str,
+    ) -> tuple[str, int]:
+        """Bind a read to one discovered account in the requested environment.
+
+        Unlike mutation resolution, reads do not consult the REAL write
+        allowlist. A zero ID is accepted only when exactly one account matches;
+        explicit IDs must still be present in the requested environment.
+        """
+        normalized_environment = validate_choice(
+            "trd_env", trd_env, ("REAL", "SIMULATE")
+        )
+        requested_id = self._exact_account_id(acc_id, allow_zero=True)
+
+        accounts = self.get_accounts()
+        eligible_ids = [
+            self._exact_account_id(account.get("acc_id"), allow_zero=False)
+            for account in accounts
+            if account.get("trd_env") == normalized_environment
+        ]
+
+        if requested_id:
+            if requested_id not in eligible_ids:
+                raise ValueError(
+                    f"Account {self._mask_acc_id(requested_id)} is not available "
+                    f"in {normalized_environment}. Call get_accounts and use an "
+                    "explicit account ID from that environment."
+                )
+            return normalized_environment, requested_id
+
+        if len(eligible_ids) == 1:
+            return normalized_environment, eligible_ids[0]
+
+        if not eligible_ids:
+            raise ValueError(
+                f"No {normalized_environment} account is available to resolve "
+                "acc_id='0'. Call get_accounts and use an explicit account ID."
+            )
+
+        masked = ", ".join(self._mask_acc_id(candidate) for candidate in eligible_ids)
+        raise ValueError(
+            f"{len(eligible_ids)} {normalized_environment} accounts are available "
+            f"({masked}), so acc_id='0' does not identify one. Call get_accounts "
+            "and use an explicit account ID."
+        )
 
     def get_assets(
         self,
@@ -674,8 +810,7 @@ class TradeService:
         Returns:
             Dictionary with asset information.
         """
-        if isinstance(acc_id, str):
-            acc_id = int(acc_id)
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -726,8 +861,7 @@ class TradeService:
         Returns:
             List of position dictionaries.
         """
-        if isinstance(acc_id, str):
-            acc_id = int(acc_id)
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -792,8 +926,7 @@ class TradeService:
         Returns:
             Dictionary with max quantities for buy/sell.
         """
-        if isinstance(acc_id, str):
-            acc_id = int(acc_id)
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -849,8 +982,7 @@ class TradeService:
         Returns:
             List of cash flow record dictionaries.
         """
-        if isinstance(acc_id, str):
-            acc_id = int(acc_id)
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -1968,8 +2100,7 @@ class TradeService:
         Returns:
             List of order dictionaries. Returns empty list if no orders found.
         """
-        if isinstance(acc_id, str):
-            acc_id = int(acc_id)
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -2015,8 +2146,7 @@ class TradeService:
         Returns:
             List of deal dictionaries.
         """
-        if isinstance(acc_id, str):
-            acc_id = int(acc_id)
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -2059,8 +2189,7 @@ class TradeService:
             List of historical order dictionaries.
             Returns empty list if no orders found.
         """
-        if isinstance(acc_id, str):
-            acc_id = int(acc_id)
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -2109,8 +2238,7 @@ class TradeService:
         Returns:
             List of historical deal dictionaries.
         """
-        if isinstance(acc_id, str):
-            acc_id = int(acc_id)
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")

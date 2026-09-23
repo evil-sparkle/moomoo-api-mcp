@@ -16,6 +16,7 @@ from moomoo_mcp.services.order_errors import (
     OrderReceiptUnreadableError,
 )
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_market import TRADING_MARKET_FILTERS
 from moomoo_mcp.services.trading_policy import (
     InstrumentFacts,
     TradingMode,
@@ -27,12 +28,53 @@ from moomoo_mcp.services.trading_policy import (
 # a service constructed without a policy is read-only and refuses them.
 # REAL mode also needs its account allowlist; 123 is the account these tests use.
 REAL_POLICY = TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123, 456}))
+ACCOUNT_READ_ENDPOINTS = [
+    ("get_assets", {"trd_env": "simulate", "acc_id": "0"}, "accinfo_query"),
+    (
+        "get_positions",
+        {"trd_env": "simulate", "acc_id": "0"},
+        "position_list_query",
+    ),
+    (
+        "get_max_tradable",
+        {
+            "order_type": "NORMAL",
+            "code": "US.AAPL",
+            "price": 1.0,
+            "trd_env": "simulate",
+            "acc_id": "0",
+        },
+        "acctradinginfo_query",
+    ),
+    ("get_cash_flow", {"trd_env": "simulate", "acc_id": "0"}, "get_acc_cash_flow"),
+    ("get_orders", {"trd_env": "simulate", "acc_id": "0"}, "order_list_query"),
+    ("get_deals", {"trd_env": "simulate", "acc_id": "0"}, "deal_list_query"),
+    (
+        "get_history_orders",
+        {"trd_env": "simulate", "acc_id": "0"},
+        "history_order_list_query",
+    ),
+    (
+        "get_history_deals",
+        {"trd_env": "simulate", "acc_id": "0"},
+        "history_deal_list_query",
+    ),
+]
 
 
 @pytest.fixture
 def mock_trade_ctx():
     """Create a mock OpenSecTradeContext."""
     ctx = MagicMock()
+    ctx.get_acc_list.return_value = (
+        RET_OK,
+        pd.DataFrame(
+            [
+                {"acc_id": 123, "trd_env": "SIMULATE"},
+                {"acc_id": 456, "trd_env": "REAL"},
+            ]
+        ),
+    )
     # A NORMAL modification is assessed as the order that would result, so it
     # reads the existing order before dispatching anything.
     ctx.order_list_query.return_value = (
@@ -71,8 +113,29 @@ class TestTradeServiceConnection:
         service = TradeService(host="localhost", port=12345)
         service.connect()
 
-        mock_ctx_class.assert_called_once_with(host="localhost", port=12345)
+        mock_ctx_class.assert_called_once_with(
+            host="localhost",
+            port=12345,
+            filter_trdmarket=TRADING_MARKET_FILTERS["NONE"],
+        )
         assert service.trade_ctx is not None
+
+    @pytest.mark.parametrize("market", ["NONE", "US", "HK"])
+    def test_market_filter_reaches_sdk_context(self, market):
+        ctx = MagicMock()
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            return_value=ctx,
+        ) as context_class:
+            service = TradeService(trading_market=market)
+            service.connect()
+
+        context_class.assert_called_once_with(
+            host="127.0.0.1",
+            port=11111,
+            filter_trdmarket=TRADING_MARKET_FILTERS[market],
+        )
+        assert service.trading_market == market
 
     def test_close_clears_context(self, trade_service_with_mock, mock_trade_ctx):
         """Test close() closes and clears trade context."""
@@ -119,6 +182,27 @@ class TestReadOnlyGatewayLock:
 
         ctx.unlock_trade.assert_called_once_with(is_unlock=False)
         ctx.close.assert_not_called()
+        assert service.trade_ctx is ctx
+
+    def test_reconnect_keeps_the_configured_market_context(self):
+        ctx = MagicMock()
+        ctx.unlock_trade.return_value = (RET_OK, "")
+        with patch(
+            "moomoo_mcp.services.trade_service.OpenSecTradeContext",
+            return_value=ctx,
+        ) as context_class:
+            service = TradeService(
+                trading_market="US",
+                policy=TradingPolicy(TradingMode.SIMULATE),
+            )
+            service.connect()
+            ctx.on_api_socket_reconnected()
+
+        context_class.assert_called_once_with(
+            host="127.0.0.1",
+            port=11111,
+            filter_trdmarket=TRADING_MARKET_FILTERS["US"],
+        )
         assert service.trade_ctx is ctx
 
     def test_reconnecting_locks_the_gateway_again(self):
@@ -251,6 +335,314 @@ class TestGetAccounts:
 
         with pytest.raises(RuntimeError, match="Trade context not connected"):
             service.get_accounts()
+
+    @staticmethod
+    def _account_rows(mock_trade_ctx):
+        mock_trade_ctx.get_acc_list.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "acc_id": 101,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["HK"],
+                    },
+                    {
+                        "acc_id": 202,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["US"],
+                    },
+                    {
+                        "acc_id": 303,
+                        "trd_env": "REAL",
+                        "trdmarket_auth": ["HK", "US"],
+                    },
+                    {"acc_id": 404, "trd_env": "SIMULATE"},
+                ]
+            ),
+        )
+
+    @pytest.mark.parametrize("market", [None, "NONE", " none "])
+    def test_omitted_null_or_none_market_retains_provider_list(
+        self, trade_service_with_mock, mock_trade_ctx, market
+    ):
+        self._account_rows(mock_trade_ctx)
+
+        result = trade_service_with_mock.get_accounts(market=market)
+
+        assert [account["acc_id"] for account in result] == [101, 202, 303, 404]
+        mock_trade_ctx.get_acc_list.assert_called_once_with()
+
+    def test_named_market_matches_membership_once_and_excludes_missing_metadata(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        self._account_rows(mock_trade_ctx)
+
+        result = trade_service_with_mock.get_accounts(market=" us ")
+
+        assert [account["acc_id"] for account in result] == [202, 303]
+
+    def test_market_and_environment_filters_intersect(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        self._account_rows(mock_trade_ctx)
+
+        result = trade_service_with_mock.get_accounts(market="US", trd_env="simulate")
+
+        assert [account["acc_id"] for account in result] == [202]
+
+    def test_valid_filter_without_matches_returns_empty_list(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        self._account_rows(mock_trade_ctx)
+
+        result = trade_service_with_mock.get_accounts(market="SG")
+
+        assert result == []
+
+    @pytest.mark.parametrize(
+        ("kwargs", "field"),
+        [
+            ({"market": "USA"}, "market"),
+            ({"market": ""}, "market"),
+            ({"trd_env": "PAPER"}, "trd_env"),
+            ({"trd_env": " "}, "trd_env"),
+        ],
+    )
+    def test_invalid_filters_fail_before_provider_query(
+        self, trade_service_with_mock, mock_trade_ctx, kwargs, field
+    ):
+        with pytest.raises(ValueError) as excinfo:
+            trade_service_with_mock.get_accounts(**kwargs)
+
+        assert field in str(excinfo.value)
+        mock_trade_ctx.get_acc_list.assert_not_called()
+
+
+class TestReadAccountResolution:
+    @staticmethod
+    def _set_accounts(mock_trade_ctx, accounts):
+        mock_trade_ctx.get_acc_list.return_value = (
+            RET_OK,
+            pd.DataFrame(accounts),
+        )
+
+    def test_zero_resolves_when_exactly_one_account_matches(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        self._set_accounts(
+            mock_trade_ctx,
+            [
+                {"acc_id": 456, "trd_env": "SIMULATE"},
+                {"acc_id": 789, "trd_env": "REAL"},
+            ],
+        )
+
+        assert trade_service_with_mock.resolve_read_account("simulate", "0") == (
+            "SIMULATE",
+            456,
+        )
+
+    def test_multiple_accounts_fail_with_masked_candidates(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        first = 2222222222222222222
+        second = 3333333333333333333
+        self._set_accounts(
+            mock_trade_ctx,
+            [
+                {"acc_id": first, "trd_env": "SIMULATE"},
+                {"acc_id": second, "trd_env": "SIMULATE"},
+            ],
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            trade_service_with_mock.resolve_read_account("SIMULATE", 0)
+
+        message = str(excinfo.value)
+        assert "...2222" in message
+        assert "...3333" in message
+        assert str(first) not in message
+        assert str(second) not in message
+        assert "get_accounts" in message
+
+    def test_no_candidate_fails_without_a_default(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        self._set_accounts(
+            mock_trade_ctx,
+            [{"acc_id": 789, "trd_env": "REAL"}],
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            trade_service_with_mock.resolve_read_account("SIMULATE", "0")
+
+        assert "No SIMULATE account" in str(excinfo.value)
+
+    def test_explicit_large_account_id_is_exact_and_not_allowlist_gated(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        account_id = 9007199254740993
+        self._set_accounts(
+            mock_trade_ctx,
+            [{"acc_id": account_id, "trd_env": "REAL"}],
+        )
+
+        assert trade_service_with_mock.resolve_read_account(
+            "REAL", str(account_id)
+        ) == ("REAL", account_id)
+
+    @pytest.mark.parametrize("acc_id", [True, 1.0, "", "bad", "-1", "1.0"])
+    def test_malformed_explicit_ids_are_rejected_before_discovery(
+        self, trade_service_with_mock, mock_trade_ctx, acc_id
+    ):
+        with pytest.raises(ValueError):
+            trade_service_with_mock.resolve_read_account("SIMULATE", acc_id)
+
+        mock_trade_ctx.get_acc_list.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("accounts", "trd_env", "acc_id"),
+        [
+            (
+                [{"acc_id": 456, "trd_env": "SIMULATE"}],
+                "SIMULATE",
+                "1111111111111111789",
+            ),
+            (
+                [{"acc_id": 456, "trd_env": "SIMULATE"}],
+                "REAL",
+                "2222222222222222456",
+            ),
+        ],
+    )
+    def test_unknown_or_wrong_environment_id_is_rejected(
+        self,
+        trade_service_with_mock,
+        mock_trade_ctx,
+        accounts,
+        trd_env,
+        acc_id,
+    ):
+        self._set_accounts(mock_trade_ctx, accounts)
+
+        with pytest.raises(ValueError) as excinfo:
+            trade_service_with_mock.resolve_read_account(trd_env, acc_id)
+
+        assert f"...{acc_id[-4:]}" in str(excinfo.value)
+        assert acc_id not in str(excinfo.value)
+
+    def test_invalid_environment_is_rejected(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        with pytest.raises(ValueError) as excinfo:
+            trade_service_with_mock.resolve_read_account("PAPER", "0")
+
+        assert "trd_env" in str(excinfo.value)
+        mock_trade_ctx.get_acc_list.assert_not_called()
+
+    def test_discovery_failure_propagates(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        mock_trade_ctx.get_acc_list.return_value = (RET_ERROR, "gateway unavailable")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            trade_service_with_mock.resolve_read_account("SIMULATE", "0")
+
+        assert "get_acc_list failed: gateway unavailable" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("service_method", "arguments", "sdk_method"),
+    ACCOUNT_READ_ENDPOINTS,
+)
+def test_every_account_read_resolves_zero_to_a_concrete_id(
+    trade_service_with_mock,
+    mock_trade_ctx,
+    service_method,
+    arguments,
+    sdk_method,
+):
+    getattr(mock_trade_ctx, sdk_method).return_value = (RET_OK, pd.DataFrame())
+
+    getattr(trade_service_with_mock, service_method)(**arguments)
+
+    sdk_arguments = getattr(mock_trade_ctx, sdk_method).call_args.kwargs
+    assert sdk_arguments["acc_id"] == 123
+    assert sdk_arguments["trd_env"] == "SIMULATE"
+
+
+@pytest.mark.parametrize(
+    ("service_method", "arguments", "sdk_method"),
+    ACCOUNT_READ_ENDPOINTS,
+)
+def test_every_account_read_refuses_ambiguous_zero_before_query(
+    trade_service_with_mock,
+    mock_trade_ctx,
+    service_method,
+    arguments,
+    sdk_method,
+):
+    mock_trade_ctx.get_acc_list.return_value = (
+        RET_OK,
+        pd.DataFrame(
+            [
+                {"acc_id": 123, "trd_env": "SIMULATE"},
+                {"acc_id": 789, "trd_env": "SIMULATE"},
+            ]
+        ),
+    )
+
+    with pytest.raises(ValueError):
+        getattr(trade_service_with_mock, service_method)(**arguments)
+
+    getattr(mock_trade_ctx, sdk_method).assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("service_method", "arguments", "sdk_method"),
+    ACCOUNT_READ_ENDPOINTS,
+)
+def test_every_account_read_propagates_discovery_failure_before_query(
+    trade_service_with_mock,
+    mock_trade_ctx,
+    service_method,
+    arguments,
+    sdk_method,
+):
+    mock_trade_ctx.get_acc_list.return_value = (RET_ERROR, "discovery unavailable")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        getattr(trade_service_with_mock, service_method)(**arguments)
+
+    assert "discovery unavailable" in str(excinfo.value)
+    getattr(mock_trade_ctx, sdk_method).assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("service_method", "arguments", "sdk_method"),
+    ACCOUNT_READ_ENDPOINTS,
+)
+def test_every_account_read_forwards_exact_explicit_id_and_environment(
+    trade_service_with_mock,
+    mock_trade_ctx,
+    service_method,
+    arguments,
+    sdk_method,
+):
+    account_id = 9007199254740993
+    mock_trade_ctx.get_acc_list.return_value = (
+        RET_OK,
+        pd.DataFrame([{"acc_id": account_id, "trd_env": "SIMULATE"}]),
+    )
+    getattr(mock_trade_ctx, sdk_method).return_value = (RET_OK, pd.DataFrame())
+    explicit_arguments = {**arguments, "acc_id": str(account_id)}
+
+    getattr(trade_service_with_mock, service_method)(**explicit_arguments)
+
+    sdk_arguments = getattr(mock_trade_ctx, sdk_method).call_args.kwargs
+    assert sdk_arguments["acc_id"] == account_id
+    assert sdk_arguments["trd_env"] == "SIMULATE"
 
 
 class TestGetAssets:
@@ -2537,3 +2929,86 @@ class TestAutoSelectionThroughPlaceOrder:
             kwargs = mock_trade_ctx.place_order.call_args[1]
             assert kwargs["acc_id"] == 999
             assert kwargs["code"] == "JP.8058"
+
+    def test_visible_hk_and_us_accounts_are_selected_by_order_market(self):
+        ctx = MagicMock()
+        ctx.get_acc_list.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "acc_id": 101,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["HK"],
+                    },
+                    {
+                        "acc_id": 202,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["US"],
+                    },
+                ]
+            ),
+        )
+        ctx.place_order.return_value = (
+            RET_OK,
+            pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}]),
+        )
+        service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
+        service.trade_ctx = ctx
+
+        service.place_order(
+            code="US.AAPL",
+            price=1.0,
+            qty=1,
+            trd_side="BUY",
+            trd_env="SIMULATE",
+        )
+        service.place_order(
+            code="HK.00700",
+            price=1.0,
+            qty=1,
+            trd_side="BUY",
+            trd_env="SIMULATE",
+        )
+
+        assert [call.kwargs["acc_id"] for call in ctx.place_order.call_args_list] == [
+            202,
+            101,
+        ]
+
+    @pytest.mark.parametrize("operation", ["modify", "cancel"])
+    def test_modify_and_cancel_refuse_hk_us_account_ambiguity(self, operation):
+        ctx = MagicMock()
+        ctx.get_acc_list.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "acc_id": 101,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["HK"],
+                    },
+                    {
+                        "acc_id": 202,
+                        "trd_env": "SIMULATE",
+                        "trdmarket_auth": ["US"],
+                    },
+                ]
+            ),
+        )
+        service = TradeService(policy=TradingPolicy(TradingMode.SIMULATE))
+        service.trade_ctx = ctx
+
+        with pytest.raises(OrderNotSentError) as excinfo:
+            if operation == "modify":
+                service.modify_order(
+                    order_id="1",
+                    modify_order_op="CANCEL",
+                    trd_env="SIMULATE",
+                )
+            else:
+                service.cancel_order(order_id="1", trd_env="SIMULATE")
+
+        assert isinstance(excinfo.value.__cause__, ValueError)
+        assert "2 SIMULATE accounts" in str(excinfo.value.__cause__)
+        ctx.modify_order.assert_not_called()

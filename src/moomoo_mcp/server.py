@@ -97,6 +97,7 @@ def _build_services(settings: Settings | None = None) -> AppContext:
         host=resolved.opend_host,
         port=resolved.opend_port,
         security_firm=resolved.security_firm,
+        trading_market=resolved.trading_market,
         policy=resolved.policy,
         trade_password=resolved.trade_password,
         trade_password_md5=resolved.trade_password_md5,

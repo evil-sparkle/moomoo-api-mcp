@@ -336,6 +336,36 @@ class TestHealthReportsTradingMode:
         assert health["trading_mode"] == "READ_ONLY"
 
 
+class TestHealthReportsTradingMarket:
+    @pytest.mark.parametrize("market", ["NONE", "US"])
+    @pytest.mark.parametrize("available", [True, False])
+    def test_configured_market_is_reported_with_or_without_gateway(
+        self, services, market, available
+    ):
+        moomoo_service, trade_service = services
+        trade_service.trading_market = market
+        if not available:
+            moomoo_service.quote_ctx.get_global_state.return_value = (
+                -1,
+                "connection unavailable",
+            )
+            trade_service.trade_ctx.get_acc_list.return_value = (
+                -1,
+                "connection unavailable",
+            )
+
+        health = moomoo_service.check_health(trade_service=trade_service)
+
+        assert health["trade_market"] == market
+        assert moomoo_service.quote_ctx.get_global_state.call_count == 1
+        assert trade_service.trade_ctx.get_acc_list.call_count == 1
+        assert "acc_id" not in repr(health)
+        if available:
+            assert health["status"] == "connected"
+        else:
+            assert health["status"] == "disconnected"
+
+
 class TestHealthReportsExecutionHalt:
     """Health is where an operator finds out that execution is halted.
 

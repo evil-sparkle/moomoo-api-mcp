@@ -22,6 +22,11 @@ from dataclasses import dataclass
 
 from moomoo import SecurityFirm
 
+from moomoo_mcp.services.trading_market import (
+    DEFAULT_TRADING_MARKET,
+    TRADING_MARKET_FILTERS,
+    VALID_TRADING_MARKETS,
+)
 from moomoo_mcp.services.trading_policy import (
     TradingMode,
     TradingModeConfigError,
@@ -33,6 +38,7 @@ logger = logging.getLogger(__name__)
 ENV_OPEND_HOST = "MOOMOO_OPEND_HOST"
 ENV_OPEND_PORT = "MOOMOO_OPEND_PORT"
 ENV_SECURITY_FIRM = "MOOMOO_SECURITY_FIRM"
+ENV_TRADING_MARKET = "MOOMOO_TRADING_MARKET"
 ENV_TRADE_PASSWORD = "MOOMOO_TRADE_PASSWORD"
 ENV_TRADE_PASSWORD_MD5 = "MOOMOO_TRADE_PASSWORD_MD5"
 ENV_TRANSPORT = "MCP_TRANSPORT"
@@ -69,6 +75,7 @@ class Settings:
     opend_port: int
     policy: TradingPolicy
     security_firm: str | None
+    trading_market: str
     # The stored trade credential, already resolved to one of the two forms.
     # Plain text wins when both are set, as the spec requires.
     trade_password: str | None
@@ -129,6 +136,19 @@ def _load_security_firm(environ: Mapping[str, str]) -> str | None:
     return candidate
 
 
+def _load_trading_market(environ: Mapping[str, str]) -> str:
+    raw = (environ.get(ENV_TRADING_MARKET) or "").strip()
+    if not raw:
+        return DEFAULT_TRADING_MARKET
+    candidate = raw.upper()
+    if candidate not in TRADING_MARKET_FILTERS:
+        raise TradingModeConfigError(
+            f"{ENV_TRADING_MARKET} is set to {raw!r}. Valid values: "
+            f"{', '.join(VALID_TRADING_MARKETS)}."
+        )
+    return candidate
+
+
 def _load_transport(environ: Mapping[str, str]) -> str:
     raw = (environ.get(ENV_TRANSPORT) or "stdio").strip().lower()
     if raw not in VALID_TRANSPORTS:
@@ -176,6 +196,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         opend_port=_load_port(env),
         policy=policy,
         security_firm=_load_security_firm(env),
+        trading_market=_load_trading_market(env),
         trade_password=password,
         trade_password_md5=password_md5,
         transport=transport,
