@@ -2,7 +2,8 @@
 
 ## 1. Verify SDK and gateway facts the design relies on
 
-These tasks are read-only or SIMULATE-only. None places a REAL order. Record each
+These tasks are read-only or SIMULATE-only, except the explicitly authorized
+gateway lock in 1.3. None places a REAL order. Record each
 finding in `design.md` under the decision it affects.
 
 Two harnesses run them, and `verification.md` holds the evidence:
@@ -35,14 +36,16 @@ non-read-only phase, no REAL-order path).
   Verify by recording each field and its source call, and by stating which of the two
   option fields carries the monetary multiplier and on what evidence.
 
-  **Status: partially established.** The SDK's own field table narrows the
-  multiplier to `option_contract_size` and marks `option_contract_multiplier` as
-  index-options-only; two further findings (the `'N/A'` sentinel reaching the
-  multiplier, and `option_contract_size` being unable to report itself missing) are
-  recorded in Decision 3. The instrument reads, the independent cross-check and the
-  currency confirmation need a gateway and an account, which this session had
-  neither of. Options stay refused while a cap is configured. See
-  `verification.md`.
+  **Status: partially established, updated 2026-09-23.** Live stock, ETF, equity
+  option and quiet-option snapshots and explicit-code classifications were recorded.
+  Two matched option positions independently imply a monetary multiplier of 100.
+  Current official OpenD field definitions plus Moomoo's premium formula select
+  `option_contract_multiplier`, correcting the inference from the pinned SDK's
+  index-only annotation. The documented field is populated in the live samples.
+  Field selection is resolved; adapter activation and focused regression checks
+  remain. USD was observed for sampled orders and positions, while the full
+  supported US subset still needs currency evidence. Keep this task open for the
+  remaining work. See `verification.md` and Decision 3.
 - [ ] 1.2 Measure how long a terminal paper order stays queryable, using a `DAY`
   order.
 
@@ -59,9 +62,11 @@ non-read-only phase, no REAL-order path).
   needs — how late a modification can still find its target order — and it is
   answerable on a day-only provider.
 
-  **Status: not run** — needs a gateway and paper-order authorization. Run
-  `verify_gateway_facts.py paper-retention`, then `paper-retention-recheck` after
-  the close. One offline finding constrains the measurement:
+  **Status: partly run, 2026-09-23.** One bounded US paper `DAY` order was placed
+  and cancelled. Both current and historical queries returned `CANCELLED_ALL`,
+  zero fills, and the original remark immediately and later in the same session.
+  The after-close observation is still pending; do not place another order to
+  collect it. Re-query the recorded order. One offline finding constrains the measurement:
   `history_order_list_query` accepts no `order_id`, so the history side filters by
   code and matches the id client-side.
 
@@ -76,7 +81,7 @@ non-read-only phase, no REAL-order path).
 
   This places an order and is not part of the required set. It requires its own
   authorization, and nothing in this change depends on its outcome.
-- [ ] 1.3 With the operator's confirmation, lock the live gateway (`lock_trade`),
+- [x] 1.3 With the operator's confirmation, lock the live gateway (`lock_trade`),
   then call these REAL reads:
   - `get_accounts`, `get_assets`, `get_positions`, `get_orders` and `get_deals`;
   - `get_max_tradable` and `preview_combo_order`.
@@ -90,11 +95,11 @@ non-read-only phase, no REAL-order path).
   cannot resolve one produces a failing lock — and `lock_trade` is the only route out
   of `HALTED`. Record the outcome so the halt has a verified recovery path.
 
-  **Status: not run** — needs a REAL gateway, the credential, and authorization to
-  change the gateway's lock state. The premise is confirmed offline: `_check_acc_id(
-  TrdEnv.REAL, 0)` sits outside the `is_unlock` branch, so locking resolves a REAL
-  account too. Run `verify_gateway_facts.py real-reads
-  --i-authorize-real-gateway-lock`.
+  **Status: passed, 2026-09-23.** The operator explicitly authorized REAL reads
+  and gateway locking, with no unlock or REAL orders. The lock and all seven reads
+  succeeded on the local authenticated OpenD gateway. After deployment, the VPS
+  Stage 1 service's explicit `lock_trade` also returned `status: locked` and
+  `execution_halted: false`. No read required an unlock. See `verification.md`.
 
 ## 2. Settings and policy configuration
 
@@ -362,20 +367,30 @@ non-read-only phase, no REAL-order path).
   All five pass: ruff clean, 60 files formatted, basedpyright 0 errors, 928
   passed / 1 skipped / 72 subtests, openspec 25/25. Run on Python 3.12, which
   is what CI uses.
-- [ ] 9.2 Against the live gateway in SIMULATE, run through each step and record the
+- [x] 9.2 Against the live gateway in SIMULATE, run through each step and record the
   outcomes in the PR description:
   1. place a limit order with `acc_id="0"`;
   2. modify only its price past the cap and observe a not-sent refusal;
   3. cancel it;
   4. check that `check_health` shows `execution_halted: false`.
 
-  **Status: not run** — no gateway was reachable from the implementing session,
-  and step 1 places a paper order, which needs its own authorization. The
-  equivalent is covered against a fake broker in
-  `tests/test_services/test_trade_service.py`; that is not a substitute for the
-  live run, and the two are kept separate deliberately.
-- [ ] 9.3 Operator-run, after adding the new variables to the VPS `.env`: deploy,
+  **Status: passed, 2026-09-23.** The unchanged Stage 1 service placed one US.AAPL
+  BUY limit order for one share at USD 1, with `acc_id="0"`, `SIMULATE`, `DAY`,
+  quantity cap 1 and notional cap USD 2. Changing only its price to USD 3 raised
+  `OrderNotSentError` and added zero SDK mutations. Cancellation reached
+  `CANCELLED_ALL` with zero fills; health reported `execution_halted: false`.
+  The service harness supplied an explicit US SDK context, so this is not a claim
+  that the unmodified MCP server already supports Stage 1.1 market selection.
+  The PR-ready evidence is in `verification.md`.
+- [x] 9.3 Operator-authorized deployment, after validating the VPS configuration: deploy,
   confirm authenticated `initialize` through `deploy_verify.py`, and optionally place
   and cancel a minimal far-from-market REAL limit order. Verify with the deploy log
-  and the order's final status in `get_history_orders`. This task is not performed
-  by the agent.
+  and the order's final status in `get_history_orders` if that optional test is run.
+
+  **Status: passed, 2026-09-23, under explicit operator authorization.** Deployed
+  `e8b2c52f2d92cb3b9d27308a04942690ee1cd621` over `c4b42c7` using the production
+  prepare/start workflow. `deploy_verify.py` confirmed authenticated MCP
+  initialization; unauthenticated initialization returned HTTP 401. OpenD login,
+  quote and trade probes, and the explicit lock-only call succeeded. The existing
+  `READ_ONLY` configuration validated without editing secret files. The persistent
+  OpenD volume was preserved. No optional REAL-order test was authorized or run.

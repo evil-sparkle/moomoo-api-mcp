@@ -151,6 +151,11 @@ itself. `TradeService` receives the credential in its constructor, replacing the
   | --- | --- | --- |
   | `US` | `USD` | provisional — task 1.1 confirms |
 
+  Live evidence on 2026-09-23 returned USD for the sampled US paper order and
+  US stock/ETF/option positions. This confirms those samples, not every instrument
+  the `US` subset can admit; the table remains provisional. The snapshot still
+  provides no currency field. See `verification.md`.
+
   No other prefix is supported while a notional cap is configured, and an instrument
   whose currency cannot be established this way is **refused**, not valued at a
   guessed currency. Adding a market to the table is a deliberate act backed by
@@ -229,23 +234,24 @@ The rules are listed below. They are also specified in `trading-policy`.
   while trading in contracts, so `DRVT` uses the broker-reported contract field.
   - The classification comes from `get_stock_basicinfo`'s `stock_type`, not from the
     snapshot.
-  - **Which option field carries the monetary multiplier is unverified.** The snapshot
-    offers both `option_contract_size` and `option_contract_multiplier`. Task 1.1
-    establishes their *monetary semantics* — which one, multiplied by the quoted
-    price, yields the cash value of one contract — not merely which one equals 100.
-    Equality with 100 is a coincidence of common US contracts, not a definition, and
-    choosing on that basis would silently misprice any instrument with a non-standard
-    multiplier.
-  - **Narrowed by task 1.1, not yet closed.** The SDK's own field table describes
-    `option_contract_size` as 每份合约数 (units of the underlying per contract) and
-    `option_contract_multiplier` as 合约乘数，指数期权特有字段 (contract multiplier,
-    *a field specific to index options*). On that evidence the monetary multiplier
-    for a US equity option is `option_contract_size`, and
-    `option_contract_multiplier` would be `'N/A'` for one. The independent
-    cross-check task 1.1 requires — against a position's own market value — still
-    needs an account, so the field is not yet chosen. See `verification.md`.
-  - Until task 1.1 resolves it, an option is not assessable and is refused while a
-    cap is configured.
+  - **Field selected from current official documentation, 2026-09-23:** use
+    `option_contract_multiplier` for premium valuation; retain
+    `option_contract_size` separately for deliverable-size compatibility checks.
+    The [OpenD snapshot field table and protocol](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-market-snapshot.html)
+    distinguish shares per contract from the contract multiplier and do not label
+    the latter index-options-only. Moomoo's [premium valuation formula](https://www.moomoo.com/ca/support/topic10_143)
+    uses option price multiplied by contract multiplier and contract quantity.
+    Together these establish the field choice; the live matched-position arithmetic
+    supplies the independent numeric cross-check for the sampled contracts.
+  - The pinned SDK docstring's index-only annotation disagrees with the current
+    documentation and observed non-index option values. It is not sufficient
+    evidence to substitute deliverable size for the monetary multiplier. A live
+    adjusted-contract example is not required merely to choose the documented field.
+  - This records the design decision, not a deployed code change. The adapter still
+    has `OPTION_MONETARY_MULTIPLIER_FIELD = None`; activation and focused regression
+    checks remain to be applied. Missing, non-finite or non-positive multiplier
+    values must still refuse assessment, without falling back to size or hardcoded
+    100. Capped options remain refused in the current deployed image.
   - Any classification other than `STOCK`, `ETF` or `DRVT` is refused.
 - **Order classes.** Two frozensets live in `services/validation.py` and are shared
   with Decision 4:
@@ -342,6 +348,10 @@ An order that is not found, or has unreadable fields, is refused as not sent.
   order and history-order query. That measures the paper interface's retention
   behaviour; it does **not** establish REAL GTC-order visibility, which this change
   does not test. Under either, a target that cannot be retrieved remains a refusal.
+  On 2026-09-23 the bounded paper order remained visible in both queries immediately
+  and later in the same session, with terminal status, zero fills, and its original
+  remark. After-close visibility remains unmeasured; these observations are lower
+  bounds, not a retention guarantee.
 
 ### 6. Account routing
 
@@ -406,6 +416,11 @@ Unknown-outcome messages say the request "may have been sent".
     holds the lock, it skips the lock request, and the write's relock covers it.
     The SDK has already replayed the cached unlock that the in-flight write needs.
 - **Startup.** `_auto_unlock_trade` and its call in `_build_services` are deleted.
+- **Live locked-read verification (2026-09-23).** With explicit operator
+  authorization, gateway locking succeeded and accounts, assets, positions,
+  current orders, deals, maximum tradable quantity and combo preview all succeeded
+  against REAL while locked. No read-only JIT unlock was needed on this gateway.
+  The deployed VPS Stage 1 service also acknowledged an explicit lock-only request.
 - **`unlock_trade`.** The public method refuses when a credential is configured,
   with the "writes unlock just in time" explanation. The JIT path uses a private
   `_unlock_gateway`. `tools/account.py` drops its environment fallback and its
@@ -559,6 +574,17 @@ the opt-out. `stdio` is unaffected.
   explicitly.
 
 ## Migration Plan
+
+**Deployment evidence, 2026-09-23.** The operator authorized direct VPS deployment.
+Commit `e8b2c52f2d92cb3b9d27308a04942690ee1cd621` replaced `c4b42c7`; the production
+image digest is `sha256:867dc574d2e657dd7f551f4c68e9193a244faab482f656e2b00440e9ed1a55fd`.
+The existing READ_ONLY configuration (quantity cap 500, no notional cap) passed
+the target image's settings validation without secret-file changes. The named
+OpenD volume survived recreation. Authenticated initialization, rejection of
+unauthenticated requests, broker login and both health probes passed. Explicit
+`lock_trade` returned `locked`, with `execution_halted: false`. No unlock or REAL
+order was issued. This verifies the read-only deployment, not REAL execution or
+Stage 1.1 market selection. See `verification.md` for the command/result record.
 
 1. Before deploying, edit the VPS `.env`:
    - Set `MOOMOO_REAL_ACC_IDS=<your REAL acc_id>`. Get it from `get_accounts`.

@@ -1,9 +1,10 @@
 # Tasks
 
-Nothing here is implemented, and no runtime milestone is claimed. Exactly one task is
-checked — 1.5, which records a **planning decision** taken in Stage 1. No provider
-experiment, automated test or implementation task is complete, and a checked planning
-decision never stands in for broker verification.
+Nothing here is implemented, and no journal runtime milestone is claimed. Tasks
+1.0 and 1.5 record repository validation and a **planning decision**, respectively.
+Task 1.3 records observed paper-order fields from the authorized Stage 1 live run.
+Other provider prerequisites remain open; these checks do not replace the later
+end-to-end journal tests.
 
 Task groups 1, 10 and 11 gate the others: implementation begins only after group 1
 resolves the provider facts and the prerequisite reconciliation, and after
@@ -27,7 +28,7 @@ verified. Only `M*` can do that, and only with separate authorization.
 Read-only or paper-only. No REAL order is placed. Record each finding in `design.md`
 under the decision it affects.
 
-- [ ] 1.0 Re-run `npx -y @fission-ai/openspec@1.13.1 validate --all --strict
+- [x] 1.0 Re-run `npx -y @fission-ai/openspec@1.13.1 validate --all --strict
   --no-interactive` after `harden-trading-safeguards` lands, and re-check these delta
   specs against the landed Stage 1 specs. Verify by confirming that the three
   reconciled requirements — `Support Placing Orders`, `Support Modifying Orders`,
@@ -39,9 +40,14 @@ under the decision it affects.
 - [ ] 1.2 Confirm whether the paper provider exposes any deal query. Verify by
   recording the attempted call and its outcome. If one exists, record it as additive
   to reconciliation; the order and history-order path stays the primary one.
-- [ ] 1.3 Record the fields available from paper order and history-order queries that
+- [x] 1.3 Record the fields available from paper order and history-order queries that
   reconciliation can match on, including whether a submission timestamp and any
   caller-supplied remark survive. Verify by listing the observed fields.
+  Both queries returned the exact cancelled paper order on 2026-09-23 with its
+  original remark, broker ID, timestamps, status, code, side, quantity, price and
+  stored `DAY` TIF. See Decision 9's dated observations and the Stage 1 verification
+  log. This establishes remark survival for the sampled placement/cancellation,
+  not uniqueness enforcement, modification correlation or maximum retention.
 - [ ] 1.4 Measure how long a paper order stays queryable after it reaches a terminal
   state, by order query and by history-order query. Verify by recording both windows.
   This replaces the prerequisite's multi-day GTC question in a form a `DAY`-only

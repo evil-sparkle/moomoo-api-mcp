@@ -373,6 +373,30 @@ order statuses (`SUBMITTED`, `FILLED_PART`, `FILLED_ALL`, `CANCELLED_ALL`, `REJE
 
 ### 9. Reconciliation: candidate matches vs reliable proof
 
+**Provider observations, 2026-09-23 (task 1.3).** The authorized Stage 1 live run
+placed and cancelled one bounded US SIMULATE `DAY` limit order. Both
+`order_list_query(order_id=..., refresh_cache=True)` and
+`history_order_list_query(code=..., start=..., end=...)` returned that exact
+terminal order immediately and later in the same session. The history response
+was matched by broker ID client-side. Both responses carried these columns:
+
+```text
+code, stock_name, order_market, trd_side, order_type, order_status, order_id,
+qty, price, create_time, updated_time, dealt_qty, dealt_avg_price, last_err_msg,
+remark, time_in_force, fill_outside_rth, session, aux_price, trail_type,
+trail_value, trail_spread, currency, jp_acc_type, expire_time, amount,
+strategy_type, combo_legs
+```
+
+The original caller remark `s1-check-20260923-day` survived unchanged, alongside
+the submission/update timestamps, `CANCELLED_ALL`, zero fills and stored `DAY`.
+This supports broker-returned correlation as a possible reconciliation input;
+it does not prove broker-enforced remark uniqueness or reliable modification
+correlation. The after-close retention window is still unmeasured. Neither a
+positive match nor successful enumeration establishes a provider absence-proof
+contract. Keep the proof requirements below unchanged. Full observations and
+scope limits are in [the Stage 1 live verification log](../harden-trading-safeguards/verification.md).
+
 An operation in `UNKNOWN_OUTCOME` is never automatically resubmitted, and never
 resolved by placing a substitute or replacement order. Reconciliation is explicit.
 
@@ -766,6 +790,35 @@ What is **not** guaranteed:
 8. Rollback: Redeploy previous image. Volume remains unmounted; `opend-data` intact.
 
 ## Validation status
+
+### Repository prerequisite check — 2026-09-23
+
+At main commit `e8b2c52`, the pinned command
+`npx -y @fission-ai/openspec@1.13.1 validate --all --strict --no-interactive`
+passed all 25 items with zero failures. Informational notices concern long
+requirement text; they are not provider observations.
+
+The Stage 2 deltas were compared with the Stage 1 deltas present on main under
+`openspec/changes/harden-trading-safeguards/specs/`. Stage 1 has not yet been
+archived or synced into `openspec/specs`, so those older base specifications are
+not the complete Stage 1 contract. The three overlapping requirements preserve:
+
+- **Support Placing Orders:** explicit environment, supported order types outside
+  journaled paper scope, and account/environment in the receipt. The market-order
+  scenario moves outside journaled paper execution, consistent with the proposed
+  paper limit-order restriction.
+- **Support Modifying Orders:** unambiguous account resolution, target retrieval,
+  preservation of omitted fields, and limits assessed against the resulting order.
+- **Support Cancelling Orders:** explicit environment, account resolution, and
+  permission to cancel during the Stage 1 REAL relock halt. The independent paper
+  journal block does not redefine that halt.
+
+Task 1.0 is complete for this checkout. Repeat the comparison if Stage 1 changes
+before archival. No provider calls were made during the repository-only check.
+The subsequent authorized Stage 1 live run supplied task 1.3's observed fields
+and same-session retention samples, recorded under Decision 9. Tasks 1.1, 1.2,
+1.4 and 1.6 remain pending: non-DAY behavior, paper deal-query availability,
+after-close retention and absence-proof capabilities still require verification.
 
 Strict validation (`openspec validate add-paper-execution-journal --strict --json`)
 validates structural correctness. Landed contracts and provider behaviors will be
