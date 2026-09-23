@@ -179,6 +179,12 @@ Running OpenD and the MCP server via Docker keeps the OpenD gateway off every ne
 
 Both run in one container, started by a supervisor (`src/moomoo_mcp/supervisor.py`) that owns them. OpenD listens on `127.0.0.1:11111` *inside* that container, so only the MCP server sharing it can reach an API that has no authentication of its own; the server publishes its endpoint on `127.0.0.1:8000`, which is the only port the deployment exposes. The supervisor is what keeps a dead gateway from costing clients anything: it restarts OpenD in place, and takes the container down only when the server dies or the gateway cannot be recovered.
 
+For persistent paper execution in SIMULATE or REAL deployments, see
+[`docs/paper-execution.md`](docs/paper-execution.md). It covers the optional journal
+volume, initialization, retry identity, operator recovery and consistent backups.
+The same paper journal survives deployment mode changes; REAL-order journaling
+is deferred. Live provider acceptance is tracked separately from automated development.
+
 For what state the stack holds, where each piece of it lives, what survives which restart, and how exposed the stored credentials are, see [`docs/state-and-restarts.md`](docs/state-and-restarts.md).
 
 ### 1. Build the Images

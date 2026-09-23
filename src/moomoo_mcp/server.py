@@ -5,6 +5,7 @@ import os
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
@@ -15,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from moomoo_mcp.services.base_service import MoomooService
+from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.instruments import InstrumentAdapter
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
@@ -27,20 +29,34 @@ from moomoo_mcp.settings import (
 
 logger = logging.getLogger(__name__)
 
+operator_principal: ContextVar[str | None] = ContextVar(
+    "operator_principal", default=None
+)
+
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Enforces constant-time bearer token authorization on HTTP/SSE requests."""
 
-    def __init__(self, app, auth_token: str) -> None:
+    def __init__(self, app, auth_token: str, operator_token: str | None = None) -> None:
         super().__init__(app)
         self.auth_token = auth_token
+        if operator_token and operator_token == auth_token:
+            raise ValueError("MCP_OPERATOR_TOKEN must differ from MCP_AUTH_TOKEN")
+        self.operator_token = operator_token
 
     async def dispatch(self, request: Request, call_next) -> Response:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:].strip()
-            if hmac.compare_digest(token, self.auth_token):
-                return await call_next(request)
+            is_operator = bool(self.operator_token) and hmac.compare_digest(
+                token, self.operator_token or ""
+            )
+            if is_operator or hmac.compare_digest(token, self.auth_token):
+                binding = operator_principal.set("operator" if is_operator else None)
+                try:
+                    return await call_next(request)
+                finally:
+                    operator_principal.reset(binding)
 
         return JSONResponse(
             {"detail": "Unauthorized: Invalid or missing bearer token."},
@@ -72,6 +88,7 @@ class AppContext:
 # The gateway connections belong to the process, not to a session. Built once,
 # under a lock, and handed to every session that follows.
 _services: AppContext | None = None
+_prepared_journal: tuple[Settings, ExecutionStore] | None = None
 _services_lock = threading.Lock()
 
 
@@ -86,26 +103,57 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             which is the path direct library use and the tests take; ``main()``
             loads it earlier so a bad value exits before anything listens.
     """
-    resolved = settings if settings is not None else load_settings()
+    global _prepared_journal
+    prepared = _prepared_journal
+    _prepared_journal = None
+    resolved = prepared[0] if prepared else settings or load_settings()
     logger.info(f"Connecting to OpenD at {resolved.opend_host}:{resolved.opend_port}")
     logger.info(f"Trading mode: {resolved.policy.mode.value}")
     if resolved.security_firm:
         logger.info(f"Using security firm: {resolved.security_firm}")
 
-    moomoo_service = MoomooService(host=resolved.opend_host, port=resolved.opend_port)
-    trade_service = TradeService(
-        host=resolved.opend_host,
-        port=resolved.opend_port,
-        security_firm=resolved.security_firm,
-        trading_market=resolved.trading_market,
-        policy=resolved.policy,
-        trade_password=resolved.trade_password,
-        trade_password_md5=resolved.trade_password_md5,
-        # Reads the shared quote context through a callable, not the object:
-        # the connection is opened lazily and replaced on reconnect, so holding
-        # the instance would pin whichever one existed at wiring time.
-        instrument_lookup=InstrumentAdapter(lambda: moomoo_service.quote_ctx),
+    execution_store = (
+        prepared[1]
+        if prepared
+        else (
+            ExecutionStore(
+                resolved.journal_path,
+                create=resolved.create_journal,
+                lock_wait_ms=resolved.journal_lock_wait_ms,
+            )
+            if resolved.journal_path
+            else None
+        )
     )
+    try:
+        moomoo_service = MoomooService(
+            host=resolved.opend_host, port=resolved.opend_port
+        )
+    except BaseException:
+        if execution_store is not None:
+            execution_store.close()
+        raise
+    try:
+        trade_service = TradeService(
+            host=resolved.opend_host,
+            port=resolved.opend_port,
+            security_firm=resolved.security_firm,
+            trading_market=resolved.trading_market,
+            policy=resolved.policy,
+            execution_store=execution_store,
+            simulated_account_allowlist=resolved.simulated_account_allowlist,
+            trade_password=resolved.trade_password,
+            trade_password_md5=resolved.trade_password_md5,
+            # Reads the shared quote context through a callable, not the object:
+            # the connection is opened lazily and replaced on reconnect, so holding
+            # the instance would pin whichever one existed at wiring time.
+            instrument_lookup=InstrumentAdapter(lambda: moomoo_service.quote_ctx),
+        )
+    except BaseException:
+        if execution_store is not None:
+            execution_store.close()
+        moomoo_service.close()
+        raise
 
     try:
         # A downstream connection failure must not take the MCP server down with
@@ -160,11 +208,15 @@ def get_services() -> AppContext:
 
 def close_services() -> None:
     """Release the process's connections. Idempotent."""
-    global _services
+    global _services, _prepared_journal
 
     with _services_lock:
         services = _services
         _services = None
+        prepared = _prepared_journal
+        _prepared_journal = None
+    if prepared is not None:
+        prepared[1].close()
 
     if services is not None:
         services.trade_service.close()
@@ -244,17 +296,21 @@ def create_sse_app(auth_token: str | None = None):
     raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
     token = raw.strip()
     if token:
-        app.add_middleware(BearerAuthMiddleware, auth_token=token)
+        app.add_middleware(BearerAuthMiddleware, auth_token=token, operator_token=None)
     return app
 
 
-def create_streamable_http_app(auth_token: str | None = None):
+def create_streamable_http_app(
+    auth_token: str | None = None, operator_token: str | None = None
+):
     """Build the Starlette Streamable HTTP application with optional bearer auth."""
     app = mcp.streamable_http_app()
     raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
     token = raw.strip()
     if token:
-        app.add_middleware(BearerAuthMiddleware, auth_token=token)
+        app.add_middleware(
+            BearerAuthMiddleware, auth_token=token, operator_token=operator_token
+        )
     return app
 
 
@@ -278,6 +334,23 @@ def main():
         logger.error(f"Refusing to start: {exc}")
         raise SystemExit(1) from exc
 
+    if settings.journal_path:
+        # Fail storage startup before a transport can serve any request.
+        global _prepared_journal
+        with _services_lock:
+            if _services is None and _prepared_journal is None:
+                # Validate/lock storage before listening; gateway connections stay
+                # lazy until the first request, as in READ_ONLY and Stage 1.
+                _prepared_journal = (
+                    settings,
+                    ExecutionStore(
+                        settings.journal_path,
+                        create=settings.create_journal,
+                        lock_wait_ms=settings.journal_lock_wait_ms,
+                    ),
+                )
+                atexit.register(close_services)
+
     transport = settings.transport
 
     if transport in ("sse", "streamable-http"):
@@ -296,7 +369,9 @@ def main():
         import uvicorn
 
         if transport == "streamable-http":
-            app = create_streamable_http_app(auth_token=settings.auth_token)
+            app = create_streamable_http_app(
+                auth_token=settings.auth_token, operator_token=settings.operator_token
+            )
         else:
             app = create_sse_app(auth_token=settings.auth_token)
 

@@ -171,6 +171,10 @@ class TestOrderListWithACombo:
         context, trade_ctx = trade_ctx_context
         trade_ctx.place_combo_order.return_value = (0, pd.DataFrame([_spread_row()]))
 
+        # Combo mutations remain a REAL-only path; paper scope excludes them.
+        context.trade_service.policy = TradingPolicy(
+            TradingMode.REAL, real_acc_ids=frozenset({int(ACCOUNT_ID)})
+        )
         result = await call_mcp_tool(
             context,
             "place_combo_order",
@@ -189,7 +193,7 @@ class TestOrderListWithACombo:
                 ],
                 "price": 5.0,
                 "qty": 1,
-                "trd_env": "SIMULATE",
+                "trd_env": "REAL",
                 "acc_id": ACCOUNT_ID,
             },
         )

@@ -49,8 +49,9 @@ The journal depends on these Stage 1 contracts and does not restate them:
   redefines.
 
 **Dependency order.** Safeguard code and specs land → recheck and validate this
-proposal against those landed contracts → separately authorize implementation →
-automated acceptance tests → separately authorize paper-provider validation.
+proposal against those landed contracts → authorized implementation →
+automated acceptance tests → development archive → separately authorized
+paper-provider validation in `validate-paper-execution-provider`.
 
 ### A conflict with the prerequisite, since resolved
 
@@ -72,7 +73,8 @@ been performed.
     or file handle reaches the tool layer or an agent.
   - Exactly one executor process is permitted; enforced via a non-blocking process
     lockfile.
-  - It is opened only under an explicit `SIMULATE` policy. `READ_ONLY` operation
+  - It is opened for paper execution under either `SIMULATE` or `REAL` policy,
+    using the same configured paper database across mode changes. `READ_ONLY` operation
     stays entirely database-independent: no file is opened, created or required.
 - **Caller-owned execution identity and admission epochs.**
   - Every paper mutation carries a caller-supplied, opaque `operation_id` alongside
@@ -288,3 +290,20 @@ a real paper account (task group 1).
 - **Agent (ZeroClaw)**: paper write tool calls must carry a stable `operation_id`
   and active `admission_epoch` that survive a retry, and prices as decimal strings.
 - **Dependencies**: none. Standard library `sqlite3` and `fcntl` only.
+
+## Development and live-validation boundary — 2026-09-23
+
+The operator authorized implementing and archiving the development work separately
+from live validation. The original retention observation (task 1.4) and manual
+acceptance (tasks 11.1–11.2, `M01`–`M04`) are preserved, uncompleted, in
+`validate-paper-execution-provider`. Development completion requires automated
+`U01`–`U20` and isolated container `C01`–`C04` verification. It does not claim live
+provider acceptance, measured after-close retention or ZeroClaw/Telegram retry
+propagation. The runtime safety contracts and their scope remain unchanged.
+
+## Confirmed mode scope (2026-09-23)
+
+Paper orders persist in the same dedicated SQLite database from SIMULATE and REAL
+deployments. REAL mode additionally permits Stage 1 real trading; it never promotes
+paper records. REAL-order journaling is a later stage requiring separate storage.
+READ_ONLY leaves the journal intact without opening it.

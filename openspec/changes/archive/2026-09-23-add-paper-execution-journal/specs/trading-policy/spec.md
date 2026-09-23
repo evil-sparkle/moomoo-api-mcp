@@ -14,7 +14,11 @@ Ordinary `READ_ONLY` operation SHALL remain independent of the execution journal
 In `READ_ONLY` mode the system SHALL NOT open, create or require any journal
 database, and SHALL NOT fail for want of one.
 
-A `SIMULATE` mutation SHALL be admitted only under an explicit `SIMULATE` policy.
+A `SIMULATE` mutation SHALL be admitted under an explicit `SIMULATE` or `REAL`
+policy, using the same dedicated persistent paper database across mode changes.
+`REAL` permits real execution in addition to paper execution; it does not change
+the environment or storage identity of a paper operation. REAL-order journaling
+is deferred to a later stage and SHALL NOT write into the paper database.
 When journal storage is required but unavailable or blocked, the mutation SHALL be
 refused. The system SHALL NOT fall back to dispatching it unjournaled.
 
@@ -75,13 +79,16 @@ the configured mode or enable `REAL` execution.
 
 ### Requirement: Simulated Account Allowlist
 
-When `MOOMOO_TRADING_MODE` is `SIMULATE`, the system SHALL require an explicit
-allowlist of simulated account identifiers. If it is missing, empty or malformed,
+When `MOOMOO_TRADING_MODE` is `SIMULATE`, or paper execution is configured in
+`REAL` mode, the system SHALL require an explicit allowlist of simulated account
+identifiers and a journal path. A REAL deployment without paper configuration
+SHALL refuse paper mutations rather than dispatch them without a journal. If it is missing, empty or malformed,
 startup SHALL fail with a configuration error naming the variable.
 
 Every journaled mutation SHALL target an account that is on the allowlist and has
 been verified to be a simulated account. A mutation that names, or resolves to, any
-other account SHALL be refused before any gateway request.
+other account SHALL be refused before any gateway mutation. An explicitly
+unallowlisted identifier SHALL be refused before account discovery.
 
 A journaled mutation SHALL state its account and environment explicitly. Where an
 account is resolved rather than named, it SHALL resolve only when exactly one
@@ -106,12 +113,12 @@ Resolve Order Account Explicitly.
 
 - **GIVEN** an account identifier appears on the allowlist
 - **WHEN** it cannot be verified as a simulated account
-- **THEN** the system SHALL refuse mutations against it before any gateway request
+- **THEN** the system SHALL refuse mutations against it before any gateway mutation
 
 #### Scenario: Paper records are never promoted to live execution
 
 - **GIVEN** operations recorded in the paper journal
-- **WHEN** any REAL execution is later configured
+- **WHEN** REAL-order journaling is implemented in a later stage
 - **THEN** it SHALL require separate, distinct storage
 - **AND** paper journal records SHALL NOT be recognized, resumed or promoted into
   live orders
@@ -150,4 +157,13 @@ supported form.
 
 - **WHEN** a journaled paper mutation names an instrument outside US stocks and ETFs,
   or a quantity that is not a whole number of shares
-- **THEN** the system SHALL refuse it before any gateway request
+- **THEN** the system SHALL refuse it before any gateway mutation
+
+#### Scenario: Paper journal survives deployment mode changes
+
+- **GIVEN** an acknowledged paper operation persisted under SIMULATE mode
+- **WHEN** the same database is reopened under REAL mode and its token is retried
+- **THEN** the stored paper outcome SHALL be returned without another dispatch
+- **AND** new eligible paper operations SHALL use that same database
+- **AND** returning to SIMULATE SHALL retain all paper records
+- **AND** READ_ONLY SHALL leave the database intact without opening it

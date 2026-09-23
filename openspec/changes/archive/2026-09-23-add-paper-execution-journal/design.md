@@ -826,12 +826,14 @@ What is **not** guaranteed:
 1. Land `harden-trading-safeguards`.
 2. Re-check delta specs against landed Stage 1 specs.
 3. Complete tasks 1.0–1.3 and 1.5–1.6 against a real paper account to verify
-   provider facts and resolve the GTC conflict. Continue task 1.4's after-close
-   retention measurement in parallel; an unknown window never proves absence.
-4. Obtain separate authorization for implementation.
+   provider facts and resolve the GTC conflict. Retention observation is tracked
+   in `validate-paper-execution-provider`; an unknown window never proves absence.
+4. Implement under the operator authorization recorded on 2026-09-23.
 5. Add `execution-data` volume and configuration.
 6. Run automated suites (`U01`–`U20`, `C01`–`C04`).
-7. Obtain separate authorization for paper-provider verification (`M01`–`M04`).
+7. Archive completed development after automated acceptance. Keep paper-provider
+   verification (`M01`–`M04`) pending in `validate-paper-execution-provider`,
+   requiring separate authorization before execution.
 8. Rollback: Redeploy previous image. Volume remains unmounted; `opend-data` intact.
 
 ## Validation status
@@ -868,3 +870,38 @@ retention observation remains pending.
 Strict validation (`openspec validate add-paper-execution-journal --strict --json`)
 validates structural correctness. Landed contracts and provider behaviors will be
 verified in sequence.
+
+## Development and live-validation boundary — 2026-09-23
+
+The operator authorized implementing and archiving the development work separately
+from live validation. The original retention observation (task 1.4) and manual
+acceptance (tasks 11.1–11.2, `M01`–`M04`) are preserved, uncompleted, in
+`validate-paper-execution-provider`. Development completion requires automated
+`U01`–`U20` and isolated container `C01`–`C04` verification. It does not claim live
+provider acceptance, measured after-close retention or ZeroClaw/Telegram retry
+propagation. The runtime safety contracts and their scope remain unchanged.
+
+## Implementation decisions confirmed on 2026-09-23
+
+The operator selected persistent paper journaling in both SIMULATE and REAL
+modes, with the same configured path and volume across restarts. REAL mode unlocks
+the possibility of real trading under the existing Stage 1 controls; REAL-order
+journaling is deferred and will require separate storage. READ_ONLY never opens
+the paper database. REAL deployments without paper configuration reject paper writes.
+
+Settings validates the paper allowlist; PaperExecution enforces it beside the
+mode and order checks supplied by TradingPolicy. Account and instrument discovery
+are read-only prerequisites; all eligibility refusals precede gateway mutations,
+and explicitly unallowlisted IDs are refused before discovery.
+
+The shared mutation tools retain REAL-compatible numeric prices and optional
+identity fields in their combined schema. The paper branch strictly requires
+caller-supplied tokens and decimal-string prices at runtime, before admission;
+numeric paper prices are never converted. Operator recovery is available only
+through stateless streamable HTTP with a distinct bearer capability. SSE and stdio
+refuse recovery acknowledgements because they cannot establish that per-request
+operator capability safely.
+
+Secret-file constraints preclude modifying configuration environment files.
+The complete non-secret variable template and operator procedures are instead in
+`docs/paper-execution.md`, linked from the deployment and state guides and README.

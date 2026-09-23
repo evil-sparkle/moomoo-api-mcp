@@ -11,8 +11,13 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
+from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.trade_service import TradeService
-from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
+from moomoo_mcp.services.trading_policy import (
+    InstrumentFacts,
+    TradingMode,
+    TradingPolicy,
+)
 from tests.conftest import call_mcp_tool
 
 # Larger than 2**53: a client that parsed this as a number would round it.
@@ -301,28 +306,76 @@ class TestPolicyThroughMcpDispatch:
         assert trade_ctx.method_calls == []
 
     @pytest.mark.asyncio
-    async def test_simulate_mode_permits_a_simulate_write(
-        self, mcp_app_context, trade_ctx
+    @pytest.mark.parametrize("mode", [TradingMode.SIMULATE, TradingMode.REAL])
+    async def test_configured_paper_journal_permits_a_simulate_write(
+        self, mcp_app_context, trade_ctx, tmp_path, mode
     ):
-        mcp_app_context.trade_service = self._live_trade_service(
-            trade_ctx, TradingMode.SIMULATE
+        store = ExecutionStore(tmp_path / "paper.sqlite3", create=True)
+        trade_ctx.get_acc_list.return_value = (
+            0,
+            pd.DataFrame(
+                [{"acc_id": 456, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]}]
+            ),
         )
-
-        result = await call_mcp_tool(
-            mcp_app_context,
-            "place_order",
-            {
-                "code": "US.AAPL",
-                "price": 1.0,
-                "qty": 1,
-                "trd_side": "BUY",
-                "trd_env": "SIMULATE",
-                "acc_id": "456",
-            },
+        service = TradeService(
+            policy=TradingPolicy(mode),
+            execution_store=store,
+            simulated_account_allowlist=frozenset({456}),
+            instrument_lookup=lambda codes: [
+                InstrumentFacts(
+                    code=codes[0], classification="STOCK", monetary_multiplier=1.0
+                )
+            ],
         )
+        service.trade_ctx = trade_ctx
+        mcp_app_context.trade_service = service
+        try:
+            result = await call_mcp_tool(
+                mcp_app_context,
+                "place_order",
+                {
+                    "code": "US.AAPL",
+                    "price": "1",
+                    "qty": 1,
+                    "trd_side": "BUY",
+                    "trd_env": "SIMULATE",
+                    "acc_id": "456",
+                    "operation_id": "paper-operation",
+                    "admission_epoch": store.epoch,
+                },
+            )
+            assert result.json["receipt"]["order_id"] == "1"
+            assert trade_ctx.place_order.call_args.kwargs["trd_env"] == "SIMULATE"
+            row = store.lookup("paper-operation")
+            assert row is not None and row["broker_order_id"] == "1"
+        finally:
+            service.close()
 
-        assert result.json["order_id"] == "1"
-        assert trade_ctx.place_order.call_args.kwargs["trd_env"] == "SIMULATE"
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", [TradingMode.SIMULATE, TradingMode.REAL])
+    async def test_missing_paper_journal_refuses_a_simulate_write(
+        self, mcp_app_context, trade_ctx, mode
+    ):
+        mcp_app_context.trade_service = self._live_trade_service(trade_ctx, mode)
+
+        with pytest.raises(Exception) as excinfo:
+            await call_mcp_tool(
+                mcp_app_context,
+                "place_order",
+                {
+                    "code": "US.AAPL",
+                    "price": "1",
+                    "qty": 1,
+                    "trd_side": "BUY",
+                    "trd_env": "SIMULATE",
+                    "acc_id": "456",
+                    "operation_id": "paper-operation",
+                    "admission_epoch": "epoch",
+                },
+            )
+
+        assert "Persistent paper journal is not configured" in str(excinfo.value)
+        assert trade_ctx.method_calls == []
 
     @pytest.mark.asyncio
     async def test_simulate_mode_refuses_a_real_write(self, mcp_app_context, trade_ctx):
@@ -585,3 +638,26 @@ class TestComboPreviewThroughMcp:
         )
 
         assert all(result.structured[field] is None for field in self.IMPACT_COLUMNS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["place_order", "modify_order"])
+@pytest.mark.parametrize("quantity", [True, 1.5, "2"])
+async def test_mutation_schema_does_not_coerce_quantities(
+    call_tool, mock_trade_service, tool, quantity
+):
+    arguments = {
+        "qty": quantity,
+        "price": "1.10",
+        "trd_env": "SIMULATE",
+        "operation_id": "test-token",
+        "admission_epoch": "test-epoch",
+    }
+    if tool == "place_order":
+        arguments.update(code="US.AAPL", trd_side="BUY")
+    else:
+        arguments.update(order_id="77", modify_order_op="NORMAL")
+    with pytest.raises(Exception) as refusal:
+        await call_tool(tool, arguments)
+    assert "qty" in str(refusal.value)
+    getattr(mock_trade_service, tool).assert_not_called()

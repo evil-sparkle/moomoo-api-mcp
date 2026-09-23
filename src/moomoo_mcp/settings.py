@@ -83,6 +83,11 @@ class Settings:
     transport: str
     auth_token: str
     allow_unauthenticated_http: bool
+    simulated_account_allowlist: frozenset[int] = frozenset()
+    journal_path: str | None = None
+    create_journal: bool = False
+    journal_lock_wait_ms: int = 5000
+    operator_token: str | None = None
 
     @property
     def has_trade_credential(self) -> bool:
@@ -191,6 +196,64 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         env.get(ENV_ALLOW_UNAUTHENTICATED_HTTP) or ""
     ).strip() == "1"
 
+    operator_token = (env.get("MCP_OPERATOR_TOKEN") or "").strip() or None
+    if operator_token and operator_token == auth_token:
+        raise TradingModeConfigError(
+            "MCP_OPERATOR_TOKEN must differ from MCP_AUTH_TOKEN"
+        )
+    allowlist: set[int] = set()
+    journal_path = None
+    create_journal = False
+    lock_wait = 5000
+    if policy.mode is not TradingMode.READ_ONLY:
+        raw_ids = (env.get("MOOMOO_SIMULATED_ACC_IDS") or "").strip()
+        if raw_ids:
+            for item in raw_ids.split(","):
+                item = item.strip()
+                if (
+                    not item
+                    or not all(c in "0123456789" for c in item)
+                    or int(item) <= 0
+                ):
+                    raise TradingModeConfigError(
+                        "MOOMOO_SIMULATED_ACC_IDS must list positive decimal "
+                        "account IDs"
+                    )
+                allowlist.add(int(item))
+        journal_path = (env.get("MOOMOO_JOURNAL_PATH") or "").strip() or None
+        creation = (env.get("MOOMOO_CREATE_JOURNAL") or "0").strip()
+        if creation not in {"0", "1"}:
+            raise TradingModeConfigError("MOOMOO_CREATE_JOURNAL must be 0 or 1")
+        create_journal = creation == "1"
+        raw_wait = (env.get("MOOMOO_JOURNAL_LOCK_WAIT_MS") or "5000").strip()
+        if (
+            not raw_wait.isascii()
+            or not raw_wait.isdecimal()
+            or not 1 <= int(raw_wait) <= 60000
+        ):
+            raise TradingModeConfigError(
+                "MOOMOO_JOURNAL_LOCK_WAIT_MS must be between 1 and 60000"
+            )
+        lock_wait = int(raw_wait)
+        if (
+            policy.mode is TradingMode.SIMULATE
+            or journal_path
+            or allowlist
+            or create_journal
+        ):
+            if not allowlist:
+                raise TradingModeConfigError(
+                    "MOOMOO_SIMULATED_ACC_IDS is required for paper execution"
+                )
+            if not journal_path:
+                raise TradingModeConfigError(
+                    "MOOMOO_JOURNAL_PATH is required for paper execution"
+                )
+            if _load_trading_market(env) not in {"US", "NONE"}:
+                raise TradingModeConfigError(
+                    "MOOMOO_TRADING_MARKET must be US or NONE for paper execution"
+                )
+
     return Settings(
         opend_host=(env.get(ENV_OPEND_HOST) or "").strip() or DEFAULT_HOST,
         opend_port=_load_port(env),
@@ -202,6 +265,11 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         transport=transport,
         auth_token=auth_token,
         allow_unauthenticated_http=allow_unauthenticated,
+        simulated_account_allowlist=frozenset(allowlist),
+        journal_path=journal_path,
+        create_journal=create_journal,
+        journal_lock_wait_ms=lock_wait,
+        operator_token=operator_token,
     )
 
 

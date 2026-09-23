@@ -7,7 +7,11 @@ otherwise). Tested on Ubuntu 24.04 LTS; other Linux distributions with rootless
 Docker should work but are untested.
 
 For what state the stack holds and what each restart costs, see
-[`state-and-restarts.md`](state-and-restarts.md).
+[`state-and-restarts.md`](state-and-restarts.md). For persistent paper execution
+in SIMULATE or REAL mode, follow [paper-execution.md](paper-execution.md), including
+the optional `docker-compose.paper.yml` overlay, explicit initialization and
+recovery review. Preserve the same dedicated paper volume when switching modes;
+the base deployment below remains READ_ONLY by default.
 
 **One image, two runtime constraints.** The image carries both the OpenD gateway and the MCP server, started by a supervisor that owns them (`src/moomoo_mcp/supervisor.py`). The server half is ordinary — pull and run. OpenD is not: the first start must happen interactively so you can answer the device-verification prompt and "remember the password". Until that token lands in `opend-data`, no unattended start can complete login.
 

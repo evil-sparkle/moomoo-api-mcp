@@ -56,7 +56,9 @@ context: |
     and reconnect, just-in-time unlock, the ARMED/HALTED execution state), `trading_policy.py` (the
     `MOOMOO_TRADING_MODE` gate), `market_data_service.py`, `health.py` (bounded
     probes), `sdk_response.py` (narrowing `(ret, data)`), `validation.py`,
-    `clock.py`.
+    `clock.py`; `execution_identity.py` (paper token and canonical identity),
+    `execution_store.py` (SQLite durability and process lock), and
+    `paper_execution.py` (paper admission, dispatch and recovery).
   - `tools/`: MCP tools by area (`account.py`, `market_data.py`, `trading.py`,
     `system.py`), plus `offload.py` (running blocking SDK calls off the event
     loop), `serialization.py` (identifiers as strings at the response boundary)
@@ -87,6 +89,13 @@ context: |
   - **The trading mode is enforced before the gateway.** `READ_ONLY`, `SIMULATE`
     or `REAL` (`MOOMOO_TRADING_MODE`) decides, in the service layer, which writes
     and unlocks are refused. A configured password never changes the mode.
+  - **Paper execution is persistent in both trading modes.** SIMULATE orders use
+    the same dedicated SQLite journal whether the deployment mode is SIMULATE or
+    REAL. READ_ONLY never opens it. Real-order journaling is deferred. Unknown
+    retired-epoch tokens fail closed, and recovery review gates new admissions.
+    Operator acknowledgement requires its separate streamable-HTTP credential;
+    SSE and stdio do not support operator recovery. See `execution-journal` and
+    `docs/paper-execution.md`.
   - **Trading commands are never replayed.** A lost order response is not treated
     as a result, and recovery never resubmits the command.
 
@@ -105,6 +114,11 @@ context: |
   - The MCP endpoint is published on host loopback, `127.0.0.1:8000`.
   - The `opend-data` volume (`/home/opend/.com.moomoo.OpenD`, uid 10001) holds the
     device authorization and survives container restarts and recreation.
+  - The optional `docker-compose.paper.yml` overlay adds `execution-data` at
+    `/var/lib/moomoo-mcp/data`, owned by uid 10001, for paper execution. Keep its
+    volume identity across SIMULATE/REAL mode changes. One executor holds the
+    process lock; SQLite online backup is the preferred consistent backup method.
+    A released process lock alone does not make a crash-left main-file copy safe.
 
   Recovery policy (`supervisor.py`):
 
@@ -129,6 +143,8 @@ context: |
   | `openspec/specs/container-deployment` | Packaging, loopback binding, supervision policy, volume persistence, non-root execution, download integrity |
   | `openspec/specs/transport-sessions` | Stateless Streamable HTTP, process-owned connections, transport-level restart semantics |
   | `openspec/specs/trade-unlock`, `trading-policy` | Mode-dependent authorization, startup and just-in-time unlock, reconnect locking |
+  | `openspec/specs/execution-journal` | Paper identity, durable dispatch/outcome, recovery and operator review |
+  | `docs/paper-execution.md` | Optional paper deployment, persistent storage, backup and recovery procedures |
   | Other `openspec/specs/*` | One capability per tool family |
   | `docs/state-and-restarts.md` | Operator view: what state lives where, what each restart costs |
   | `docs/deploy-vps.md`, `docs/rootless-docker.md` | Operator commands, upgrade and recovery procedures |
@@ -151,7 +167,11 @@ context: |
   - CI runs the same lint, type-check and test steps as the pre-commit hooks,
     followed by the container smoke test. The smoke test swaps OpenD for
     `tests/fixtures/opend_stub.py`, so it proves topology and restart policy, not
-    a broker login.
+    a broker login. CI then runs `scripts/test-paper-container.sh` using isolated
+    containers and volumes, covering persistence, process locking, consistent
+    backup/restore, dirty rollback journals and READ_ONLY without journal storage.
+    Live provider response-loss and ZeroClaw/Telegram retry validation remain a
+    separate follow-up; automated completion does not imply those checks passed.
   - The OpenSpec CLI is the npm package `@fission-ai/openspec`, not the unscoped
     `openspec`. Use the version CI pins.
   - Tests mock the SDK. None of them needs a running OpenD.

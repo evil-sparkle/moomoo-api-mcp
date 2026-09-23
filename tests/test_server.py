@@ -1,6 +1,7 @@
 """Server startup: configuration, connections and the transport it serves."""
 
 import os
+from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -221,8 +222,16 @@ class TestStartupTradingMode:
         assert captured["trading_market"] == market
 
     @pytest.mark.asyncio
-    async def test_configured_mode_reaches_the_service(self) -> None:
-        captured, _ = await self._start({ENV_VAR: "SIMULATE"})
+    async def test_configured_mode_reaches_the_service(self, tmp_path) -> None:
+        captured, _ = await self._start(
+            {
+                ENV_VAR: "SIMULATE",
+                "MOOMOO_SIMULATED_ACC_IDS": "123",
+                "MOOMOO_JOURNAL_PATH": str(tmp_path / "paper.sqlite3"),
+                "MOOMOO_CREATE_JOURNAL": "1",
+            }
+        )
+        captured["execution_store"].close()
 
         assert captured["policy"].mode is TradingMode.SIMULATE
 
@@ -239,13 +248,20 @@ class TestStartupTradingMode:
         assert trade_service.policy.mode is TradingMode.READ_ONLY
 
     @pytest.mark.asyncio
-    async def test_password_does_not_unlock_in_simulate(self) -> None:
-        _, trade_service = await self._start(
-            {ENV_VAR: "SIMULATE", "MOOMOO_TRADE_PASSWORD": "hunter2"}
+    async def test_password_does_not_unlock_in_simulate(self, tmp_path) -> None:
+        captured, trade_service = await self._start(
+            {
+                ENV_VAR: "SIMULATE",
+                "MOOMOO_TRADE_PASSWORD": "hunter2",
+                "MOOMOO_SIMULATED_ACC_IDS": "123",
+                "MOOMOO_JOURNAL_PATH": str(tmp_path / "paper.sqlite3"),
+                "MOOMOO_CREATE_JOURNAL": "1",
+            }
         )
 
         trade_service.unlock_trade.assert_not_called()
         assert trade_service.policy.mode is TradingMode.SIMULATE
+        captured["execution_store"].close()
 
     @pytest.mark.asyncio
     async def test_real_mode_with_a_password_does_not_unlock_at_startup(
@@ -441,7 +457,9 @@ class TestFastMCPSecurity:
 
             main()
 
-            mock_create.assert_called_once_with(auth_token="my-secret-token")
+            mock_create.assert_called_once_with(
+                auth_token="my-secret-token", operator_token=None
+            )
             mock_uvicorn_run.assert_called_once_with(
                 mock_app, host="127.0.0.1", port=8000
             )
@@ -539,7 +557,17 @@ class TestFastMCPSecurity:
         mock_uvicorn_run.assert_called_once()
         assert "without authentication" in caplog.text
 
-    @pytest.mark.parametrize("env", [REAL_ENV, {ENV_VAR: "SIMULATE"}])
+    @pytest.mark.parametrize(
+        "env",
+        [
+            REAL_ENV,
+            {
+                ENV_VAR: "SIMULATE",
+                "MOOMOO_SIMULATED_ACC_IDS": "123",
+                "MOOMOO_JOURNAL_PATH": "/unused/paper.sqlite3",
+            },
+        ],
+    )
     def test_the_opt_out_is_refused_in_a_writing_mode(self, env) -> None:
         from moomoo_mcp.server import main
 
@@ -580,6 +608,12 @@ class TestStatelessStreamableHTTP:
         """Reset FastMCP session manager and mock services for each test."""
         server.mcp._session_manager = None
         mock_services = MagicMock()
+        journal_future = Future()
+        journal_future.set_result({"state": "DISABLED"})
+        mock_services.trade_service.start_journal_health.return_value = journal_future
+        mock_services.trade_service.collect_journal_health.return_value = {
+            "state": "DISABLED"
+        }
         mock_check = MagicMock()
         mock_check.futures = ()
         mock_check.remaining.return_value = 1.0
