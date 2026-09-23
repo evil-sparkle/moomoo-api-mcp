@@ -349,6 +349,16 @@ commit (restarting the previous deployment if something had been started) and
 exits non-zero. If the rollback's own restart fails, the script says so and the
 stack needs a manual `scripts/compose-prod.sh up -d`. Verification does not
 prove OpenD login.
+After verification succeeds, local image cleanup keeps the current container's
+image and the image used by the container before deployment, including all
+repository tags pointing to either image. It removes older tags only from this
+registry's `moomoo-api-mcp` repository on the rootless Docker context, without
+forced deletion or a global prune. Cleanup is skipped for `--prepare`, failed
+deployments, an unidentified previous container (including the first deploy),
+and redeploys using the same image, which preserve the earlier rollback image.
+Cleanup errors warn without failing a verified deployment. Other repositories,
+untagged images, and volumes are untouched.
+
 Confirm login and MCP availability after each deployment; container startup
 alone is not a successful authenticated session.
 
