@@ -30,3 +30,15 @@ split from Stage 2 development on 2026-09-23, not a record of completed tests.
 - [ ] 2.4 Publish a dated verification record distinguishing observed results,
   limitations and incomplete checks. Verify all claims against captured evidence
   and retain any unresolved operation instead of resetting its journal.
+
+- [ ] 2.5 Under separately authorized paper-test bounds, submit a quantity reduction
+  followed immediately by a price-only modification (`M02` visibility timing).
+  Separate the SDK acknowledgement from timestamped current/history order reads;
+  record when the new total quantity and price become visible. For the 100 -> 50
+  share example (or a separately approved smaller equivalent), prove the second
+  mutation never restores the old quantity. If reads lag acknowledgement, verify a
+  pre-dispatch refusal with no second SDK call/marker, then verify a newly authorized
+  intent after the requested state becomes visible. Preserve retries and refused
+  tokens unchanged. Repeat across a process restart while visibility is pending,
+  and measure the reverse price-change then quantity-only case. Do not infer this
+  timing from the adversarial double or claim provider acceptance without evidence.

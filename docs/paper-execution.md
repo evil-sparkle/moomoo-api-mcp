@@ -163,3 +163,29 @@ Live paper-provider acceptance, response-loss recovery against OpenD, retention
 measurement, and ZeroClaw/Telegram retry propagation belong to the separate
 `validate-paper-execution-provider` follow-up. Automated development completion
 and archive do not claim those live results.
+
+## Dependent modifications
+
+A modification acknowledgement does not prove its new order fields are visible to
+queries. Before another modification to that same account/order, a fresh order
+observation must match the earlier acknowledged request's total quantity and price.
+Otherwise the dependent operation is durably REFUSED before dispatch, with no SDK
+mutation. Retrying that refused operation returns its refusal; it does not become a
+pending order or automatically dispatch when observations catch up. A later,
+separately authorized intent uses a new operation ID. Never replace an uncertain
+operation's token. Matching retries of the original acknowledged modification also
+never redispatch.
+
+This visibility requirement persists across restarts. It is specific to dependent
+modifications; reads, unrelated orders and individual cancellation remain available
+subject to their existing safety and recovery gates. Divergent external edits or
+provider price normalization can keep dependent modifications refused; the server
+does not guess a replacement merge. Actual provider visibility timing remains a
+live-validation task.
+
+Journal schema 2 adds durable modification-observation tracking. Existing schema 1
+journals upgrade atomically without removing operations or changing their original
+admission epochs. Their acknowledged modifications conservatively start unobserved;
+conflicting old unobserved changes can therefore keep dependent modifications
+refused. Older schema-1 executors refuse the upgraded journal rather than ignoring
+this protection. Keep a consistent backup before upgrading.

@@ -34,3 +34,11 @@ Requires the completed Stage 2 binary, a separately authorized paper environment
 its original journal, an operator capability, and access to the intended caller
 chain. No REAL orders, deployment, account reset, or journal replacement is
 authorized by this plan. Evidence belongs in this change's verification record.
+
+## Modification visibility acceptance
+
+Include the PR review's acknowledgement-versus-applied-state timing case: quantity
+reduction followed immediately by a price-only modification, plus the reverse field
+order and a restart during delayed observation. Record the actual provider timing
+and verify dependent refusal rather than stale merging. The new adversarial double
+proves the guard's behavior only; it does not establish provider visibility timing.

@@ -172,6 +172,9 @@ class PaperExecution:
             "error": row.get("error"),
             "submission_state": "durably_stored",
             "observations": json.loads(row["evidence"]) if row.get("evidence") else [],
+            "modification_observed": bool(row.get("modification_observed"))
+            if row["kind"] == "MODIFY"
+            else None,
             "accounted_facts": json.loads(row["accounted_facts"])
             if row.get("accounted_facts")
             else None,
@@ -216,7 +219,8 @@ class PaperExecution:
             self._late_identity[operation_id] = row
             try:
                 self.ready()
-                merged = self._prepare(kind, params, account)
+                observed_modifications: list[str] = []
+                merged = self._prepare(kind, params, account, observed_modifications)
                 self.store.mark_dispatch(operation_id, merged)
             except Exception as exc:
                 with not_sent("paper " + kind):
@@ -278,9 +282,14 @@ class PaperExecution:
                         f"local conversion failure: {exc}; do not resend"
                     ),
                     reason="RECEIPT_UNREADABLE",
+                    observed_modifications=observed_modifications,
                 )
             return self._finish(
-                operation_id, "ACKNOWLEDGED", "ACKNOWLEDGED", receipt=receipt
+                operation_id,
+                "ACKNOWLEDGED",
+                "ACKNOWLEDGED",
+                receipt=receipt,
+                observed_modifications=observed_modifications,
             )
 
     def _finish(
@@ -292,6 +301,7 @@ class PaperExecution:
         receipt: dict | None = None,
         error: str | None = None,
         reason: str | None = None,
+        observed_modifications: list[str] | None = None,
     ) -> dict:
         committed = False
         try:
@@ -302,6 +312,7 @@ class PaperExecution:
                 receipt=receipt,
                 error=error,
                 reason=reason,
+                observed_modifications=observed_modifications,
             )
             committed = True
             row = self.store.lookup(operation_id)
@@ -321,7 +332,32 @@ class PaperExecution:
             self._late_failure[operation_id] = result
             return result
 
-    def _prepare(self, kind: str, params: dict, account: int) -> dict:
+    def _require_modification_visibility(self, account: int, order: dict) -> list[str]:
+        pending = self.store.unobserved_modifications(account, str(order["order_id"]))
+        for previous in pending:
+            expected = json.loads(previous["merged_request"])
+            try:
+                quantity = Decimal(str(order.get("qty")))
+                price = Decimal(str(order.get("price")))
+                matches = (
+                    quantity.is_finite()
+                    and price.is_finite()
+                    and quantity == Decimal(str(expected["qty"]))
+                    and price == Decimal(str(expected["price"]))
+                )
+            except (ValueError, ArithmeticError):
+                matches = False
+            if not matches:
+                raise ValueError(
+                    "Prior acknowledged paper modification "
+                    f"{previous['operation_id']} is not yet observed in broker "
+                    "quantity/price; dependent modification refused. No order was sent."
+                )
+        return [previous["operation_id"] for previous in pending]
+
+    def _prepare(
+        self, kind: str, params: dict, account: int, observed_modifications: list[str]
+    ) -> dict:
         ctx = self.service.trade_ctx
         if ctx is None:
             raise ValueError("Trade context not connected")
@@ -341,8 +377,12 @@ class PaperExecution:
                 raise ValueError(
                     "Target order is outside verified DAY/regular-hours paper scope"
                 )
-            if kind == "MODIFY" and order.get("order_status") in TERMINAL_BROKER:
-                raise ValueError("Target order is terminal")
+            if kind == "MODIFY":
+                if order.get("order_status") in TERMINAL_BROKER:
+                    raise ValueError("Target order is terminal")
+                observed_modifications.extend(
+                    self._require_modification_visibility(account, order)
+                )
         code = str(order.get("code", ""))
         if not code.startswith("US.") or order.get("trd_side") not in {"BUY", "SELL"}:
             raise ValueError("Target is outside US equity paper scope")

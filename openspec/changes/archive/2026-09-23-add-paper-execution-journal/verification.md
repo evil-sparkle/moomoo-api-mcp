@@ -85,3 +85,27 @@ uses one stable named paper volume without changing the OpenD authorization moun
 After-close retention, live lifecycle checks, controlled response-loss recovery,
 and ZeroClaw/Telegram identity propagation remain incomplete in the active
 follow-up. Automated fake-broker and container results do not verify those paths.
+
+## PR review adaptation — acknowledgement versus observed modification
+
+The review of `886db36` recommended separating the mutation acknowledgement from
+later authoritative order visibility. `DelayedObservationBroker` now retains the
+old order fields after an acknowledgement-only response, then publishes the new
+state independently. Seven additional cases cover both dependent field directions,
+with and without restart, cancellation availability, schema-1 migration, and a
+failed successor preparation followed by a regressed observation.
+
+Dependent modifications refuse before their dispatch marker while quantity/price
+still disagree with the earlier acknowledged request. The guard persists in schema
+2; schema 1 upgrades atomically and preserves recorded operations and epochs.
+A predecessor's guard retires only in the transaction that durably acknowledges its
+successor. Refused tokens and acknowledged tokens remain non-replaying on retry.
+The double's no-transaction-across-I/O probe now allows a bounded wait for another
+thread's legitimate short admission transaction, avoiding a race that conflated
+that transaction with one spanning the calling thread's gateway invocation.
+
+Updated local validation: **1196 passed, 1 skipped, 72 subtests passed**, Ruff lint
+and formatting passed, basedpyright zero errors/warnings, all 26 active/main
+OpenSpec items passed strict validation, and C01–C04 passed against rebuilt
+application/replacement images. The live-provider follow-up's task 2.5 records the
+unverified timing experiment; these results do not establish provider behavior.
