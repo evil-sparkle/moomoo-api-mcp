@@ -216,18 +216,13 @@ class TestAccountToolsThroughMcp:
     async def test_account_summary_covers_nested_positions(
         self, call_tool, mock_trade_service
     ):
-        mock_trade_service.resolve_read_account.return_value = (
-            "SIMULATE",
-            ACCOUNT_ID,
-        )
-        mock_trade_service.get_assets.return_value = {
-            "acc_id": ACCOUNT_ID,
-            "cash": 500.0,
+        mock_trade_service.get_account_summary.return_value = {
+            "assets": {"acc_id": ACCOUNT_ID, "cash": 500.0},
+            "positions": [
+                {"position_id": STRATEGY_ID, "combo_id": LEG_ID, "qty": 1},
+                {"position_id": None, "qty": 3},
+            ],
         }
-        mock_trade_service.get_positions.return_value = [
-            {"position_id": STRATEGY_ID, "combo_id": LEG_ID, "qty": 1},
-            {"position_id": None, "qty": 3},
-        ]
 
         result = await call_tool("get_account_summary", {"trd_env": "SIMULATE"})
 
@@ -238,14 +233,8 @@ class TestAccountToolsThroughMcp:
         assert payload["positions"][0]["combo_id"] == str(LEG_ID)
         assert payload["positions"][1]["position_id"] is None
         assert payload["positions"][1]["qty"] == 3
-        mock_trade_service.resolve_read_account.assert_called_once_with(
+        mock_trade_service.get_account_summary.assert_called_once_with(
             trd_env="SIMULATE", acc_id="0"
-        )
-        mock_trade_service.get_assets.assert_called_once_with(
-            trd_env="SIMULATE", acc_id=ACCOUNT_ID
-        )
-        mock_trade_service.get_positions.assert_called_once_with(
-            trd_env="SIMULATE", acc_id=ACCOUNT_ID
         )
 
     @pytest.mark.asyncio

@@ -504,11 +504,9 @@ async def get_orders(
       accessing their REAL trading account before proceeding.
     - Only use SIMULATE if the user explicitly requests it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. If the configured market scope exposes several,
-    call get_accounts and pass the exact returned string ID. Explicit IDs must
-    belong to the requested environment. Read resolution does not use the REAL
-    write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.
@@ -557,11 +555,9 @@ async def get_deals(
       accessing their REAL trading account before proceeding.
     - Only use SIMULATE if the user explicitly requests it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. If the configured market scope exposes several,
-    call get_accounts and pass the exact returned string ID. Explicit IDs must
-    belong to the requested environment. Read resolution does not use the REAL
-    write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.
@@ -604,11 +600,9 @@ async def get_history_orders(
       accessing their REAL trading account before proceeding.
     - Only use SIMULATE if the user explicitly requests it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. If the configured market scope exposes several,
-    call get_accounts and pass the exact returned string ID. Explicit IDs must
-    belong to the requested environment. Read resolution does not use the REAL
-    write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.
@@ -652,11 +646,9 @@ async def get_history_deals(
       accessing their REAL trading account before proceeding.
     - Only use SIMULATE if the user explicitly requests it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. If the configured market scope exposes several,
-    call get_accounts and pass the exact returned string ID. Explicit IDs must
-    belong to the requested environment. Read resolution does not use the REAL
-    write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.

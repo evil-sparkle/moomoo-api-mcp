@@ -792,6 +792,16 @@ class TradeService:
             "and use an explicit account ID."
         )
 
+    def get_account_summary(
+        self, trd_env: str = "REAL", acc_id: int | str = "0"
+    ) -> dict[str, Any]:
+        """Resolve once; SDK reads still validate membership and never use zero."""
+        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
+        return {
+            "assets": self._query_assets(trd_env, acc_id),
+            "positions": self._query_positions(trd_env, acc_id),
+        }
+
     def get_assets(
         self,
         trd_env: str = "SIMULATE",
@@ -811,6 +821,17 @@ class TradeService:
             Dictionary with asset information.
         """
         trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
+
+        return self._query_assets(trd_env, acc_id, refresh_cache, currency)
+
+    def _query_assets(
+        self,
+        trd_env: str,
+        acc_id: int,
+        refresh_cache: bool = False,
+        currency: str | None = None,
+    ) -> dict:
+        """Query assets for an already resolved account."""
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -862,6 +883,30 @@ class TradeService:
             List of position dictionaries.
         """
         trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
+
+        return self._query_positions(
+            trd_env,
+            acc_id,
+            code,
+            market,
+            pl_ratio_min,
+            pl_ratio_max,
+            refresh_cache,
+            show_option_strategy_view,
+        )
+
+    def _query_positions(
+        self,
+        trd_env: str,
+        acc_id: int,
+        code: str = "",
+        market: str = "",
+        pl_ratio_min: float | None = None,
+        pl_ratio_max: float | None = None,
+        refresh_cache: bool = False,
+        show_option_strategy_view: bool = False,
+    ) -> list[dict]:
+        """Query positions for an already resolved account."""
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")

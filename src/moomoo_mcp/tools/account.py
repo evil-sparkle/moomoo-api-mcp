@@ -77,11 +77,9 @@ async def get_account_summary(
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
-    than one market can be visible, so select an account with get_accounts and
-    pass its exact string ID. Explicit IDs must belong to the requested
-    environment. Read resolution does not use the REAL write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
@@ -97,29 +95,14 @@ async def get_account_summary(
         quantities remain numbers. Pass identifiers on unchanged, as strings.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
-    trd_env, resolved_acc_id = await run_blocking(
-        trade_service.resolve_read_account,
-        trd_env=trd_env,
-        acc_id=acc_id,
+    summary = await run_blocking(
+        trade_service.get_account_summary, trd_env=trd_env, acc_id=acc_id
     )
-
-    assets = await run_blocking(
-        trade_service.get_assets, trd_env=trd_env, acc_id=resolved_acc_id
-    )
-    positions = await run_blocking(
-        trade_service.get_positions, trd_env=trd_env, acc_id=resolved_acc_id
-    )
-
     await ctx.info(
-        f"Retrieved summary for {trd_env} account: {len(positions)} positions"
+        f"Retrieved summary for {trd_env} account: "
+        f"{len(summary['positions'])} positions"
     )
-
-    return serialize_identifiers(
-        {
-            "assets": assets,
-            "positions": positions,
-        }
-    )
+    return serialize_identifiers(summary)
 
 
 @mcp.tool()
@@ -142,11 +125,9 @@ async def get_assets(
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
-    than one market can be visible, so select an account with get_accounts and
-    pass its exact string ID. Explicit IDs must belong to the requested
-    environment. Read resolution does not use the REAL write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
@@ -196,11 +177,9 @@ async def get_positions(
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
-    than one market can be visible, so select an account with get_accounts and
-    pass its exact string ID. Explicit IDs must belong to the requested
-    environment. Read resolution does not use the REAL write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL').
@@ -270,11 +249,9 @@ async def get_max_tradable(
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
-    than one market can be visible, so select an account with get_accounts and
-    pass its exact string ID. Explicit IDs must belong to the requested
-    environment. Read resolution does not use the REAL write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         order_type: Order type (e.g., 'NORMAL', 'LIMIT', 'MARKET').
@@ -342,11 +319,9 @@ async def get_cash_flow(
       turns a read that would have worked into a policy error.
     - If user wants SIMULATE account, they must explicitly request it.
 
-    Account-bound reads resolve acc_id='0' only when exactly one discovered
-    account matches trd_env. With the default MOOMOO_TRADING_MARKET=NONE, more
-    than one market can be visible, so select an account with get_accounts and
-    pass its exact string ID. Explicit IDs must belong to the requested
-    environment. Read resolution does not use the REAL write allowlist.
+    Use an exact string ID from get_accounts for the requested trd_env.
+    acc_id='0' requires exactly one matching account; otherwise the read fails.
+    REAL write allowlists do not restrict reads.
 
     Args:
         clearing_date: Filter by clearing date ('YYYY-MM-DD'). Some brokers

@@ -342,21 +342,9 @@ class TestGetAccounts:
             RET_OK,
             pd.DataFrame(
                 [
-                    {
-                        "acc_id": 101,
-                        "trd_env": "SIMULATE",
-                        "trdmarket_auth": ["HK"],
-                    },
-                    {
-                        "acc_id": 202,
-                        "trd_env": "SIMULATE",
-                        "trdmarket_auth": ["US"],
-                    },
-                    {
-                        "acc_id": 303,
-                        "trd_env": "REAL",
-                        "trdmarket_auth": ["HK", "US"],
-                    },
+                    {"acc_id": 101, "trd_env": "SIMULATE", "trdmarket_auth": ["HK"]},
+                    {"acc_id": 202, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]},
+                    {"acc_id": 303, "trd_env": "REAL", "trdmarket_auth": ["HK", "US"]},
                     {"acc_id": 404, "trd_env": "SIMULATE"},
                 ]
             ),
@@ -510,7 +498,7 @@ class TestReadAccountResolution:
                 "1111111111111111789",
             ),
             (
-                [{"acc_id": 456, "trd_env": "SIMULATE"}],
+                [{"acc_id": 2222222222222222456, "trd_env": "SIMULATE"}],
                 "REAL",
                 "2222222222222222456",
             ),
@@ -556,19 +544,28 @@ class TestReadAccountResolution:
     ("service_method", "arguments", "sdk_method"),
     ACCOUNT_READ_ENDPOINTS,
 )
-def test_every_account_read_resolves_zero_to_a_concrete_id(
+@pytest.mark.parametrize("requested_id", ["0", "9007199254740993"])
+def test_every_account_read_forwards_a_concrete_exact_id(
     trade_service_with_mock,
     mock_trade_ctx,
     service_method,
     arguments,
     sdk_method,
+    requested_id,
 ):
+    account_id = 9007199254740993
+    mock_trade_ctx.get_acc_list.return_value = (
+        RET_OK,
+        pd.DataFrame([{"acc_id": account_id, "trd_env": "SIMULATE"}]),
+    )
     getattr(mock_trade_ctx, sdk_method).return_value = (RET_OK, pd.DataFrame())
 
-    getattr(trade_service_with_mock, service_method)(**arguments)
+    getattr(trade_service_with_mock, service_method)(
+        **{**arguments, "acc_id": requested_id}
+    )
 
     sdk_arguments = getattr(mock_trade_ctx, sdk_method).call_args.kwargs
-    assert sdk_arguments["acc_id"] == 123
+    assert sdk_arguments["acc_id"] == account_id
     assert sdk_arguments["trd_env"] == "SIMULATE"
 
 
@@ -620,29 +617,24 @@ def test_every_account_read_propagates_discovery_failure_before_query(
 
 
 @pytest.mark.parametrize(
-    ("service_method", "arguments", "sdk_method"),
-    ACCOUNT_READ_ENDPOINTS,
+    "account_ids, requested_id", [([], "0"), ([123, 789], "0"), ([123], "789")]
 )
-def test_every_account_read_forwards_exact_explicit_id_and_environment(
-    trade_service_with_mock,
-    mock_trade_ctx,
-    service_method,
-    arguments,
-    sdk_method,
+def test_summary_refuses_unresolved_account_before_detail_queries(
+    trade_service_with_mock, mock_trade_ctx, account_ids, requested_id
 ):
-    account_id = 9007199254740993
     mock_trade_ctx.get_acc_list.return_value = (
         RET_OK,
-        pd.DataFrame([{"acc_id": account_id, "trd_env": "SIMULATE"}]),
+        pd.DataFrame(
+            [
+                {"acc_id": account_id, "trd_env": "SIMULATE"}
+                for account_id in account_ids
+            ]
+        ),
     )
-    getattr(mock_trade_ctx, sdk_method).return_value = (RET_OK, pd.DataFrame())
-    explicit_arguments = {**arguments, "acc_id": str(account_id)}
-
-    getattr(trade_service_with_mock, service_method)(**explicit_arguments)
-
-    sdk_arguments = getattr(mock_trade_ctx, sdk_method).call_args.kwargs
-    assert sdk_arguments["acc_id"] == account_id
-    assert sdk_arguments["trd_env"] == "SIMULATE"
+    with pytest.raises(ValueError):
+        trade_service_with_mock.get_account_summary("SIMULATE", requested_id)
+    mock_trade_ctx.accinfo_query.assert_not_called()
+    mock_trade_ctx.position_list_query.assert_not_called()
 
 
 class TestGetAssets:

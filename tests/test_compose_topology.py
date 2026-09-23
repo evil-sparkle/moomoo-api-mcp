@@ -30,6 +30,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,34 +46,51 @@ PROD_ENV = {
 }
 
 
-def _compose_available() -> bool:
-    """Whether the Compose CLI is usable. It needs no daemon to render config."""
+def _compose_command(env: dict[str, str]) -> list[str]:
+    """Find Compose without loading the user's Docker configuration."""
+    commands = []
     standalone = shutil.which("docker-compose")
-    if standalone is not None:
+    if standalone:
+        commands.append([standalone])
+    # Resolve the user plugin executable before isolating HOME/DOCKER_CONFIG.
+    # Only the executable is accessed; config.json is never read or copied.
+    config = Path(os.environ.get("DOCKER_CONFIG", str(Path.home() / ".docker")))
+    plugin = config / "cli-plugins" / "docker-compose"
+    if plugin.is_file() and os.access(plugin, os.X_OK):
+        commands.append([str(plugin)])
+    docker = shutil.which("docker")
+    if docker:
+        commands.append([docker, "compose"])
+    for command in commands:
         probe = subprocess.run(
-            [standalone, "version"],
+            [*command, "version", "--short"],
             capture_output=True,
+            text=True,
             cwd=ROOT,
+            env=env,
         )
-        return probe.returncode == 0
-    if shutil.which("docker") is None:
-        return False
-    probe = subprocess.run(
-        ["docker", "compose", "version"],
-        capture_output=True,
-        cwd=ROOT,
-    )
-    return probe.returncode == 0
+        major = probe.stdout.strip().lstrip("v").split(".", 1)[0]
+        if probe.returncode == 0 and major.isdecimal() and int(major) >= 2:
+            return command
+    message = "Docker Compose v2 or newer is unavailable in the isolated environment"
+    if os.environ.get("CI"):
+        raise AssertionError(message)
+    raise unittest.SkipTest(message)
 
 
 def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
     """Return the configuration Compose actually resolves for these files."""
-    standalone = shutil.which("docker-compose")
-    command = [standalone] if standalone else ["docker", "compose"]
     files: list[str] = []
     for overlay in overlays:
         files += ["-f", overlay]
     with tempfile.TemporaryDirectory(prefix="moomoo-compose-config-") as docker_config:
+        isolated_env = {
+            "PATH": os.environ.get("PATH", os.defpath),
+            "HOME": str(ROOT),
+            "DOCKER_CONFIG": docker_config,
+            **(env or {}),
+        }
+        command = _compose_command(isolated_env)
         result = subprocess.run(
             # An empty env file and isolated HOME/DOCKER_CONFIG keep these
             # topology checks independent of private local configuration.
@@ -86,12 +106,7 @@ def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
             capture_output=True,
             text=True,
             cwd=ROOT,
-            env={
-                "PATH": os.environ.get("PATH", os.defpath),
-                "HOME": str(ROOT),
-                "DOCKER_CONFIG": docker_config,
-                **(env or {}),
-            },
+            env=isolated_env,
         )
     if result.returncode != 0:
         raise AssertionError(
@@ -100,28 +115,78 @@ def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
     return json.loads(result.stdout)
 
 
+@pytest.mark.parametrize("custom_config", [False, True])
+def test_user_plugin_survives_config_isolation(tmp_path, monkeypatch, custom_config):
+    user_home = tmp_path / "user"
+    config = tmp_path / "custom" if custom_config else user_home / ".docker"
+    plugin = config / "cli-plugins" / "docker-compose"
+    plugin.parent.mkdir(parents=True)
+    plugin.touch()
+    plugin.chmod(0o700)
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.delenv("DOCKER_CONFIG", raising=False)
+    if custom_config:
+        monkeypatch.setenv("DOCKER_CONFIG", str(config))
+    monkeypatch.setenv("MOOMOO_TRADING_MARKET", "US")
+    monkeypatch.setattr(
+        shutil, "which", lambda name: "/bin/docker" if name == "docker" else None
+    )
+    with patch.object(subprocess, "run") as run:
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, "v2.40.0", ""),
+            subprocess.CompletedProcess([], 0, '{"services": {}}', ""),
+        ]
+        assert _render("docker-compose.yml") == {"services": {}}
+    probe, render = run.call_args_list
+    assert probe.args[0] == [str(plugin), "version", "--short"]
+    assert render.args[0][0] == str(plugin)
+    assert probe.kwargs["env"] == render.kwargs["env"]
+    assert render.kwargs["env"]["HOME"] != str(user_home)
+    assert render.kwargs["env"]["DOCKER_CONFIG"] != str(config)
+    assert "MOOMOO_TRADING_MARKET" not in render.kwargs["env"]
+    assert render.args[0][1:3] == ["--env-file", os.devnull]
+
+
+@pytest.mark.parametrize("standalone_version", [None, "1.29.2", "v2.40.0"])
+def test_compose_selection_uses_isolated_probe(
+    tmp_path, monkeypatch, standalone_version
+):
+    monkeypatch.setenv("DOCKER_CONFIG", str(tmp_path))
+    monkeypatch.setattr(shutil, "which", lambda name: "/bin/" + name)
+    isolated = {"HOME": str(tmp_path), "DOCKER_CONFIG": str(tmp_path)}
+    first = subprocess.CompletedProcess(
+        [], 0 if standalone_version else 1, standalone_version or "", ""
+    )
+    with patch.object(subprocess, "run") as run:
+        run.side_effect = [first, subprocess.CompletedProcess([], 0, "2.40.0", "")]
+        command = _compose_command(isolated)
+    assert command == (
+        ["/bin/docker-compose"]
+        if standalone_version == "v2.40.0"
+        else ["/bin/docker", "compose"]
+    )
+    assert all(call.kwargs["env"] == isolated for call in run.call_args_list)
+
+
+@pytest.mark.parametrize("ci", [False, True])
+def test_missing_compose_fails_in_ci_and_skips_locally(tmp_path, monkeypatch, ci):
+    monkeypatch.setenv("DOCKER_CONFIG", str(tmp_path))
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.delenv("CI", raising=False)
+    if ci:
+        monkeypatch.setenv("CI", "true")
+    with pytest.raises(AssertionError if ci else unittest.SkipTest):
+        _compose_command({"HOME": str(tmp_path), "DOCKER_CONFIG": str(tmp_path)})
+
+
 class ComposeTopologyTest(unittest.TestCase):
     """One container, serving one endpoint, with the gateway behind it."""
 
     @classmethod
     def setUpClass(cls):
-        if not _compose_available():
-            # Skipping in CI would defeat the point: this is the only check
-            # covering the compose file, so an absent toolchain is a failure
-            # there rather than a reason to pass quietly.
-            if os.environ.get("CI"):
-                raise AssertionError(
-                    "docker compose is unavailable, so the compose topology is "
-                    "unchecked. CI must not pass without it."
-                )
-            raise unittest.SkipTest("docker compose is not installed")
-        cls.config = _render(
-            "docker-compose.yml", env={"MOOMOO_TRADING_MARKET": "NONE"}
-        )
+        cls.config = _render("docker-compose.yml")
         cls.prod = _render(
-            "docker-compose.yml",
-            "docker-compose.prod.yml",
-            env={**PROD_ENV, "MOOMOO_TRADING_MARKET": "NONE"},
+            "docker-compose.yml", "docker-compose.prod.yml", env=PROD_ENV
         )
 
     def _service(self, config: dict | None = None) -> dict:

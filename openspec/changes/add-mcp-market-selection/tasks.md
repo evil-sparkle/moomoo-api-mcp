@@ -78,3 +78,26 @@
   --no-interactive` and `git diff --check`. Verify deltas preserve the current
   Stage 1 contracts and the separate Stage 2 artifacts remain untouched; prepare
   the implementation PR with both breaking behaviors and actual validation results.
+
+## 5. Review follow-ups
+
+- [x] 5.1 Preserve Compose executable discovery under private-config isolation;
+  cover user plugins, system plugins, and an unset market setting.
+- [x] 5.2 Remove duplicate summary account resolution while retaining explicit-ID
+  SDK validation and failure on account disappearance; simplify repeated guidance
+  and test setup without dropping coverage.
+- [ ] 5.3 Re-run the full local gates, review the final diff, sync this change's
+  three delta specs, and archive stage 1.1 in the implementation PR.
+
+Review verification (2026-09-23): `uv run pytest -q` passed with 1,076 passed,
+1 skipped, and 72 subtests passed. Ruff lint/format and basedpyright passed.
+The isolated container smoke test passed. A real Compose executable installed
+only as a synthetic user plugin rendered successfully with isolated configuration;
+an inherited US market value did not override the unset NONE default.
+
+The rebuilt image also passed in-process FastMCP dispatch against the existing
+local OpenD in SIMULATE mode: HK/US discovery, US filtering, explicit paper order
+and summary reads, and ambiguous zero-ID refusal for both orders and summaries.
+Only sanitized outcomes were recorded; there were no order mutations, REAL detail
+reads, or lock/unlock calls. SDK contract tests additionally prove that summary
+account disappearance before either detail query fails without changing IDs.
