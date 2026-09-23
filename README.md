@@ -351,8 +351,10 @@ larger of the order's own prices and the market.
 The limits **fail closed**. An order whose value cannot be established is
 refused, not permitted — including an order in a currency with no cap, on a
 market whose quote currency has not been verified, or with no usable market
-price. Options are refused while any cap is configured, pending verification of
-which broker field carries an option's monetary multiplier.
+price. The supported US stocks, ETFs and options are valued in USD. Options use
+OpenD's `option_contract_multiplier` for premium value; a missing or invalid
+multiplier is refused, without substituting deliverable size or assuming 100.
+Combo premium limits are not maximum-loss limits.
 
 `MOOMOO_MAX_ORDER_NOTIONAL` is the previous unit-less cap. This version never
 applies it: a cap with no currency cannot be applied to an instrument whose

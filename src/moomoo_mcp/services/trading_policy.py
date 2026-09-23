@@ -37,9 +37,10 @@ ENV_REAL_ACC_IDS = "MOOMOO_REAL_ACC_IDS"
 # An instrument outside this table is refused while a cap is configured, rather
 # than valued at a guessed currency.
 #
-# `US` is provisional: task 1.1 of harden-trading-safeguards confirms it against
-# the live gateway. Adding a market here is a deliberate act backed by
-# verification.
+# The supported US STOCK/ETF/DRVT subset is USD-denominated: broker product
+# documentation and live order/position evidence are recorded in Stage 1's
+# verification.md (2026-09-23). This does not cover other instrument classes or
+# imply a currency for another market. Adding either needs fresh verification.
 VERIFIED_MARKET_CURRENCIES: Mapping[str, str] = {"US": "USD"}
 
 # Classifications this server can value, and the monetary multiplier each uses.

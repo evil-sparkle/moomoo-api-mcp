@@ -16,6 +16,13 @@ from moomoo_mcp.services.instruments import (
     InstrumentLookupError,
     normalize_quote,
 )
+from moomoo_mcp.services.trading_policy import (
+    LegFacts,
+    OrderFacts,
+    TradingMode,
+    TradingPolicy,
+    TradingPolicyError,
+)
 
 
 def _snapshot(**overrides) -> dict:
@@ -222,26 +229,63 @@ class TestAdapter:
 
         assert facts == {"US.AAPL": "STOCK", "US.SPY": "ETF"}
 
-    def test_an_option_is_refused_while_the_multiplier_is_unverified(self):
-        """Which broker field carries an option's monetary multiplier has not
-        been confirmed against an independent figure (task 1.1), so valuing one
-        would mean guessing what a contract is worth.
-        """
-        adapter = InstrumentAdapter(
-            lambda: _quote_ctx(
-                [
-                    _snapshot(
-                        code="US.AAPL260116C300000",
-                        option_valid=True,
-                        option_contract_size=100.0,
-                    )
-                ],
-                {"US.AAPL260116C300000": "DRVT"},
-            )
+    @pytest.mark.parametrize("multiplier", [10.0, 100.0, "150"])
+    def test_option_uses_reported_multiplier_separately_from_size(self, multiplier):
+        code = "US.AAPL260116C300000"
+        ctx = _quote_ctx(
+            [
+                _snapshot(
+                    code=code,
+                    option_contract_size=25.0,
+                    option_contract_multiplier=multiplier,
+                )
+            ],
+            {code: "DRVT"},
         )
+        facts = InstrumentAdapter(lambda: ctx)([code])[0]
 
-        with pytest.raises(InstrumentLookupError, match="has not been verified"):
-            adapter(["US.AAPL260116C300000"])
+        assert facts.monetary_multiplier == float(multiplier)
+        assert facts.contract_size == 25.0
+
+    @pytest.mark.parametrize(
+        "multiplier",
+        [
+            None,
+            "N/A",
+            "",
+            "bad",
+            0,
+            -1,
+            True,
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+        ],
+    )
+    def test_option_refuses_invalid_multiplier_without_size_fallback(self, multiplier):
+        code = "US.AAPL260116C300000"
+        ctx = _quote_ctx(
+            [
+                _snapshot(
+                    code=code,
+                    option_contract_size=100.0,
+                    option_contract_multiplier=multiplier,
+                )
+            ],
+            {code: "DRVT"},
+        )
+        with pytest.raises(InstrumentLookupError) as error:
+            InstrumentAdapter(lambda: ctx)([code])
+        assert "no usable option_contract_multiplier" in str(error.value)
+
+    def test_option_refuses_absent_multiplier_without_size_fallback(self):
+        code = "US.AAPL260116C300000"
+        snapshot = _snapshot(code=code, option_contract_size=100.0)
+        del snapshot["option_contract_multiplier"]
+        ctx = _quote_ctx([snapshot], {code: "DRVT"})
+        with pytest.raises(InstrumentLookupError) as error:
+            InstrumentAdapter(lambda: ctx)([code])
+        assert "no usable option_contract_multiplier" in str(error.value)
 
     def test_an_unsupported_classification_carries_no_multiplier(self):
         """The policy refuses it; the adapter does not invent a multiplier."""
@@ -274,3 +318,40 @@ class TestAdapter:
 
         with pytest.raises(InstrumentLookupError, match="no instrument codes"):
             adapter([])
+
+
+@pytest.mark.parametrize("is_combo", [False, True])
+def test_adapter_to_policy_values_premium_using_multiplier(is_combo):
+    codes = (
+        ["US.AAPL260116C300000", "US.AAPL260116C310000"]
+        if is_combo
+        else ["US.AAPL260116C300000"]
+    )
+    ctx = _quote_ctx(
+        [
+            _snapshot(
+                code=code, option_contract_size=10, option_contract_multiplier=100
+            )
+            for code in codes
+        ],
+        dict.fromkeys(codes, "DRVT"),
+    )
+    facts = InstrumentAdapter(lambda: ctx)(codes)
+    order = OrderFacts(
+        order_type="NORMAL",
+        trd_side="BUY",
+        qty=5,
+        price=3,
+        legs=[LegFacts(instrument=fact) for fact in facts],
+        is_combo=is_combo,
+    )
+    policy = TradingPolicy(TradingMode.SIMULATE, max_order_notional={"USD": 1000})
+    with pytest.raises(TradingPolicyError) as error:
+        policy.assess_order("place_order", order)
+    assert "1,500.00 USD" in str(error.value)
+
+    # At the exact cap the same broker facts pass; options are no longer
+    # unconditionally refused merely because multiplier selection was disabled.
+    TradingPolicy(TradingMode.SIMULATE, max_order_notional={"USD": 1500}).assess_order(
+        "place_order", order
+    )
