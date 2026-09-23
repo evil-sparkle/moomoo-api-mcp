@@ -34,12 +34,17 @@ under the decision it affects.
   reconciled requirements — `Support Placing Orders`, `Support Modifying Orders`,
   `Support Cancelling Orders` — still carry the Stage 1 text forward without
   reverting it.
-- [ ] 1.1 Confirm against a real paper account whether paper orders accept any time
+- [x] 1.1 Confirm against a real paper account whether paper orders accept any time
   in force other than `DAY`. Verify by recording the accepted values. If a non-`DAY`
   value is accepted, revisit the version 1 scope restriction.
-- [ ] 1.2 Confirm whether the paper provider exposes any deal query. Verify by
+  The tested US stock paper account accepted `DAY`; one-shot `GTC` and `GTD`
+  attempts returned provider errors. `IOC` is documented for crypto market orders
+  only, outside this scope. See Decision 9 for the precise responses and limits.
+- [x] 1.2 Confirm whether the paper provider exposes any deal query. Verify by
   recording the attempted call and its outcome. If one exists, record it as additive
   to reconciliation; the order and history-order path stays the primary one.
+  Both current and historical paper deal calls returned `RET_ERROR: Paper trading
+  does not support deal data.` See Decision 9.
 - [x] 1.3 Record the fields available from paper order and history-order queries that
   reconciliation can match on, including whether a submission timestamp and any
   caller-supplied remark survive. Verify by listing the observed fields.
@@ -54,9 +59,9 @@ under the decision it affects.
   provider can answer.
 - [x] 1.5 GTC planning conflict resolved by Stage 1 commit `04ec53d`:
   task 1.2 now measures terminal DAY-order retention; non-DAY testing is
-  optional and separately authorized. This records a planning decision,
-  not a completed provider experiment.
-- [ ] 1.6 Establish whether the paper provider offers any positive proof that an order
+  optional and separately authorized. This records the planning decision;
+  the later provider experiment is recorded in task 1.1.
+- [x] 1.6 Establish whether the paper provider offers any positive proof that an order
   does **not** exist — a broker-side statement or audit record that enumerates the
   account's orders for a session — as opposed to an order merely not appearing in a
   query. Verify by recording the call and its output, or recording that none exists.
@@ -65,6 +70,10 @@ under the decision it affects.
   disabled; unprovable operations remain unresolved and execution-blocking" closes this
   task. It is not a prompt to invent weaker evidence so that recovery becomes
   possible.
+  No positive absence proof was found in the verified OpenD paper interface.
+  US-scoped account order/history listings returned the known cancelled order but
+  supply no broker completeness or never-created assertion. The absence
+  disposition remains disabled; see Decision 9.
 
 ## 2. Configuration
 

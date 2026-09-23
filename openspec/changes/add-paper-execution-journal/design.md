@@ -20,16 +20,21 @@ The journal persists what Stage 1 classifies. It does not reclassify it.
 
 ### Provider facts this design depends on
 
-These shape the design and are **unverified** until task group 1 runs against a real
-paper account. Each is recorded under the decision it affects.
+These shape the design. Tasks 1.1–1.3 and 1.6 were checked against the local OpenD
+connection to a US `SIMULATE` account on 2026-09-23; task 1.4 still needs an
+after-close observation. Each finding is recorded under the decision it affects.
 
-- **Moomoo documents paper orders as `DAY` only.** Version 1 therefore accepts only
-  `DAY`, and no recovery path may assume an order can outlive its trading day.
-- **Moomoo paper provides no deal query.** Recovery therefore relies on order and
-  history-order observations. `get_deals` must not appear in any recovery path.
-- Whether `order_list_query` returns a terminal paper order later the same day, and
-  for how long a history query retains it, is unverified and bounds how late
-  reconciliation can still succeed.
+- **The tested US stock paper account accepted `DAY` and rejected `GTC` and `GTD`.**
+  `IOC` is documented only for crypto market orders, outside this US stock limit-order
+  scope. Version 1 therefore accepts only `DAY`, and no recovery path may assume an
+  order can outlive its trading day.
+- **Paper deal queries are unavailable in the tested account.** Both current and
+  historical SDK calls returned the provider's paper-trading rejection. Recovery
+  therefore relies on order and history-order observations; it must not call
+  `get_deals` or `get_history_deals`.
+- Both order queries returned the terminal paper order later the same day. Their
+  after-close retention windows are still unverified and bound how late
+  reconciliation can succeed.
 
 ### The prerequisite's GTC task conflicts with the first fact
 
@@ -397,11 +402,36 @@ positive match nor successful enumeration establishes a provider absence-proof
 contract. Keep the proof requirements below unchanged. Full observations and
 scope limits are in [the Stage 1 live verification log](../harden-trading-safeguards/verification.md).
 
+**Additional provider observations, 2026-09-23 (tasks 1.1, 1.2, 1.6).** The earlier
+bounded US stock paper `DAY` limit order was accepted and cancelled. A separate
+one-shot `GTC` placement through Stage 1 returned `RET_ERROR` with “Paper trading
+does not support GTC orders”; a one-shot direct-SDK `GTD` placement with an
+expiration date returned the *same* message, even though `GTD` was requested.
+These were US `SIMULATE` `US.AAPL` buy-one limit orders priced at USD 1, outside
+the market, with distinct caller remarks. Immediate US-scoped current and
+historical queries found no matching order for either rejected attempt. The error
+and empty queries are not positive proof that no broker operation was created;
+neither attempt was retried. `IOC` was not submitted because [Moomoo's TIF
+definitions](https://openapi.moomoo.com/moomoo-api-doc/en/trade/trade.html)
+limit it to crypto market orders. The `GTD` check used the SDK directly because
+the current Stage 1 service does not expose its required `expire_time` argument.
+
+On the same US paper account, `deal_list_query(trd_env='SIMULATE')` and
+`history_deal_list_query(trd_env='SIMULATE', start=..., end=...)` each returned
+`RET_ERROR: Paper trading does not support deal data.` This matches Moomoo's
+[current-deal](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-order-fill-list.html)
+and [historical-deal](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-history-order-fill-list.html)
+documentation. The US-scoped, unfiltered `order_list_query(refresh_cache=True)`
+and `history_order_list_query(start=..., end=...)` both returned `RET_OK` and the
+one cancelled `DAY` order with its caller remark. A context without the explicit
+US market filter returned zero rows, so reconciliation must preserve market scope.
+These order-list responses establish a positive match, not completeness or absence.
+
 An operation in `UNKNOWN_OUTCOME` is never automatically resubmitted, and never
 resolved by placing a substitute or replacement order. Reconciliation is explicit.
 
 - It queries **orders and history orders** for the journal-owned account. It must not
-  use a deal query: Moomoo paper does not provide one.
+  use a deal query: both paper deal APIs returned a provider rejection in task 1.2.
 - **Candidate Matching vs Proof of Ownership:**
   - Attribute/time matching (matching code, side, quantity, price within submission
     window) produces **candidates**, NOT proof of journal ownership.
@@ -551,8 +581,8 @@ resolved through an explicit, operator-only mechanism:
   around it. An empty post-close history query alone leaves the operation unresolved.
   - **Version 1 ships exactly one operator disposition, `TERMINAL_ACCOUNTED`.** An
     absence disposition is **deferred from version 1's executable interface** rather
-    than half-specified: task 1.6 has not run, the documented placement and
-    order-history interfaces show no affirmative absence-proof mechanism, and defining
+    than half-specified: task 1.6 found no affirmative absence-proof mechanism in the
+    verified provider interface, and defining
     a full lifecycle mapping for a capability that will most likely stay disabled adds
     surface without protection.
   - **A negative result from task 1.6 is a valid, final result.** "No positive absence
@@ -560,6 +590,19 @@ resolved through an explicit, operator-only mechanism:
     stays disabled; unprovable operations remain unresolved and execution-blocking" is
     a complete answer. It must not be treated as pressure to invent weaker evidence so
     that recovery becomes possible.
+  - **Observed task 1.6 result, 2026-09-23:** The [current-order
+    list](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-order-list.html)
+    enumerates open orders plus filled or cancelled orders within 24 hours; the
+    [historical-order list](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-history-order-list.html)
+    supports account, market, symbol and date filters. Unfiltered, US-scoped calls
+    returned the known cancelled order. Neither response provided an audit marker,
+    completeness assertion or broker statement that a *particular uncertain
+    placement* was never created. The documented trade API lists no separate
+    absence-proof operation. Thus no positive absence proof is available through
+    the verified provider interface; the absence disposition stays disabled and
+    unprovable operations remain unresolved and execution-blocking. This finding
+    is limited to this OpenD API and paper account; it does not claim every Moomoo
+    interface lacks an audit facility.
   - **If such proof is ever established,** the disposition lands as its own change,
     named **`ABSENCE_ACCOUNTED`** — not `CONFIRMED_NOT_SENT`. Evidence that no broker
     order was created is not evidence that the SDK invocation never started. A
@@ -762,8 +805,9 @@ What is **not** guaranteed:
   availability. An honest unresolved record is preferred to a system that resumes
   having forgotten why it stopped. Reinitializing the journal for the same account is
   explicitly not the escape hatch.
-- **[Risk]** Unverified provider facts (DAY-only, deal query absence).
-  → **Mitigation:** Task group 1 checks them before implementation.
+- **[Risk]** Provider behavior could differ across markets, account types or future
+  OpenD versions. → **Mitigation:** The tested US stock paper scope is explicit;
+  keep version 1's `DAY` restriction and order/history-only reconciliation.
 - **[Risk]** Retention of terminal paper orders limits reconciliation window.
   → **Mitigation:** Candidate-only or zero matches safely leaves operation unresolved
   for operator review. Task 1.4 measures retention.
@@ -816,9 +860,9 @@ not the complete Stage 1 contract. The three overlapping requirements preserve:
 Task 1.0 is complete for this checkout. Repeat the comparison if Stage 1 changes
 before archival. No provider calls were made during the repository-only check.
 The subsequent authorized Stage 1 live run supplied task 1.3's observed fields
-and same-session retention samples, recorded under Decision 9. Tasks 1.1, 1.2,
-1.4 and 1.6 remain pending: non-DAY behavior, paper deal-query availability,
-after-close retention and absence-proof capabilities still require verification.
+and same-session retention samples, recorded under Decision 9. The 2026-09-23
+US `SIMULATE` checks completed tasks 1.1, 1.2 and 1.6. Only task 1.4's after-close
+retention observation remains pending.
 
 Strict validation (`openspec validate add-paper-execution-journal --strict --json`)
 validates structural correctness. Landed contracts and provider behaviors will be
