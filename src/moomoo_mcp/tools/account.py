@@ -6,11 +6,16 @@ from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.tools.annotations import (
+    CONSEQUENTIAL_TOOL,
+    MUTATING_TOOL,
+    READ_ONLY_TOOL,
+)
 from moomoo_mcp.tools.offload import run_blocking
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_accounts(
     ctx: Context[ServerSession, AppContext],
     market: str | None = None,
@@ -56,7 +61,7 @@ async def get_accounts(
     return serialize_identifiers(accounts)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_account_summary(
     ctx: Context[ServerSession, AppContext],
     trd_env: str = "REAL",
@@ -105,7 +110,7 @@ async def get_account_summary(
     return serialize_identifiers(summary)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_assets(
     ctx: Context[ServerSession, AppContext],
     trd_env: str = "REAL",
@@ -153,7 +158,7 @@ async def get_assets(
     return serialize_identifiers(assets)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_positions(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
@@ -226,7 +231,7 @@ async def get_positions(
     return serialize_identifiers(positions)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_max_tradable(
     ctx: Context[ServerSession, AppContext],
     order_type: str,
@@ -281,7 +286,7 @@ async def get_max_tradable(
     return serialize_identifiers(max_qty)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_margin_ratio(
     ctx: Context[ServerSession, AppContext],
     code_list: list[str],
@@ -300,7 +305,7 @@ async def get_margin_ratio(
     return ratios
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_cash_flow(
     ctx: Context[ServerSession, AppContext],
     clearing_date: str = "",
@@ -346,7 +351,7 @@ async def get_cash_flow(
     return cash_flows
 
 
-@mcp.tool()
+@mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def unlock_trade(
     ctx: Context[ServerSession, AppContext],
     password: str | None = None,
@@ -412,7 +417,7 @@ async def unlock_trade(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=MUTATING_TOOL)
 async def lock_trade(
     ctx: Context[ServerSession, AppContext],
 ) -> dict[str, Any]:

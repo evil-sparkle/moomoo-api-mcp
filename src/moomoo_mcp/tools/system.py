@@ -6,10 +6,11 @@ from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.tools.annotations import READ_ONLY_TOOL
 from moomoo_mcp.tools.offload import await_futures
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any]:
     """Check connectivity to the Moomoo OpenD gateway and MCP server health.
 

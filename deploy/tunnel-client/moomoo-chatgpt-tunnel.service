@@ -1,0 +1,51 @@
+[Unit]
+Description=Optional OpenAI tunnel for the loopback moomoo MCP server
+Documentation=https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=moomoo-tunnel
+Group=moomoo-tunnel
+UMask=0077
+EnvironmentFile=/etc/moomoo-chatgpt-tunnel/tunnel-id.env
+LoadCredential=control-plane-api-key:/etc/moomoo-chatgpt-tunnel/control-plane-api-key
+LoadCredential=mcp-authorization:/etc/moomoo-chatgpt-tunnel/mcp-authorization
+RuntimeDirectory=moomoo-chatgpt-tunnel
+RuntimeDirectoryMode=0700
+StateDirectory=moomoo-chatgpt-tunnel
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/moomoo-chatgpt-tunnel
+ExecStartPre=/usr/bin/python3 /usr/local/libexec/private_chatgpt_preflight.py --mode startup-safe --authorization-file /run/credentials/moomoo-chatgpt-tunnel.service/mcp-authorization
+ExecStartPre=/opt/openai/tunnel-client/v0.0.14/tunnel-client doctor --config /etc/moomoo-chatgpt-tunnel/tunnel-client.yaml --explain
+ExecStart=/opt/openai/tunnel-client/v0.0.14/tunnel-client run --config /etc/moomoo-chatgpt-tunnel/tunnel-client.yaml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+ReadWritePaths=/run/moomoo-chatgpt-tunnel /var/lib/moomoo-chatgpt-tunnel
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
