@@ -1,0 +1,23 @@
+config_version: 1
+control_plane:
+  base_url: https://api.openai.com
+  api_key: file:/run/credentials/moomoo-chatgpt-tunnel.service/control-plane-api-key
+log:
+  level: info
+  format: json
+health:
+  listen_addr: 127.0.0.1:8080
+  url_file: /run/moomoo-chatgpt-tunnel/health-url
+admin_ui:
+  open_browser: false
+process:
+  pid_file: /run/moomoo-chatgpt-tunnel/tunnel-client.pid
+mcp:
+  server_urls:
+    - channel: main
+      url: http://127.0.0.1:8000/mcp
+  extra_headers:
+    Authorization: file:/run/credentials/moomoo-chatgpt-tunnel.service/mcp-authorization
+  discovery_extra_headers:
+    Authorization: file:/run/credentials/moomoo-chatgpt-tunnel.service/mcp-authorization
+  startup_wait_timeout: 30s

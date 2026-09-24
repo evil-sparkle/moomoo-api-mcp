@@ -7,11 +7,16 @@ from mcp.server.session import ServerSession
 from pydantic import StrictInt
 
 from moomoo_mcp.server import AppContext, mcp, operator_principal
+from moomoo_mcp.tools.annotations import (
+    CONSEQUENTIAL_TOOL,
+    MUTATING_TOOL,
+    READ_ONLY_TOOL,
+)
 from moomoo_mcp.tools.offload import run_blocking
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
 
-@mcp.tool()
+@mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def place_order(
     ctx: Context[ServerSession, AppContext],
     code: str,
@@ -147,7 +152,7 @@ async def place_order(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def place_combo_order(
     ctx: Context[ServerSession, AppContext],
     combo_legs: list[dict],
@@ -268,7 +273,7 @@ async def place_combo_order(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def preview_combo_order(
     ctx: Context[ServerSession, AppContext],
     combo_legs: list[dict],
@@ -346,7 +351,7 @@ async def preview_combo_order(
     return serialize_identifiers(preview)
 
 
-@mcp.tool()
+@mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def modify_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,
@@ -448,7 +453,7 @@ async def modify_order(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def cancel_order(
     ctx: Context[ServerSession, AppContext],
     order_id: str,
@@ -525,7 +530,7 @@ async def cancel_order(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_orders(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
@@ -574,7 +579,7 @@ async def get_orders(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_deals(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
@@ -620,7 +625,7 @@ async def get_deals(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_history_orders(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
@@ -667,7 +672,7 @@ async def get_history_orders(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_history_deals(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
@@ -712,7 +717,7 @@ async def get_history_deals(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_execution(
     ctx: Context[ServerSession, AppContext], operation_id: str
 ) -> dict:
@@ -726,7 +731,7 @@ async def get_execution(
     return paper.result(row)
 
 
-@mcp.tool()
+@mcp.tool(annotations=MUTATING_TOOL)
 async def reconcile_execution(
     ctx: Context[ServerSession, AppContext], operation_id: str
 ) -> dict:
@@ -741,7 +746,7 @@ async def reconcile_execution(
     return await run_blocking(paper.reconcile, operation_id)
 
 
-@mcp.tool()
+@mcp.tool(annotations=MUTATING_TOOL)
 async def acknowledge_recovery(
     ctx: Context[ServerSession, AppContext],
     operation_id: str,

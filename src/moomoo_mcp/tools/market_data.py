@@ -8,6 +8,7 @@ from mcp.server.session import ServerSession
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.market_data_service import validate_candle_filters
+from moomoo_mcp.tools.annotations import MUTATING_TOOL, READ_ONLY_TOOL
 from moomoo_mcp.tools.kline_cursor import (
     decode_cursor,
     encode_cursor,
@@ -16,7 +17,7 @@ from moomoo_mcp.tools.kline_cursor import (
 from moomoo_mcp.tools.offload import run_blocking
 
 
-@mcp.tool()
+@mcp.tool(annotations=MUTATING_TOOL)
 async def get_stock_quote(
     ctx: Context[ServerSession, AppContext],
     codes: list[str],
@@ -47,7 +48,7 @@ async def get_stock_quote(
     return quotes
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_historical_klines(
     ctx: Context[ServerSession, AppContext],
     code: str,
@@ -116,7 +117,7 @@ async def get_historical_klines(
     return klines
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_option_expiration_date(
     ctx: Context[ServerSession, AppContext],
     code: str,
@@ -150,7 +151,7 @@ async def get_option_expiration_date(
     return expirations
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_option_chain(
     ctx: Context[ServerSession, AppContext],
     code: str,
@@ -205,7 +206,7 @@ async def get_option_chain(
     return contracts
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_historical_klines_page(
     ctx: Context[ServerSession, AppContext],
     code: str,
@@ -315,7 +316,7 @@ async def get_historical_klines_page(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_market_snapshot(
     ctx: Context[ServerSession, AppContext],
     codes: list[str],
@@ -351,7 +352,7 @@ async def get_market_snapshot(
     return snapshots
 
 
-@mcp.tool()
+@mcp.tool(annotations=MUTATING_TOOL)
 async def get_order_book(
     ctx: Context[ServerSession, AppContext],
     code: str,
@@ -379,7 +380,7 @@ async def get_order_book(
     return order_book
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_market_state(
     ctx: Context[ServerSession, AppContext],
     codes: list[str],
@@ -412,7 +413,7 @@ async def get_market_state(
     return {"checked_at": utc_now_iso(), "data": states}
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_trading_days(
     ctx: Context[ServerSession, AppContext],
     market: str,
@@ -484,7 +485,7 @@ _PROVIDER_QUOTA_FIELDS = {
 }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_subscriptions(
     ctx: Context[ServerSession, AppContext],
 ) -> dict[str, Any]:
@@ -536,7 +537,7 @@ async def get_subscriptions(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=MUTATING_TOOL)
 async def unsubscribe_market_data(
     ctx: Context[ServerSession, AppContext],
     codes: list[str],
@@ -591,7 +592,7 @@ async def unsubscribe_market_data(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_user_security_group(
     ctx: Context[ServerSession, AppContext],
     group_type: int = 0,
@@ -619,7 +620,7 @@ async def get_user_security_group(
     return groups
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_user_security(
     ctx: Context[ServerSession, AppContext],
     group_name: str,

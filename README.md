@@ -185,6 +185,10 @@ volume, initialization, retry identity, operator recovery and consistent backups
 The same paper journal survives deployment mode changes; REAL-order journaling
 is deferred. Live provider acceptance is tracked separately from automated development.
 
+For the optional outbound-only OpenAI Secure MCP Tunnel integration, including
+its read-only boundary, pinned client, owner prerequisites, staged acceptance,
+and rollback, see [`docs/private-chatgpt-mcp.md`](docs/private-chatgpt-mcp.md).
+
 For what state the stack holds, where each piece of it lives, what survives which restart, and how exposed the stored credentials are, see [`docs/state-and-restarts.md`](docs/state-and-restarts.md).
 
 ### 1. Build the Images

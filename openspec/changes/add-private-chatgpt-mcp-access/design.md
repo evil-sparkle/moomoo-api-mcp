@@ -143,9 +143,10 @@ new proxy, or allowing unauthenticated HTTP is not an acceptable workaround.
 ### 5. Annotate the full tool surface, but rely on policy
 
 All tools will receive explicit MCP `ToolAnnotations`. Pure reads, including
-health, account, position, order/deal queries, previews, and market-data reads,
-will use `readOnlyHint: true`. Subscription changes and every trade, lock/unlock,
-or operator action will use `readOnlyHint: false`; consequential trading actions
+health, account, position, order/deal queries, previews, and market-data reads
+that do not auto-subscribe, will use `readOnlyHint: true`. Auto-subscribing quote
+and order-book reads, subscription changes, and every trade, lock/unlock, or
+operator action will use `readOnlyHint: false`; consequential trading actions
 will also be marked destructive where their effects can be difficult to reverse.
 The bounded broker/account surface will use `openWorldHint: false`. Tests will
 enumerate the registered tools so a future unannotated tool fails the suite.
@@ -221,4 +222,3 @@ absence is reported as pending product acceptance, not simulated success.
 6. To roll back, disable the tunnel unit, remove its binary/config/credentials
    after preserving diagnostics, and leave Compose, Tailscale, OpenD state, the
    execution journal, and local clients untouched.
-
