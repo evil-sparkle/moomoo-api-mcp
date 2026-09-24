@@ -89,7 +89,9 @@
   restrictive credential creation, `doctor`, service supervision, liveness versus
   readiness, diagnostics, and coordinated runtime/MCP secret rotation; verify
   commands use placeholders or secret references and never expose credentials in
-  argv or output.
+  argv or output. Behavioral regressions prove the service identity can read the
+  non-secret YAML but not credential sources, and that credential entry does not
+  echo on success or interruption and leaves root-only destination modes.
 - [x] 5.3 Add a staged acceptance checklist that separately records local MCP,
   tunnel runtime, OpenAI eligibility/workspace association, ChatGPT web discovery
   and read-only invocation, and native-iPad discovery/invocation; verify
@@ -123,8 +125,8 @@
 - Ruff lint and format checks passed. Basedpyright passed with zero findings;
   this host required `NODE_OPTIONS=--max-old-space-size=2048` because its default
   512 MiB Node heap exited out of memory.
-- The complete test suite passed with 1,234 tests passed and one existing
-  environment-dependent skip.
+- The complete test suite passed with 1,239 tests passed and one existing
+  environment-dependent skip after review fixes.
 - The official v0.0.14 archive passed pinned digest and binary-version
   verification in `--verify-only` mode.
 - The container image built. The full smoke stack could not start because an
@@ -133,6 +135,11 @@
   supervision, and restart contracts passed in the complete isolated suite.
 - The disposable network-isolated paper-container check passed C01-C04 against
   the newly built image.
+- A disposable network-isolated container check passed with a real unprivileged
+  UID/GID: the service identity read the installed non-secret YAML and could not
+  read either root-owned credential source. Pseudo-terminal regressions also
+  proved synthetic credential input was never echoed and terminal echo was
+  restored after interruption.
 - OpenSpec CLI 1.13.1 strict validation passed all 27 specs and changes with zero
   failures. This change remains unarchived.
 - No credentialed OpenAI control-plane, ChatGPT web, or native-iPad acceptance

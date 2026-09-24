@@ -90,8 +90,11 @@ The daemon receives no `MCP_OPERATOR_TOKEN`, broker login, trade-unlock secret,
 Docker socket, OpenAI admin key, or writable access to the repository. The unit
 will use systemd hardening, an explicit writable runtime/state directory if the
 binary requires one, loopback-only health binding, and a restricted address-family
-set. Configuration and credential source files will be root-owned and inaccessible
-to other users; systemd exposes credential copies only to the service.
+set. The non-secret configuration directory and YAML are root-owned and readable
+only by the service group. Credential source files remain `root:root` mode `0600`;
+systemd exposes credential copies only to the service. A root-installed helper
+disables terminal echo, restores terminal state on interruption, and atomically
+replaces those source files without carrying secret values in argv or logs.
 
 Alternative considered: ask ChatGPT to supply the static MCP bearer. Official
 ChatGPT documentation says custom API keys are not a supported client-auth mode,

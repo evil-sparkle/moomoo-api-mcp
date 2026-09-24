@@ -62,10 +62,12 @@ socket, repository write access, or OpenD access. Tunnel managers use a separate
 interactive administration path; those credentials never enter this unit.
 
 Systemd exposes the two credential copies only to the service. Their root-owned
-source files must be mode `0600`; the config is non-secret. The MCP credential
-file contains the whole HTTP header, including the `Bearer ` prefix. Never put
-either credential in argv, an environment file, a tracked file, diagnostic
-output, or a ticket.
+source files must be mode `0600`. The non-secret config directory is
+`root:moomoo-tunnel` mode `0750`, and its YAML is mode `0640`, so the service can
+traverse and read the config without gaining read access to either credential
+source. The MCP credential file contains the whole HTTP header, including the
+`Bearer ` prefix. Never put either credential in argv, an environment file, a
+tracked file, diagnostic output, terminal scrollback, or a ticket.
 
 Tool annotations help a product describe or confirm operations. They are
 advisory. No supported per-connection ChatGPT tool allowlist was found in the
@@ -129,13 +131,17 @@ change does not deploy anything.
      --create-home --shell /usr/sbin/nologin moomoo-tunnel
    sudo python3 deploy/tunnel-client/install.py \
      --archive /path/to/tunnel-client-v0.0.14-linux-amd64.zip
-   sudo install -d -o root -g root -m 0700 /etc/moomoo-chatgpt-tunnel
-   sudo install -o root -g root -m 0644 \
+   sudo install -d -o root -g moomoo-tunnel -m 0750 \
+     /etc/moomoo-chatgpt-tunnel
+   sudo install -o root -g moomoo-tunnel -m 0640 \
      deploy/tunnel-client/tunnel-client.yaml \
      /etc/moomoo-chatgpt-tunnel/tunnel-client.yaml
    sudo install -o root -g root -m 0755 \
      scripts/private_chatgpt_preflight.py \
      /usr/local/libexec/private_chatgpt_preflight.py
+   sudo install -o root -g root -m 0755 \
+     scripts/install_private_chatgpt_credential.py \
+     /usr/local/libexec/install_private_chatgpt_credential.py
    sudo install -o root -g root -m 0644 \
      deploy/tunnel-client/moomoo-chatgpt-tunnel.service \
      /etc/systemd/system/moomoo-chatgpt-tunnel.service
@@ -145,19 +151,31 @@ change does not deploy anything.
 
    ```console
    printf '%s\n' 'CONTROL_PLANE_TUNNEL_ID=<OWNER_TUNNEL_ID>' | \
-     sudo install -o root -g root -m 0644 /dev/stdin \
+     sudo install -o root -g moomoo-tunnel -m 0640 /dev/stdin \
        /etc/moomoo-chatgpt-tunnel/tunnel-id.env
    ```
 
-4. Create each credential without putting its value on argv or echoing it. Each
-   command waits for terminal input and ends at Ctrl-D:
+4. Create each credential through the installed helper. It requires an
+   interactive terminal, disables echo before reading one line, restores the
+   terminal on success, error, or interruption, and atomically creates a
+   `root:root` mode `0600` source file. Enter the complete MCP header, including
+   the `Bearer ` prefix. Values never appear in argv or terminal scrollback:
 
    ```console
-   sudo sh -c 'umask 077; cat > /etc/moomoo-chatgpt-tunnel/control-plane-api-key'
-   sudo sh -c 'umask 077; cat > /etc/moomoo-chatgpt-tunnel/mcp-authorization'
-   sudo chown root:root /etc/moomoo-chatgpt-tunnel/control-plane-api-key \
-     /etc/moomoo-chatgpt-tunnel/mcp-authorization
-   sudo chmod 0600 /etc/moomoo-chatgpt-tunnel/control-plane-api-key \
+   sudo /usr/local/libexec/install_private_chatgpt_credential.py \
+     control-plane-api-key
+   sudo /usr/local/libexec/install_private_chatgpt_credential.py \
+     mcp-authorization
+   ```
+
+   Verify the installed boundary without displaying either credential:
+
+   ```console
+   sudo -u moomoo-tunnel test -r \
+     /etc/moomoo-chatgpt-tunnel/tunnel-client.yaml
+   sudo -u moomoo-tunnel test ! -r \
+     /etc/moomoo-chatgpt-tunnel/control-plane-api-key
+   sudo -u moomoo-tunnel test ! -r \
      /etc/moomoo-chatgpt-tunnel/mcp-authorization
    ```
 
@@ -193,9 +211,9 @@ sudo journalctl -u moomoo-chatgpt-tunnel.service --since=-15m
 
 | Failure | Expected evidence | Local service impact | Coverage |
 | --- | --- | --- | --- |
-| MCP stopped/restarting | Preflight reports unreachable; tunnel calls fail | OpenD supervision is unchanged; stateless calls recover without an old session ID | Automated fixture |
-| Tunnel process exits | Health/readiness disappear; systemd restarts it | Loopback MCP remains available and authenticated | Automated fixture |
-| OpenAI control plane unavailable | Liveness may be 200 while readiness is 503 | Loopback MCP remains available; no fabricated tunnel success | Automated fixture |
+| MCP stopped/restarting | Preflight reports unreachable; tunnel calls fail | OpenD supervision is unchanged; stateless calls recover without an old session ID | Automated local-process fixture |
+| Tunnel process exits | Health/readiness disappear; systemd restarts it | Loopback MCP remains available and authenticated | Simulated tunnel-process fixture; owner systemd check PENDING |
+| OpenAI control plane unavailable | Liveness may be 200 while readiness is 503 | Loopback MCP remains available; no fabricated tunnel success | Simulated tunnel-process fixture; owner official-client check PENDING |
 | OpenD unavailable | Health says degraded/disconnected; startup-safe proves READ_ONLY; full mode fails | Existing recovery continues; no write dispatch | Automated fixture |
 | Conflicting Authorization | Local MCP returns 401 | No anonymous retry or broker call | Automated fixture |
 | Unexpected Origin | Local MCP returns 403 | Host/Origin protection remains enabled | Automated fixture plus owner web check |
@@ -203,17 +221,17 @@ sudo journalctl -u moomoo-chatgpt-tunnel.service --since=-15m
 
 ## Secret rotation
 
-Rotate the runtime key by replacing only `control-plane-api-key`, preserving
-root ownership and mode `0600`, then restart this unit. Failure affects only the
-tunnel.
+Rotate the runtime key with the same no-echo helper command for
+`control-plane-api-key`, which atomically preserves root ownership and mode
+`0600`, then restart this unit. Failure affects only the tunnel.
 
 The MCP bearer is shared with local clients. Coordinate its rotation:
 
 1. Stop the optional tunnel unit.
 2. Rotate `MCP_AUTH_TOKEN` through the existing deployment secret procedure.
 3. Update ZeroClaw and other clients through their existing secret paths.
-4. Replace `mcp-authorization` with the complete new header through the private
-   input command above.
+4. Replace `mcp-authorization` with the complete new header through the no-echo
+   helper command above.
 5. Restart MCP, run startup-safe and full local preflight, then start the tunnel
    and confirm readiness.
 
@@ -247,9 +265,10 @@ sudo systemctl reset-failed moomoo-chatgpt-tunnel.service
 ```
 
 After preserving needed redacted diagnostics, remove the unit, its two
-credential files, non-secret config, preflight copy, and pinned binary; then run
-`sudo systemctl daemon-reload`. Revoke the runtime key and remove the tunnel
-association through the owner's OpenAI administration process.
+credential files, non-secret config, preflight and credential-helper copies, and
+pinned binary; then run `sudo systemctl daemon-reload`. Revoke the runtime key
+and remove the tunnel association through the owner's OpenAI administration
+process.
 
 Rollback does not run Compose, remove volumes, edit Tailscale or firewall
 settings, touch OpenD state, alter the paper journal, change ZeroClaw, or modify

@@ -14,6 +14,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "deploy" / "tunnel-client"
 RUNBOOK = ROOT / "docs" / "private-chatgpt-mcp.md"
+CREDENTIAL_INSTALLER = ROOT / "scripts" / "install_private_chatgpt_credential.py"
 EXPECTED_VERSION = "v0.0.14"
 EXPECTED_SHA256 = "15bd17e805cad39d412199115bb9e10a978dd35258a114cdf25dd2ae6681c7d3"
 
@@ -178,6 +179,22 @@ def test_systemd_unit_is_unprivileged_hardened_and_independent() -> None:
         assert forbidden not in unit
     exec_lines = [line for line in unit.splitlines() if line.startswith("Exec")]
     assert all("Bearer " not in line and "sk-" not in line for line in exec_lines)
+
+
+def test_runbook_permissions_allow_config_but_protect_credential_sources() -> None:
+    text = RUNBOOK.read_text(encoding="utf-8")
+
+    assert "-o root -g moomoo-tunnel -m 0750" in text
+    assert "-o root -g moomoo-tunnel -m 0640" in text
+    assert "root:root` mode `0600`" in text
+    assert "sudo sh -c" not in text
+    assert "cat > /etc/moomoo-chatgpt-tunnel" not in text
+    assert "install_private_chatgpt_credential.py" in text
+
+    installer = CREDENTIAL_INSTALLER.read_text(encoding="utf-8")
+    assert "termios.ECHO | termios.ECHONL" in installer
+    assert "owner_uid=0" in installer
+    assert "owner_gid=0" in installer
 
 
 def test_optional_assets_do_not_modify_compose_topology() -> None:
