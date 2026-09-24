@@ -45,7 +45,7 @@ non-read-only phase, no REAL-order path).
   confirms USD for the supported US stock/ETF/option subset, corroborated by live
   order/position samples. A read-only live run of the updated adapter and policy
   passed for AAPL, SPY and two AAPL option contracts. See Decisions 2 and 3.
-- [ ] 1.2 Measure how long a terminal paper order stays queryable, using a `DAY`
+- [x] 1.2 Measure how long a terminal paper order stays queryable, using a `DAY`
   order.
 
   Official Moomoo paper-trading documentation states that paper orders are valid for
@@ -61,11 +61,15 @@ non-read-only phase, no REAL-order path).
   needs — how late a modification can still find its target order — and it is
   answerable on a day-only provider.
 
-  **Status: partly run, 2026-09-23.** One bounded US paper `DAY` order was placed
+  **Status: completed, 2026-09-24.** One bounded US paper `DAY` order was placed
   and cancelled. Both current and historical queries returned `CANCELLED_ALL`,
   zero fills, and the original remark immediately and later in the same session.
-  The after-close observation is still pending; do not place another order to
-  collect it. Re-query the recorded order. One offline finding constrains the measurement:
+  At 2026-09-24 17:01:45 SGT, both queries still returned the same terminal order,
+  about 20 hours 50 minutes after cancellation and 9 hours 2 minutes after the
+  extended US session close. These are observed lower bounds for both queries,
+  not maximum retention guarantees. The scheduled job ran later than its intended
+  08:15 SGT time; the actual timestamp is the evidence. It issued zero mutations.
+  One offline finding constrains the measurement:
   `history_order_list_query` accepts no `order_id`, so the history side filters by
   code and matches the id client-side.
 

@@ -1,7 +1,8 @@
 # Tasks
 
-All live validation remains pending. This is the operator-authorized follow-up
-split from Stage 2 development on 2026-09-23, not a record of completed tests.
+The after-close retention observation is complete; journal acceptance remains
+pending. This is the operator-authorized follow-up
+split from Stage 2 development on 2026-09-23.
 
 ## 1. Prerequisites and retention
 
@@ -9,10 +10,16 @@ split from Stage 2 development on 2026-09-23, not a record of completed tests.
   Stage 2 commit, SDK/OpenD versions, isolated account, original journal, operator
   capability and caller-chain access. Verify the authorization and redacted setup
   are recorded before any provider mutation.
-- [ ] 1.2 Measure how long a terminal DAY order remains queryable using current
+- [x] 1.2 Measure how long a terminal DAY order remains queryable using current
   and historical order queries after close (former Stage 2 task 1.4). Verify by
   recording timestamps and both observed windows; distinguish lower bounds from
   measured expiry and never infer absence from an empty query.
+  At 2026-09-24 17:01:45 SGT both queries returned the original cancelled DAY
+  order with zero fills and its caller remark, about 20 hours 50 minutes after
+  cancellation. Both windows are lower bounds, not measured expiry. The probe ran
+  later than its planned 08:15 slot and issued no mutations or unlocks. See
+  [Stage 1 evidence](../harden-trading-safeguards/verification.md). This closes
+  retention only, not journaled provider acceptance.
 
 ## 2. Live acceptance
 

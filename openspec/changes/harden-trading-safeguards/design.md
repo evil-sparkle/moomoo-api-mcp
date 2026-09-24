@@ -352,8 +352,10 @@ An order that is not found, or has unreadable fields, is refused as not sent.
   does not test. Under either, a target that cannot be retrieved remains a refusal.
   On 2026-09-23 the bounded paper order remained visible in both queries immediately
   and later in the same session, with terminal status, zero fills, and its original
-  remark. After-close visibility remains unmeasured; these observations are lower
-  bounds, not a retention guarantee.
+  remark. On 2026-09-24 at 17:01:45 SGT, both queries still returned that order,
+  about 20 hours 50 minutes after cancellation and after the prior US session
+  closed. Both measured windows are lower bounds, not maximum retention guarantees.
+  See the dated after-close observation in `verification.md`.
 
 ### 6. Account routing
 

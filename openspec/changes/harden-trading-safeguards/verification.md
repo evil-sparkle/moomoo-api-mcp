@@ -1,5 +1,29 @@
 # Verification log
 
+## After-close retention completed — 2026-09-24
+
+The saved scheduled-job result was checked against its generated report. Its
+actual observation was **2026-09-24 09:01:45.563668 UTC (17:01:45 SGT)**, later
+than the scheduled 00:15 UTC (08:15 SGT). The cause of the delay is not established.
+This is about 20 hours 50 minutes after the recorded cancellation and 9 hours
+2 minutes after the September 23 extended US session ended at 00:00 UTC.
+
+Both current-order and historical-order queries succeeded and returned the same
+US.AAPL SIMULATE DAY order: `CANCELLED_ALL`, quantity 1, price USD 1, filled
+quantity 0, average fill price 0, and original remark `s1-check-20260923-day`.
+The stored create/update timestamps remained `2026-09-23 08:12:02` (US market time).
+The probe recorded zero order mutations and issued no unlock. No new order was
+needed. The raw result and report remain in the private operator schedule folder.
+
+For **each query**, the measured retention window therefore extends at least to
+this after-close observation. A single positive observation does not establish
+maximum retention or prove absence when a later query returns no match. Existing
+fail-closed modification and reconciliation rules remain unchanged.
+
+This completes Stage 1 task 1.2 and Stage 2 task 1.4. All 30 Stage 1 tasks are now
+complete; the change is ready for specification sync and archival after review.
+The earlier pending-status entries below describe their original observation dates.
+
 ## Instrument verification completed — 2026-09-23
 
 This section supersedes the open instrument work in the historical entries below.
