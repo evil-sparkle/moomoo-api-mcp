@@ -18,7 +18,7 @@ split from Stage 2 development on 2026-09-23.
   order with zero fills and its caller remark, about 20 hours 50 minutes after
   cancellation. Both windows are lower bounds, not measured expiry. The probe ran
   later than its planned 08:15 slot and issued no mutations or unlocks. See
-  [Stage 1 evidence](../harden-trading-safeguards/verification.md). This closes
+  [Stage 1 evidence](../archive/2026-09-24-harden-trading-safeguards/verification.md). This closes
   retention only, not journaled provider acceptance.
 
 ## 2. Live acceptance

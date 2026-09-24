@@ -38,7 +38,8 @@ from moomoo_mcp.services.trading_policy import (
 
 # OpenD documents the monetary multiplier separately from deliverable size.
 # Official definitions and independent live position arithmetic are recorded in
-# openspec/changes/harden-trading-safeguards/verification.md (2026-09-23).
+# openspec/changes/archive/2026-09-24-harden-trading-safeguards/verification.md
+# (observations dated 2026-09-23).
 # Never substitute option_contract_size or a hardcoded 100 for a missing value.
 OPTION_MONETARY_MULTIPLIER_FIELD = "option_contract_multiplier"
 

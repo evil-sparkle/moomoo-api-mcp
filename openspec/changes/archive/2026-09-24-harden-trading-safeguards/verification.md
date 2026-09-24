@@ -21,7 +21,9 @@ maximum retention or prove absence when a later query returns no match. Existing
 fail-closed modification and reconciliation rules remain unchanged.
 
 This completes Stage 1 task 1.2 and Stage 2 task 1.4. All 30 Stage 1 tasks are now
-complete; the change is ready for specification sync and archival after review.
+complete. Its eight capability deltas were verified against the main specs and
+the change was archived on 2026-09-24, preserving later Stage 1.1 and Stage 2
+requirements.
 The earlier pending-status entries below describe their original observation dates.
 
 ## Instrument verification completed — 2026-09-23

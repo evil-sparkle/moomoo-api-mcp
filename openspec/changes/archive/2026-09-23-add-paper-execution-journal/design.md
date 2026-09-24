@@ -402,7 +402,7 @@ correlation. The subsequent 2026-09-24 after-close observation is recorded in
 the Stage 1 verification log. Neither a
 positive match nor successful enumeration establishes a provider absence-proof
 contract. Keep the proof requirements below unchanged. Full observations and
-scope limits are in [the Stage 1 live verification log](../harden-trading-safeguards/verification.md).
+scope limits are in [the Stage 1 live verification log](../2026-09-24-harden-trading-safeguards/verification.md).
 
 **Additional provider observations, 2026-09-23 (tasks 1.1, 1.2, 1.6).** The earlier
 bounded US stock paper `DAY` limit order was accepted and cancelled. A separate
