@@ -63,9 +63,10 @@ NOT infer an instrument's currency from its market prefix outside that verified 
   arithmetic or a finiteness test on a non-numeric value.
 - **Monetary multiplier.** The multiplier SHALL convert a quoted price into money for
   one unit of quantity. It SHALL be `1` for stocks and ETFs. For options it SHALL be
-  the broker-reported contract field whose monetary semantics have been verified, and
-  until that verification an option SHALL NOT be assessable. Any other classification
-  SHALL be refused.
+  the broker-reported `option_contract_multiplier`, whose monetary semantics have
+  been verified. Missing or unusable values SHALL be refused without substituting
+  `option_contract_size` or a hardcoded value. Any other classification SHALL be
+  refused.
 - **Market reference (`M`).** The largest of the normalized quote prices. When no
   normalized price remains, `M` is unavailable. This version applies no staleness
   threshold.
@@ -131,7 +132,7 @@ computed.
 
 - **GIVEN** `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` is `USD:1000`
 - **WHEN** a BUY `NORMAL` order is requested for 5 contracts of a US option at 3.00,
-  whose broker-reported contract size is 100
+  whose broker-reported monetary multiplier is 100
 - **THEN** the computed notional SHALL be 1,500 USD
 - **AND** the service SHALL reject the order before contacting the gateway for any
   order mutation
@@ -225,7 +226,7 @@ computed.
 #### Scenario: Combo premium limit
 
 - **GIVEN** `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` is `USD:500`
-- **WHEN** a two-leg US option `NORMAL` combo, with contract size 100, is requested
+- **WHEN** a two-leg US option `NORMAL` combo, with a common monetary multiplier of 100, is requested
   at a net price of -2.50 for 3 packages
 - **THEN** the computed package premium SHALL be 750 USD
 - **AND** the service SHALL reject the order

@@ -36,28 +36,12 @@ from moomoo_mcp.services.trading_policy import (
     InstrumentFacts,
 )
 
-# Which snapshot field carries an option's monetary multiplier — the number that
-# turns a quoted price into the cash value of one contract.
-#
-# Deliberately unset. The SDK offers two candidates and its own field table
-# describes them as:
-#
-#   option_contract_size        每份合约数                    units per contract
-#   option_contract_multiplier  合约乘数，指数期权特有字段      index options only
-#
-# That points at `option_contract_size`, and says `option_contract_multiplier`
-# would not even be populated for a US equity option. It is documentary evidence
-# rather than the coincidence of a field equalling 100, which is what task 1.1
-# of the harden-trading-safeguards change rules out as a basis for choosing.
-#
-# What it is not is the independent cross-check task 1.1 requires: confirming the
-# field against a figure established another way, such as an option position's
-# own market value. That needs an account, and until it is done an option is not
-# assessable and is refused while a notional cap is configured.
-#
-# Setting this to "option_contract_size" is the whole change once that check
-# lands. See openspec/changes/harden-trading-safeguards/verification.md.
-OPTION_MONETARY_MULTIPLIER_FIELD: str | None = None
+# OpenD documents the monetary multiplier separately from deliverable size.
+# Official definitions and independent live position arithmetic are recorded in
+# openspec/changes/archive/2026-09-24-harden-trading-safeguards/verification.md
+# (observations dated 2026-09-23).
+# Never substitute option_contract_size or a hardcoded 100 for a missing value.
+OPTION_MONETARY_MULTIPLIER_FIELD = "option_contract_multiplier"
 
 # The classifications this server can value. Not a query filter: with an
 # explicit code_list the gateway returns each instrument's own stock_type in
@@ -246,22 +230,13 @@ class InstrumentAdapter:
         """The multiplier that turns a quoted price into money, or a refusal.
 
         Equities quote in money per share, so the multiplier is one. Options do
-        not, and which broker field carries their monetary semantics is not yet
-        verified — see :data:`OPTION_MONETARY_MULTIPLIER_FIELD`.
+        not; use their documented premium multiplier, keeping deliverable size
+        separate for combo compatibility checks.
         """
         if classification != OPTION_CLASSIFICATION:
             # Not an option: the policy decides whether this classification can
             # be valued at all, and refuses the ones it cannot.
             return None if classification not in {"STOCK", "ETF"} else 1.0
-
-        if OPTION_MONETARY_MULTIPLIER_FIELD is None:
-            raise InstrumentLookupError(
-                f"{code} is an option, and which broker field carries an "
-                "option's monetary multiplier has not been verified against an "
-                "independent figure. Valuing it would mean guessing what one "
-                "contract is worth, so it is refused while a notional cap is "
-                "configured. Remove the cap to place this order."
-            )
 
         multiplier = normalize_quote(snapshot.get(OPTION_MONETARY_MULTIPLIER_FIELD))
         if multiplier is None:

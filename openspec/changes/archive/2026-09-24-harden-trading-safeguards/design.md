@@ -149,12 +149,14 @@ itself. `TradeService` receives the credential in its constructor, replacing the
 
   | Market prefix | Currency | Status |
   | --- | --- | --- |
-  | `US` | `USD` | provisional — task 1.1 confirms |
+  | `US` | `USD` | confirmed for supported STOCK/ETF/DRVT subset — task 1.1 |
 
-  Live evidence on 2026-09-23 returned USD for the sampled US paper order and
-  US stock/ETF/option positions. This confirms those samples, not every instrument
-  the `US` subset can admit; the table remains provisional. The snapshot still
-  provides no currency field. See `verification.md`.
+  On 2026-09-23, Moomoo's US stock/ETF product documentation and its Singapore
+  USD-settlement documentation for US stocks and US options established the
+  supported subset's currency. Live order and stock/ETF/option position responses
+  corroborated USD. This covers the supported classifications, not every product
+  or market the broker offers. The snapshot still provides no currency field.
+  Sources and the limits of this evidence are recorded in `verification.md`.
 
   No other prefix is supported while a notional cap is configured, and an instrument
   whose currency cannot be established this way is **refused**, not valued at a
@@ -247,11 +249,11 @@ The rules are listed below. They are also specified in `trading-policy`.
     documentation and observed non-index option values. It is not sufficient
     evidence to substitute deliverable size for the monetary multiplier. A live
     adjusted-contract example is not required merely to choose the documented field.
-  - This records the design decision, not a deployed code change. The adapter still
-    has `OPTION_MONETARY_MULTIPLIER_FIELD = None`; activation and focused regression
-    checks remain to be applied. Missing, non-finite or non-positive multiplier
-    values must still refuse assessment, without falling back to size or hardcoded
-    100. Capped options remain refused in the current deployed image.
+  - The adapter now selects `option_contract_multiplier`. Missing, non-finite or
+    non-positive values refuse assessment, without falling back to size or
+    hardcoded 100. Adapter-to-policy regression checks cover both single orders and
+    combos with unequal size/multiplier values; service tests prove refusal occurs
+    before dispatch. This source change does not itself update the deployed image.
   - Any classification other than `STOCK`, `ETF` or `DRVT` is refused.
 - **Order classes.** Two frozensets live in `services/validation.py` and are shared
   with Decision 4:
@@ -350,8 +352,10 @@ An order that is not found, or has unreadable fields, is refused as not sent.
   does not test. Under either, a target that cannot be retrieved remains a refusal.
   On 2026-09-23 the bounded paper order remained visible in both queries immediately
   and later in the same session, with terminal status, zero fills, and its original
-  remark. After-close visibility remains unmeasured; these observations are lower
-  bounds, not a retention guarantee.
+  remark. On 2026-09-24 at 17:01:45 SGT, both queries still returned that order,
+  about 20 hours 50 minutes after cancellation and after the prior US session
+  closed. Both measured windows are lower bounds, not maximum retention guarantees.
+  See the dated after-close observation in `verification.md`.
 
 ### 6. Account routing
 

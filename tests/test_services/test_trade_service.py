@@ -10,7 +10,7 @@ import pytest
 from moomoo import RET_ERROR, RET_OK, OpenSecTradeContext
 
 from moomoo_mcp.services.execution_store import ExecutionStore
-from moomoo_mcp.services.instruments import InstrumentLookupError
+from moomoo_mcp.services.instruments import InstrumentAdapter, InstrumentLookupError
 from moomoo_mcp.services.order_errors import (
     OrderNotSentError,
     OrderOutcomeUnknownError,
@@ -1807,6 +1807,47 @@ class TestInstrumentLookupIntegration:
         assert "no order was sent" in str(excinfo.value)
         assert "quote server down" in str(excinfo.value)
         mock_trade_ctx.place_order.assert_not_called()
+
+    @pytest.mark.parametrize("multiplier", ["N/A", 100.0])
+    def test_real_adapter_option_refusal_happens_before_dispatch(
+        self, mock_trade_ctx, multiplier
+    ):
+        code = "US.AAPL260116C300000"
+        quote = MagicMock()
+        quote.get_market_snapshot.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "code": code,
+                        "option_contract_size": 10.0,
+                        "option_contract_multiplier": multiplier,
+                    }
+                ]
+            ),
+        )
+        quote.get_stock_basicinfo.return_value = (
+            RET_OK,
+            pd.DataFrame(
+                [
+                    {
+                        "code": code,
+                        "stock_type": "DRVT",
+                    }
+                ]
+            ),
+        )
+        service = self._capped_service(mock_trade_ctx, InstrumentAdapter(lambda: quote))
+        with pytest.raises(OrderNotSentError) as error:
+            _place(service, code=code, trd_env="REAL", price=3.0, qty=5)
+        expected = (
+            "no usable option_contract_multiplier"
+            if multiplier == "N/A"
+            else "1,500.00 USD"
+        )
+        assert expected in str(error.value)
+        mock_trade_ctx.place_order.assert_not_called()
+        mock_trade_ctx.unlock_trade.assert_not_called()
 
     def test_no_lookup_wired_with_a_cap_refuses(self, mock_trade_ctx):
         service = self._capped_service(mock_trade_ctx, None)

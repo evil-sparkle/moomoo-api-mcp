@@ -1,7 +1,8 @@
 """The design's SDK assumptions, re-checked on every test run.
 
-`openspec/changes/harden-trading-safeguards/design.md` builds its decisions on a
-list of facts about `moomoo-api`. Carrying them here means an SDK bump that moves
+`openspec/changes/archive/2026-09-24-harden-trading-safeguards/design.md`
+builds its decisions on a list of facts about `moomoo-api`. Carrying them here
+means an SDK bump that moves
 one of them fails CI with the fact's own name, rather than surfacing later as a
 mispriced order or a gateway that never relocks.
 

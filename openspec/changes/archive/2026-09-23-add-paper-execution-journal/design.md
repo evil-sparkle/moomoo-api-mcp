@@ -21,8 +21,8 @@ The journal persists what Stage 1 classifies. It does not reclassify it.
 ### Provider facts this design depends on
 
 These shape the design. Tasks 1.1–1.3 and 1.6 were checked against the local OpenD
-connection to a US `SIMULATE` account on 2026-09-23; task 1.4 still needs an
-after-close observation. Each finding is recorded under the decision it affects.
+connection to a US `SIMULATE` account on 2026-09-23; task 1.4's after-close
+observation was recorded on 2026-09-24. Each finding is recorded under the decision it affects.
 
 - **The tested US stock paper account accepted `DAY` and rejected `GTC` and `GTD`.**
   `IOC` is documented only for crypto market orders, outside this US stock limit-order
@@ -33,8 +33,9 @@ after-close observation. Each finding is recorded under the decision it affects.
   therefore relies on order and history-order observations; it must not call
   `get_deals` or `get_history_deals`.
 - Both order queries returned the terminal paper order later the same day. Their
-  after-close retention windows are still unverified and bound how late
-  reconciliation can succeed.
+  after-close check on 2026-09-24 at 17:01:45 SGT still returned that order in
+  both queries, about 20 hours 50 minutes after cancellation. These are measured
+  lower bounds; maximum retention remains unknown.
 
 ### The prerequisite's GTC task conflicts with the first fact
 
@@ -397,10 +398,11 @@ The original caller remark `s1-check-20260923-day` survived unchanged, alongside
 the submission/update timestamps, `CANCELLED_ALL`, zero fills and stored `DAY`.
 This supports broker-returned correlation as a possible reconciliation input;
 it does not prove broker-enforced remark uniqueness or reliable modification
-correlation. The after-close retention window is still unmeasured. Neither a
+correlation. The subsequent 2026-09-24 after-close observation is recorded in
+the Stage 1 verification log. Neither a
 positive match nor successful enumeration establishes a provider absence-proof
 contract. Keep the proof requirements below unchanged. Full observations and
-scope limits are in [the Stage 1 live verification log](../harden-trading-safeguards/verification.md).
+scope limits are in [the Stage 1 live verification log](../2026-09-24-harden-trading-safeguards/verification.md).
 
 **Additional provider observations, 2026-09-23 (tasks 1.1, 1.2, 1.6).** The earlier
 bounded US stock paper `DAY` limit order was accepted and cancelled. A separate
@@ -864,8 +866,9 @@ Task 1.0 is complete for this checkout. Repeat the comparison if Stage 1 changes
 before archival. No provider calls were made during the repository-only check.
 The subsequent authorized Stage 1 live run supplied task 1.3's observed fields
 and same-session retention samples, recorded under Decision 9. The 2026-09-23
-US `SIMULATE` checks completed tasks 1.1, 1.2 and 1.6. Only task 1.4's after-close
-retention observation remains pending.
+US `SIMULATE` checks completed tasks 1.1, 1.2 and 1.6. Task 1.4 was completed by
+the 2026-09-24 after-close observation; both queries still returned the order.
+All provider prerequisite tasks are complete, with no maximum-retention claim.
 
 Strict validation (`openspec validate add-paper-execution-journal --strict --json`)
 validates structural correctness. Landed contracts and provider behaviors will be

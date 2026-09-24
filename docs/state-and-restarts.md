@@ -311,7 +311,7 @@ not rediscovered from scratch.
   a gateway that cannot resolve one produces a failing lock — and `lock_trade`
   is the only exit from `HALTED`. Confirmed in the SDK source; not yet checked
   against the live gateway. See
-  `openspec/changes/harden-trading-safeguards/verification.md`.
+  `openspec/changes/archive/2026-09-24-harden-trading-safeguards/verification.md`.
 - **The old ~10s stop was never explained.** The two-container MCP server took
   ~10s to stop in CI, which looked like the stop grace period expiring into a
   SIGKILL, and it was not reproduced outside the container. Under the

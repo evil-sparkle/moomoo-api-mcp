@@ -4,7 +4,7 @@ Development implementation and automated acceptance are complete. Tasks 1.0–1.
 record the completed prerequisite and provider observations.
 
 On 2026-09-23 the operator authorized separating live validation from development.
-Former task 1.4 and group 11 remain unverified in the active follow-up
+Former task 1.4 and group 11 were transferred to the active follow-up
 `validate-paper-execution-provider`. Groups 2–10 have passed; evidence is in `verification.md`. This development
 archive does not claim live journal acceptance.
 
@@ -51,7 +51,8 @@ under the decision it affects.
   log. This establishes remark survival for the sampled placement/cancellation,
   not uniqueness enforcement, modification correlation or maximum retention.
 Task 1.4 (after-close retention) moved, uncompleted, to
-`validate-paper-execution-provider` task 1.2. Unknown retention never proves absence.
+`validate-paper-execution-provider` task 1.2. That task was completed on
+2026-09-24 using the saved after-close observation. Unknown retention never proves absence.
 
 - [x] 1.5 GTC planning conflict resolved by Stage 1 commit `04ec53d`:
   task 1.2 now measures terminal DAY-order retention; non-DAY testing is

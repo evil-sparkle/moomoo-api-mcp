@@ -1,5 +1,75 @@
 # Verification log
 
+## After-close retention completed — 2026-09-24
+
+The saved scheduled-job result was checked against its generated report. Its
+actual observation was **2026-09-24 09:01:45.563668 UTC (17:01:45 SGT)**, later
+than the scheduled 00:15 UTC (08:15 SGT). The cause of the delay is not established.
+This is about 20 hours 50 minutes after the recorded cancellation and 9 hours
+2 minutes after the September 23 extended US session ended at 00:00 UTC.
+
+Both current-order and historical-order queries succeeded and returned the same
+US.AAPL SIMULATE DAY order: `CANCELLED_ALL`, quantity 1, price USD 1, filled
+quantity 0, average fill price 0, and original remark `s1-check-20260923-day`.
+The stored create/update timestamps remained `2026-09-23 08:12:02` (US market time).
+The probe recorded zero order mutations and issued no unlock. No new order was
+needed. The raw result and report remain in the private operator schedule folder.
+
+For **each query**, the measured retention window therefore extends at least to
+this after-close observation. A single positive observation does not establish
+maximum retention or prove absence when a later query returns no match. Existing
+fail-closed modification and reconciliation rules remain unchanged.
+
+This completes Stage 1 task 1.2 and Stage 2 task 1.4. All 30 Stage 1 tasks are now
+complete. Its eight capability deltas were verified against the main specs and
+the change was archived on 2026-09-24, preserving later Stage 1.1 and Stage 2
+requirements.
+The earlier pending-status entries below describe their original observation dates.
+
+## Instrument verification completed — 2026-09-23
+
+This section supersedes the open instrument work in the historical entries below.
+The source adapter now uses `option_contract_multiplier` for premium valuation
+and preserves `option_contract_size` independently. Missing, non-finite,
+non-positive and non-numeric multipliers refuse assessment. It does not substitute
+size or a hardcoded 100. Regression tests cover valid unequal field values,
+invalid/missing multipliers, single-order and combo caps, and a service refusal
+before any SDK placement or unlock.
+
+### Currency evidence for the supported US subset
+
+- Moomoo's [US stock/ETF product page](https://www.moomoo.com/au/invest/us-stock)
+  states that US stock/ETF orders require conversion to USD.
+- Moomoo Singapore's [Auto Currency Exchange documentation](https://www.moomoo.com/sg/support/topic5_1090)
+  identifies US stocks and US options as USD-settled products.
+- The Options Industry Council's [equity/index option premium explanation](https://www.optionseducation.org/advancedconcepts/equity-vs-index-options)
+  describes dollar-and-cent premiums, providing the quotation-unit cross-check.
+- The earlier live US order and stock/ETF/option position responses reported USD.
+
+Together, the broker's product-wide documentation and live corroboration establish
+USD for the server's currently supported US STOCK/ETF/DRVT valuation subset.
+This is not a claim that a market prefix alone determines currency or that other
+classifications or markets have been verified. No currency field was added to the
+snapshot; the policy continues to use its verified subset table.
+
+At 14:24:13 UTC, the updated source adapter was loaded in a separate Python process
+against the existing local OpenD. It queried AAPL, SPY, AAPL 2026-09-25 340 Call and
+AAPL 2026-09-25 415 Call. Classifications were STOCK, ETF, DRVT and DRVT; monetary
+multipliers were 1, 1, 100 and 100. Both option contract sizes were separately 100.
+Each passed a pure BUY limit assessment using the USD cap. This verifies live
+quote decoding and policy compatibility; it is not an order submission or an
+independent currency measurement. No account query, unlock or order mutation was
+issued by this follow-up. The running MCP service and deployed image were unchanged.
+
+After rebasing onto main with PR #31 merged, the full suite passed: 1,093 tests,
+1 skipped, 72 subtests; Ruff check/format and basedpyright passed; strict OpenSpec
+validation passed 25/25. The isolated container smoke test passed before that
+rebase; the PR's CI checks validate the final combined image separately.
+
+Task 1.1 is complete. Task 1.2a is also complete using the authorized GTC/GTD
+provider evidence already recorded in Stage 2. Task 1.2's after-close retention
+observation is the only remaining Stage 1 task; do not archive before it is recorded.
+
 ## Official-documentation follow-up — 2026-09-23
 
 This follow-up supersedes the field-selection gap in the earlier live-run notes.
