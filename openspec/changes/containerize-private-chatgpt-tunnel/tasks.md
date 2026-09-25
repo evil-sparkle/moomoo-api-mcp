@@ -1,10 +1,10 @@
 # Tasks
 
-Implementation begins only after proposal review and a new apply request. All items are intentionally unchecked. Owner acceptance is tracked separately and must not be represented as repository-test success.
+Implementation begins only after proposal review and a new apply request. Implementation is in progress; only fully completed items are checked. Owner acceptance is tracked separately and must not be represented as repository-test success.
 
 ## 1. Establish pinned-client compatibility evidence
 
-- [ ] 1.1 Verify the existing v0.0.14 archive with `deploy/tunnel-client/install.py` and inspect its pinned configuration/source for runtime paths, health endpoints, signal behavior and static-header scope; deliver an evidence note with version/digest and exact supported settings, without unrelated upgrades.
+- [x] 1.1 Verify the existing v0.0.14 archive with `deploy/tunnel-client/install.py` and inspect its pinned configuration/source for runtime paths, health endpoints, signal behavior and static-header scope; deliver an evidence note with version/digest and exact supported settings, without unrelated upgrades.
 - [ ] 1.2 Build a disposable simulated control-plane fixture for the real release and redirect/proxy sinks; demonstrate discovery, initialize and forwarded calls, and prove protected headers never reach unapproved hosts, subdomains, ports or proxies. If the pinned client cannot satisfy this, deliver a justified minimal official-upgrade proposal before continuing dependent work.
 - [ ] 1.3 Select and record immutable slim runtime/build image digests and the minimal writable paths; verify the real binary executes and config parses under non-root read-only conditions before finalizing image settings.
 
