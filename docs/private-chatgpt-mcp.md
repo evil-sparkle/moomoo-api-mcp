@@ -1,3 +1,144 @@
+# Private ChatGPT tunnel: Compose migration (release blocked)
+
+**Do not enable this migration in production.** PR #38 is draft. The unchanged
+v0.0.14 official client fails OpenAI runtime-key redirect confinement. OpenSpec
+`containerize-private-chatgpt-tunnel` task **1.2 is BLOCKED**, and release handoff
+8.3 is incomplete. Local builds, component tests, and simulated control-plane
+success cannot clear those gates. No VPS deployment, real credentials, live
+OpenAI traffic, trading enablement, merge, or ChatGPT/iPad acceptance has occurred.
+The production wrapper refuses tunnel start/restart while this gate is unresolved.
+
+## Intended deployment after release approval
+
+Compose is the recommended replacement: the existing `moomoo-mcp` container still
+contains exactly two supervised processes (MCP and OpenD). Explicit selection of
+`docker-compose.chatgpt.yml` adds `chatgpt-tunnel`, a separate unprivileged container.
+Default deployment requires no tunnel credentials or setup. Keep the same Compose
+project, OpenD volume, journal volumes, and host publication `127.0.0.1:8000:8000`.
+OpenD stays `127.0.0.1:11111` **inside the brokerage container**; it is never
+published. The sidecar reaches only `http://moomoo-mcp:8000/mcp` over Docker DNS.
+It shares neither network nor PID namespaces, publishes no ports, and mounts no
+brokerage state, journals or Docker socket. The production bridge allows outbound
+connectivity. Only disposable test networks prohibit internet egress.
+
+The overlay opts the MCP server into the exact Host `moomoo-mcp:8000` using
+`MCP_ALLOW_CHATGPT_TUNNEL_HOST=1`. The preflight separately requires
+`--allow-compose-mcp`; unexpected Hosts, Origins, destinations, redirects, and
+inherited proxies remain rejected. The ordinary MCP bearer protects initialization,
+discovery and calls. It is distinct from the limited OpenAI runtime key. Never
+supply an operator token, broker login, unlock material or OpenAI admin key.
+
+## Build and protect the inputs
+
+These are preparation instructions for review, not current production authorization.
+Build `scripts/build-tunnel-image.sh` using the selected Docker context. Only its
+enumerated public files enter the build context. The image uses the unchanged
+reviewed release manifest, verifies the archive before executing the binary, and
+pins the slim base image by digest. There is no runtime download. Record the local
+immutable image ID and the reviewed source commit; reuse that ID for recreation.
+The daemon runs as numeric UID/GID `10002:10002`, with a read-only root, no
+capabilities, no-new-privileges and a bounded private runtime tmpfs.
+
+Keep existing master credentials root:root mode `0600`. The existing no-echo
+`scripts/install_private_chatgpt_credential.py` remains the master input helper;
+its terminal restoration and atomic writes are unchanged. A root-owned tunnel-id
+file is also required. Do not put credentials in YAML, build arguments, images,
+process arguments, shell history, logs, or tracked files.
+
+Provision staged copies under
+`/var/lib/moomoo-chatgpt-tunnel/compose-secrets/<deployment-id>`. Run
+`scripts/stage_tunnel_secrets.py` as root with an explicit local Docker Unix socket
+and immutable image ID. First run it without directory arguments: its disposable
+marker measures the host mapping of UID/GID 10002 and cross-checks the UID/GID maps.
+Do not guess subuid offsets or assume Compose secret uid/gid/mode overrides work.
+Rootful and rootless mappings differ; verify on the actual daemon host.
+
+Create root-owned `0700` staging parents. On each necessary parent grant only
+traversal ACLs to the measured runtime UID and, for rootless Docker, the daemon
+owner. Do not grant write access, default/inheritable ACLs or access to master
+credentials. The helper takes `--master-directory` and `--staging-directory`,
+rejects symlinks/unsafe writable parents, and atomically writes the three fixed
+files with mapped ownership and mode `0400`. Each file is mounted read-only at
+`/run/secrets/`. The root provisioning helper is not a root tunnel daemon.
+Root and the Docker controller remain trusted administrators.
+
+## Future migration sequence
+
+1. Verify all official-client and final integration gates have passed and receive
+   explicit production approval. Do not work around the current wrapper refusal.
+2. Stop and disable `moomoo-chatgpt-tunnel.service`; confirm it is inactive before
+   starting the Compose replacement. Never run both for the same tunnel.
+3. Confirm the existing MCP deployment is READ_ONLY. Record the existing Compose
+   project, image identities and volume names; do not create a replacement project.
+4. Provision the mapped files and validate access with the actual image/UID.
+5. Record selection using `scripts/tunnel_deployment.py select --image <image-id>
+   --secret-directory <protected-directory> --project <existing-project>`.
+   `.chatgpt-deploy.json` contains only non-secret selection metadata and survives
+   deployment checkout/rollback. It is not a credential file.
+6. After the release gate is legitimately cleared, recreate MCP with the selected
+   overlay to apply the Host opt-in; preserve its volumes. Start only the tunnel
+   service after MCP is reachable. A selected overlay refuses SIMULATE/REAL mode.
+
+The startup manager retries transient MCP failures for at most 90 seconds. It
+requires authenticated initialize, tools/list and READ_ONLY health before launching
+any polling client. Degraded OpenD can pass this gate; it is not account acceptance.
+The ordinary bearer is **not permanently read-only**: stop/disable the tunnel
+before changing MCP to SIMULATE or REAL.
+
+## Operations, diagnostics and rotation
+
+Use the saved wrapper selection consistently. `scripts/compose-prod.sh exec
+chatgpt-tunnel python /opt/tunnel/runtime.py diagnostics` checks the listener on the
+tunnel container's own loopback and separately reports liveness, readiness and MCP
+availability. No health/admin port is published. Raw client output is suppressed;
+manager diagnostics contain only fixed messages, not keys, Authorization headers,
+account results or raw MCP bodies. Official `doctor` currently fails unauthenticated
+OAuth metadata discovery against the authenticated MCP endpoint; it does not replace
+the authenticated startup gate or constitute a passing compatibility result.
+
+Child exit or three failed bounded liveness probes makes the manager terminate
+and exit nonzero for Docker restart. Control-plane readiness loss alone does not
+restart a healthy process. SIGTERM/SIGINT are forwarded, with a ten-second grace
+before forced termination; Compose allows twenty seconds. MCP availability and
+broker-backed availability are separate conditions.
+
+Rotate runtime key and MCP bearer separately. Stop the tunnel, atomically update
+the root master with the no-echo helper, stage the new mapped copy, then **force
+recreate** the sidecar with the same image/project. Restarting a process or container
+can retain a bind mount of the old inode. Verify new authenticated traffic and
+old-value rejection without printing either value. For MCP bearer rotation,
+coordinate the MCP recreation and existing local clients (including ZeroClaw)
+before recreating the tunnel. Rotation is incomplete without this behavioral proof.
+
+## Disable and rollback
+
+`scripts/tunnel_deployment.py disable` stops/removes only `chatgpt-tunnel` and then
+clears its selection. Do not use `docker compose down` or delete volumes to stop a
+tunnel. MCP and ZeroClaw remain usable. Before selecting an older commit without
+overlay support, disable the tunnel; deployment refuses an unsupported rollback
+while selection exists. Keep recorded OpenD/journal volume identities unchanged.
+
+For legacy rollback, first stop/remove the Compose tunnel and clear selection;
+only then restore/start the legacy systemd unit with the original root-only masters.
+The legacy assets below are retained for migration/rollback, not a second required
+service. Restoring a legacy mechanism does not waive any known client security issue
+or authorize production enablement.
+
+## Verification boundary
+
+See the active OpenSpec independent verification report for exact passes, failures
+and untested cases. The container harness uses synthetic files, unique projects,
+a simulated control plane, random loopback publications and project-scoped cleanup.
+Its gateway is an OpenD network stub, not a broker login. Rootful/rootless permission
+checks and normal forwarding cannot stand in for redirect/proxy confinement.
+VPS deployment, real OpenAI acceptance, full account/positions acceptance,
+ChatGPT web invocation and native iPad acceptance remain **PENDING**.
+
+## Legacy systemd installation reference
+
+The following retained instructions are a legacy migration/rollback reference only.
+They are not authorization to enable the known-failing client.
+
 # Private ChatGPT access through OpenAI Secure MCP Tunnel
 
 This optional owner-operated path connects supported OpenAI products to the

@@ -1,8 +1,13 @@
 # Tasks
 
-This revision is planning-only. Present it for review and wait for a new apply request before resuming code changes. Only task 1.1 is complete (1/36); no checkbox changes are made by this revision. PR #38 remains draft, the feature default-off and the production pin unchanged. No real credentials, real OpenAI traffic, VPS deployment, trading, merge/release or live acceptance is authorized.
+The owner approved this dependency revision and authorized independent implementation.
+Planning commit `36f3f69` was pushed to draft PR #38 before implementation started.
+Task 1.2 remains BLOCKED and 8.3 remains incomplete. Only fully verified task
+checkboxes are checked; partial implementation is reported in
+`independent-verification.md`. No real credentials, real OpenAI traffic, VPS
+deployment, trading, merge/release or live acceptance is authorized.
 
-The dependency table is authoritative; section order is organizational, not a blanket dependency on task 1.2. **Independent** means safe to implement after a new apply request using only synthetic credentials and disposable local/container fixtures. It does not mean released, production-enabled or security-gate-passed. Any test involving the actual official binary still records its own pass/fail/untested result in design.md's matrix. Keep failed gates failing; do not replace them with a stub, xfail, skipped test or an unrelated passing job.
+The dependency table is authoritative; section order is organizational, not a blanket dependency on task 1.2. **Independent** means safe to implement under the approved apply request using only synthetic credentials and disposable local/container fixtures. It does not mean released, production-enabled or security-gate-passed. Any test involving the actual official binary still records its own pass/fail/untested result in design.md's matrix. Keep failed gates failing; do not replace them with a stub, xfail, skipped test or an unrelated passing job.
 
 | Task(s) | Prerequisites | Work classification and completion boundary |
 | --- | --- | --- |
@@ -45,22 +50,22 @@ Task 1.2 need not pass before any Independent row. Its unresolved result prevent
 
 - [x] 1.1 Verify the existing v0.0.14 archive with `deploy/tunnel-client/install.py` and inspect its pinned configuration/source for runtime paths, health endpoints, signal behavior and static-header scope; deliver an evidence note with version/digest and exact supported settings, without unrelated upgrades.
 - [ ] 1.2 Complete the mandatory real official-client matrix in design.md (CP1–CP9, MD1–MD2, MF1–MF2, MA1, MP1, MR1): use distinct synthetic OpenAI runtime key and ordinary MCP bearer values, normal authenticated control-plane/MCP operation, negative auth, redirect/proxy sinks and rotation. Record every case as PASS, FAIL or UNTESTED with exact artifact provenance. Fixture work can proceed independently; this checkbox stays unchecked while any required case fails or is untested. Preserve the reproduction; review the explicit control-plane redirect policy and destination-scoped credential-injection remediation candidate without shipping a patched client/proxy, changing the production pin or posting upstream. Closure requires reviewed official provenance and passing evidence, not merely proposing an upgrade.
-- [ ] 1.3 Select and record immutable slim runtime/build image digests and the minimal writable paths; verify the real binary executes and config parses under non-root read-only conditions before finalizing image settings.
+- [x] 1.3 Select and record immutable slim runtime/build image digests and the minimal writable paths; verify the real binary executes and config parses under non-root read-only conditions before finalizing image settings.
 
 ## 2. Add narrow transport compatibility
 
-- [ ] 2.1 Add validated `MCP_ALLOW_CHATGPT_TUNNEL_HOST` handling in settings/server construction; test absent/blank/0/1/invalid values and that only exact `moomoo-mcp:8000` is additionally accepted with opt-in.
-- [ ] 2.2 Extend `private_chatgpt_preflight.py` with explicit exact Compose URL opt-in, no-proxy transport, refused redirects, bounded response handling and classified safe errors; test localhost regressions, wrong ports/aliases/userinfo/query/fragment/private addresses, redirect classes and proxy traps.
-- [ ] 2.3 Verify initialize, discovery and calls with ordinary bearer; preserve missing/wrong/conflicting-header rejection, unexpected Host/Origin denial, stateless behavior and all tool annotations using ASGI/protocol tests.
-- [ ] 2.4 Retain READ_ONLY mutation-dispatch coverage for placement/modification/cancellation/unlock/operator recovery and prove SIMULATE/REAL startup is refused, including zero broker-write counters; do not modify trading policy to satisfy integration tests.
+- [x] 2.1 Add validated `MCP_ALLOW_CHATGPT_TUNNEL_HOST` handling in settings/server construction; test absent/blank/0/1/invalid values and that only exact `moomoo-mcp:8000` is additionally accepted with opt-in.
+- [x] 2.2 Extend `private_chatgpt_preflight.py` with explicit exact Compose URL opt-in, no-proxy transport, refused redirects, bounded response handling and classified safe errors; test localhost regressions, wrong ports/aliases/userinfo/query/fragment/private addresses, redirect classes and proxy traps.
+- [x] 2.3 Verify initialize, discovery and calls with ordinary bearer; preserve missing/wrong/conflicting-header rejection, unexpected Host/Origin denial, stateless behavior and all tool annotations using ASGI/protocol tests.
+- [x] 2.4 Retain READ_ONLY mutation-dispatch coverage for placement/modification/cancellation/unlock/operator recovery and prove SIMULATE/REAL startup is refused, including zero broker-write counters; do not modify trading policy to satisfy integration tests.
 
 ## 3. Build the independent container runtime
 
-- [ ] 3.1 Add the dedicated Dockerfile and allowlisted build-context preparation, reusing release manifest/integrity installer; verify checksum failure precedes extraction/execution and inspect final image contents for absence of broker components and synthetic secret canaries.
-- [ ] 3.2 Add container-only configuration using exact Docker DNS URL, file-backed runtime/discovery headers and loopback health/admin binding; verify parsing and safe doctor diagnostics with the pinned binary and synthetic files.
-- [ ] 3.3 Add minimal PID 1 startup gating with a 90-second deadline, bounded transient retries and immediate fatal-error refusal; test delayed MCP, exhausted deadline, invalid auth/mode/results, and that no client polling starts before READ_ONLY is proven.
+- [x] 3.1 Add the dedicated Dockerfile and allowlisted build-context preparation, reusing release manifest/integrity installer; verify checksum failure precedes extraction/execution and inspect final image contents for absence of broker components and synthetic secret canaries.
+- [x] 3.2 Add container-only configuration using exact Docker DNS URL, file-backed runtime/discovery headers and loopback health/admin binding; verify parsing and safe doctor diagnostics with the pinned binary and synthetic files.
+- [x] 3.3 Add minimal PID 1 startup gating with a 90-second deadline, bounded transient retries and immediate fatal-error refusal; test delayed MCP, exhausted deadline, invalid auth/mode/results, and that no client polling starts before READ_ONLY is proven.
 - [ ] 3.4 Implement child reaping, signal forwarding, bounded shutdown and liveness-triggered nonzero exit; test real child exit, SIGTERM/SIGINT, SIGSTOP/hang, and independent recovery without treating remote readiness failure alone as process death.
-- [ ] 3.5 Implement separate safe diagnostics for liveness, readiness and authenticated MCP availability, with a minimal scrubbed child environment; test proxy/config override removal and no credentials, Authorization headers, account results or raw bodies in output.
+- [x] 3.5 Implement separate safe diagnostics for liveness, readiness and authenticated MCP availability, with a minimal scrubbed child environment; test proxy/config override removal and no credentials, Authorization headers, account results or raw bodies in output.
 
 ## 4. Provision container-readable secrets safely
 
@@ -72,8 +77,8 @@ Task 1.2 need not pass before any Independent row. Its unresolved result prevent
 
 ## 5. Integrate explicit Compose selection and deployment
 
-- [ ] 5.1 Add `docker-compose.chatgpt.yml` with separate service, user-defined outbound-capable bridge, numeric user, read-only root, dropped capabilities, no-new-privileges, minimal tmpfs/mounts and independent restart policy; verify rendered synthetic configs have no shared namespaces, extra ports, Docker socket or brokerage/journal mounts.
-- [ ] 5.2 Preserve existing base/production/paper/smoke assertions and add an overlay matrix; prove default deployment has one brokerage service and needs no tunnel settings/secrets while enabled deployment adds exactly one tunnel service without changing OpenD binding or host publication.
+- [x] 5.1 Add `docker-compose.chatgpt.yml` with separate service, user-defined outbound-capable bridge, numeric user, read-only root, dropped capabilities, no-new-privileges, minimal tmpfs/mounts and independent restart policy; verify rendered synthetic configs have no shared namespaces, extra ports, Docker socket or brokerage/journal mounts.
+- [x] 5.2 Preserve existing base/production/paper/smoke assertions and add an overlay matrix; prove default deployment has one brokerage service and needs no tunnel settings/secrets while enabled deployment adds exactly one tunnel service without changing OpenD binding or host publication.
 - [ ] 5.3 Extend deployment/wrapper selection explicitly and persist non-secret selection plus optional immutable image identity; test consistent context/project/files in start and verification, default-off behavior, and no orphan removal of the enabled tunnel.
 - [ ] 5.4 Add scoped enable/disable and rollback behavior, including refusal of non-READ_ONLY mode with the overlay selected and refusal of an unsupported older target until tunnel disablement; verify state restoration and targeted recreation retain OpenD/journal volume identities and existing local-client behavior.
 - [ ] 5.5 Test optional-image build/enable/update and reuse of its recorded immutable identity on restart/recreation; prove no runtime download, implicit upgrade, tunnel setup requirement for default deploy, or accidental inclusion of secret files in the build context.

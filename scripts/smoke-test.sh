@@ -34,20 +34,24 @@ cd "$(dirname "$0")/.."
 # Never the deployment's own project name. The cleanup below runs `down -v`,
 # which under that name would take the real opend-data volume — and with it the
 # device tokens that only an interactive login can replace.
-PROJECT="moomoo-smoke"
+PROJECT="moomoo-smoke-$(date +%s)-$$"
 SERVICE="moomoo-mcp"
-ENDPOINT="http://127.0.0.1:8000/mcp"
+ENDPOINT=""
 TOKEN="smoke-test-token-not-a-secret"
-PROBE_IMAGE="python:3.12-slim"
+PROBE_IMAGE="python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c"
 
 ENV_FILE="$(mktemp)"
+ISOLATION_FILE="$(mktemp --suffix=.yml)"
+SMOKE_IMAGE="${SMOKE_IMAGE:-$PROJECT-moomoo-mcp}"
+printf 'services:\n  moomoo-mcp:\n    image: %s\n    ports: !override ["127.0.0.1::8000"]\n' "$SMOKE_IMAGE" > "$ISOLATION_FILE"
 # Explicit, because Compose otherwise reads whatever .env a developer has, and
 # this run would assert against their configuration instead of the default one.
 printf 'MCP_AUTH_TOKEN=%s\n' "$TOKEN" > "$ENV_FILE"
 
 dc() {
-  docker compose -p "$PROJECT" --env-file "$ENV_FILE" \
-    -f docker-compose.yml -f docker-compose.smoke.yml "$@"
+  env -i PATH="$PATH" HOME="$HOME" DOCKER_CONTEXT="${DOCKER_CONTEXT:-}" \
+    DOCKER_HOST="${DOCKER_HOST:-}" docker compose -p "$PROJECT" --env-file "$ENV_FILE" \
+    -f docker-compose.yml -f docker-compose.smoke.yml -f "$ISOLATION_FILE" "$@"
 }
 
 cleanup() {
@@ -57,7 +61,7 @@ cleanup() {
     dc logs --tail=60 "$SERVICE" >&2 || true
   fi
   dc down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -f "$ENV_FILE"
+  rm -f "$ENV_FILE" "$ISOLATION_FILE"
 }
 trap cleanup EXIT
 
@@ -251,14 +255,17 @@ wait_for() {
 
 echo "==> starting the stack"
 dc up -d --build --quiet-pull
+published="$(dc port "$SERVICE" 8000)"
+[[ "$published" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'Invalid fixture publication' >&2; exit 1; }
+ENDPOINT="http://$published/mcp"
 
-echo "==> the MCP endpoint answers on 127.0.0.1:8000"
+echo "==> the MCP endpoint answers on $published"
 wait_for 60 "the MCP endpoint to answer" endpoint_rejects_anonymous
 
 authorized="$(endpoint_status -H "Authorization: Bearer ${TOKEN}")"
 if [ "${authorized}" = "401" ]; then
   echo "FAILED: a valid bearer token was rejected, so whatever answers on" \
-    "127.0.0.1:8000 is not this server." >&2
+    "The selected ephemeral port is not this server." >&2
   exit 1
 fi
 

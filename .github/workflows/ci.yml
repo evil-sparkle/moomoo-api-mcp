@@ -227,7 +227,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Run the container smoke test
         run: |
-          ./scripts/smoke-test.sh
+          SMOKE_IMAGE=moomoo-smoke-moomoo-mcp ./scripts/smoke-test.sh
       - name: Verify persistent paper execution in isolated containers
         run: |
           # smoke-test builds this image and removes only its containers/volumes.

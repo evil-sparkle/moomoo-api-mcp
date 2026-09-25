@@ -1,0 +1,38 @@
+# Explicit, default-off integration. RELEASE BLOCKED: OpenSpec task 1.2.
+# Never use with real credentials until the mandatory compatibility gate passes.
+services:
+  moomoo-mcp:
+    environment:
+      MCP_ALLOW_CHATGPT_TUNNEL_HOST: "1"
+  chatgpt-tunnel:
+    image: ${CHATGPT_TUNNEL_IMAGE:?build and record an immutable tunnel image first}
+    platform: linux/amd64
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 20s
+    tmpfs:
+      - /run/moomoo-chatgpt-tunnel:uid=10002,gid=10002,mode=0700,size=16m,noexec,nosuid,nodev
+    volumes:
+      - type: bind
+        source: ${CHATGPT_TUNNEL_SECRET_DIR:?provision mapped secret files first}/control-plane-api-key
+        target: /run/secrets/control-plane-api-key
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${CHATGPT_TUNNEL_SECRET_DIR:?provision mapped secret files first}/mcp-authorization
+        target: /run/secrets/mcp-authorization
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${CHATGPT_TUNNEL_SECRET_DIR:?provision mapped secret files first}/tunnel-id
+        target: /run/secrets/tunnel-id
+        read_only: true
+        bind: {create_host_path: false}
+# Compose creates a project-scoped user-defined bridge with Docker DNS and egress.
+networks:
+  default:
+    driver: bridge
+    internal: false

@@ -226,3 +226,9 @@ context: |
 #     archive:
 #       guidance:
 #         - Summarize the archive outcome before finishing
+
+  Optional tunnel migration: `containerize-private-chatgpt-tunnel` adds an explicitly
+  selected separate Compose container; the brokerage container still supervises
+  only MCP and OpenD. Task 1.2 (official runtime-key confinement) and release handoff
+  8.3 remain blocked. Synthetic fixture success does not authorize production,
+  live OpenAI traffic, trading or ChatGPT/iPad acceptance. Keep the official pin.

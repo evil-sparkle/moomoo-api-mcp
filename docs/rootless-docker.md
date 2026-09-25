@@ -65,3 +65,16 @@ container does not mean the Docker daemon runs as host root. (The container runs
 References: [Lima Docker template](https://github.com/lima-vm/lima/blob/master/templates/docker.yaml),
 [Lima architecture emulation](https://lima-vm.io/docs/config/multi-arch/),
 [Docker rootless mode](https://docs.docker.com/engine/security/rootless/).
+
+
+### Optional Compose tunnel migration — release blocked
+
+The brokerage container remains one supervisor with two children (MCP and OpenD).
+The explicit `docker-compose.chatgpt.yml` overlay adds a separate optional tunnel
+container; normal deployments need no tunnel settings. The official client still
+fails the mandatory runtime-key confinement gate, so PR #38 remains draft and
+production enablement is prohibited. See [the tunnel migration runbook](private-chatgpt-mcp.md)
+for measured rootful/rootless secret mapping, forced-recreation rotation, legacy
+systemd migration, and tunnel-only disable/rollback. Preserve the existing project,
+OpenD/journal volumes and `127.0.0.1:8000:8000`; never publish OpenD or share its
+network namespace. Stop the tunnel before changing MCP out of READ_ONLY.

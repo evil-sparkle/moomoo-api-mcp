@@ -1,0 +1,71 @@
+name: Tunnel compatibility (release blocked)
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  official-client-release-gate:
+    name: BLOCKED — official runtime-key confinement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify the unchanged official release
+        run: python3 deploy/tunnel-client/install.py --destination "$RUNNER_TEMP/tunnel-client"
+      - name: Real-client synthetic redirect confinement (must fail on diversion)
+        run: python3 scripts/check_tunnel_client_compatibility.py --binary "$RUNNER_TEMP/tunnel-client"
+      - name: Record remaining mandatory gate status
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'REPORT'
+          ## Release remains blocked
+          This job tests the OpenAI **runtime key**, using loopback synthetic fixtures.
+          It does not test or approve the ordinary MCP bearer path.
+          CP1/CP2 are known failures on the unchanged official v0.0.14 pin.
+          Other required official-client matrix cases remain incomplete: see the
+          active OpenSpec design and independent verification evidence.
+          Component success, image builds and pytest do not clear task 1.2 or 8.3.
+          VPS/OpenAI/ChatGPT/iPad acceptance is pending and not authorized.
+          REPORT
+      - name: All mandatory matrix cases must be reviewed before release
+        run: |
+          echo 'BLOCKED: OpenSpec task 1.2 has unpassed mandatory cases.' >&2
+          exit 1
+  disposable-container-integration:
+    name: Synthetic container integration (${{ matrix.context }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        context: [default, rootless]
+    env:
+      DOCKER_CONTEXT: ${{ matrix.context }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install fixture dependencies
+        run: |
+          uv sync --frozen --all-extras --dev
+          sudo apt-get update
+          sudo apt-get install -y acl uidmap dbus-user-session
+      - name: Set up the disposable rootless daemon
+        if: matrix.context == 'rootless'
+        run: |
+          command -v dockerd-rootless-setuptool.sh
+          dockerd-rootless-setuptool.sh install --force
+          docker --context rootless info
+      - name: Build actual images from public inputs
+        run: |
+          docker build -t moomoo-tunnel-broker:ci .
+          ./scripts/build-tunnel-image.sh
+      - name: Exercise the pinned client, real entrypoint and secret permissions
+        run: ./scripts/test-tunnel-container.sh moomoo-tunnel-broker:ci
+      - name: Describe the acceptance boundary
+        if: always()
+        run: |
+          echo 'Synthetic local control plane only; task 1.2 remains blocked.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No live OpenAI, VPS, trading, ChatGPT or iPad acceptance.' >> "$GITHUB_STEP_SUMMARY"
