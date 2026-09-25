@@ -186,3 +186,26 @@ def test_bounded_response(monkeypatch, tmp_path):
             preflight.run(
                 url=endpoint.url, authorization_file=auth, mode="startup-safe"
             )
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
+def test_preflight_refuses_unbounded_timeout_before_credential_read(tmp_path, timeout):
+    with pytest.raises(preflight.PreflightError, match="Timeout"):
+        preflight.run(
+            url=preflight.DEFAULT_URL,
+            authorization_file=tmp_path / "missing",
+            mode="startup-safe",
+            timeout=timeout,
+        )
+
+
+def test_direct_preflight_client_also_requires_exact_destination_opt_in():
+    with pytest.raises(preflight.PreflightError):
+        preflight.McpClient(preflight.COMPOSE_URL, "Bearer synthetic")
+    preflight.McpClient(
+        preflight.COMPOSE_URL, "Bearer synthetic", allow_compose_mcp=True
+    )
+    with pytest.raises(preflight.PreflightError):
+        preflight.McpClient(
+            "http://10.0.0.1:8000/mcp", "Bearer synthetic", allow_compose_mcp=True
+        )

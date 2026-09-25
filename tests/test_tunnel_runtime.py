@@ -121,3 +121,14 @@ def test_unapproved_config_is_rejected_before_credentials(tmp_path, monkeypatch)
     config.write_text("unapproved destination")
     with pytest.raises(ValueError, match="unapproved"):
         runtime.verify_config()
+
+
+def test_main_never_launches_child_when_authenticated_gate_fails(monkeypatch):
+    monkeypatch.setattr(runtime, "verify_config", Mock())
+    monkeypatch.setattr(runtime, "child_environment", Mock(return_value={}))
+    monkeypatch.setattr(runtime, "gate", Mock(return_value=False))
+    monkeypatch.setattr(runtime.sys, "argv", ["runtime.py"])
+    spawn = Mock()
+    monkeypatch.setattr(runtime.subprocess, "Popen", spawn)
+    assert runtime.main() == 1
+    spawn.assert_not_called()

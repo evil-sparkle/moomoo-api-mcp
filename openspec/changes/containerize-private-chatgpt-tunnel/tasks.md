@@ -64,14 +64,14 @@ Task 1.2 need not pass before any Independent row. Its unresolved result prevent
 - [x] 3.1 Add the dedicated Dockerfile and allowlisted build-context preparation, reusing release manifest/integrity installer; verify checksum failure precedes extraction/execution and inspect final image contents for absence of broker components and synthetic secret canaries.
 - [x] 3.2 Add container-only configuration using exact Docker DNS URL, file-backed runtime/discovery headers and loopback health/admin binding; verify parsing and safe doctor diagnostics with the pinned binary and synthetic files.
 - [x] 3.3 Add minimal PID 1 startup gating with a 90-second deadline, bounded transient retries and immediate fatal-error refusal; test delayed MCP, exhausted deadline, invalid auth/mode/results, and that no client polling starts before READ_ONLY is proven.
-- [ ] 3.4 Implement child reaping, signal forwarding, bounded shutdown and liveness-triggered nonzero exit; test real child exit, SIGTERM/SIGINT, SIGSTOP/hang, and independent recovery without treating remote readiness failure alone as process death.
+- [x] 3.4 Implement child reaping, signal forwarding, bounded shutdown and liveness-triggered nonzero exit; test real child exit, SIGTERM/SIGINT, SIGSTOP/hang, and independent recovery without treating remote readiness failure alone as process death.
 - [x] 3.5 Implement separate safe diagnostics for liveness, readiness and authenticated MCP availability, with a minimal scrubbed child environment; test proxy/config override removal and no credentials, Authorization headers, account results or raw bodies in output.
 
 ## 4. Provision container-readable secrets safely
 
 - [ ] 4.1 Add a no-secret identity-mapping probe and validation for the selected rootful/rootless Docker context; verify observed marker ownership against effective UID/GID maps and reject ambiguous, root or conflicting host identities.
-- [ ] 4.2 Narrowly extend the credential helper with atomic staging to fixed names, mapped owner 0400 and root-owned protected parents with minimal traversal ACLs; test symlink/unsafe-parent rejection, fsync/replace behavior and cleanup on failure while preserving root-only 0600 masters.
-- [ ] 4.3 Preserve no-echo terminal behavior and restoration on success, exceptions and interruption using PTY tests; verify provisioning never puts secret values in arguments, Compose interpolation, tracked files or diagnostic output.
+- [x] 4.2 Narrowly extend the credential helper with atomic staging to fixed names, mapped owner 0400 and root-owned protected parents with minimal traversal ACLs; test symlink/unsafe-parent rejection, fsync/replace behavior and cleanup on failure while preserving root-only 0600 masters.
+- [x] 4.3 Preserve no-echo terminal behavior and restoration on success, exceptions and interruption using PTY tests; verify provisioning never puts secret values in arguments, Compose interpolation, tracked files or diagnostic output.
 - [ ] 4.4 Run actual-image mounted-file permission tests under rootful and rootless Docker: UID 10002 reads config/staged secrets, unrelated and brokerage identities cannot read sources, and runtime cannot read masters or write mounts; fail tests rather than adding world-readability or a root runtime.
 - [ ] 4.5 Add end-to-end atomic rotation tests for both runtime key and ordinary bearer, including stale bind behavior on restart and forced recreation; simulated control plane and MCP must accept only new values, and evidence must show successful new authenticated traffic plus old-value rejection without printing either value.
 
@@ -79,29 +79,42 @@ Task 1.2 need not pass before any Independent row. Its unresolved result prevent
 
 - [x] 5.1 Add `docker-compose.chatgpt.yml` with separate service, user-defined outbound-capable bridge, numeric user, read-only root, dropped capabilities, no-new-privileges, minimal tmpfs/mounts and independent restart policy; verify rendered synthetic configs have no shared namespaces, extra ports, Docker socket or brokerage/journal mounts.
 - [x] 5.2 Preserve existing base/production/paper/smoke assertions and add an overlay matrix; prove default deployment has one brokerage service and needs no tunnel settings/secrets while enabled deployment adds exactly one tunnel service without changing OpenD binding or host publication.
-- [ ] 5.3 Extend deployment/wrapper selection explicitly and persist non-secret selection plus optional immutable image identity; test consistent context/project/files in start and verification, default-off behavior, and no orphan removal of the enabled tunnel.
+- [x] 5.3 Extend deployment/wrapper selection explicitly and persist non-secret selection plus optional immutable image identity; test consistent context/project/files in start and verification, default-off behavior, and no orphan removal of the enabled tunnel.
 - [ ] 5.4 Add scoped enable/disable and rollback behavior, including refusal of non-READ_ONLY mode with the overlay selected and refusal of an unsupported older target until tunnel disablement; verify state restoration and targeted recreation retain OpenD/journal volume identities and existing local-client behavior.
-- [ ] 5.5 Test optional-image build/enable/update and reuse of its recorded immutable identity on restart/recreation; prove no runtime download, implicit upgrade, tunnel setup requirement for default deploy, or accidental inclusion of secret files in the build context.
+- [x] 5.5 Test optional-image build/enable/update and reuse of its recorded immutable identity on restart/recreation; prove no runtime download, implicit upgrade, tunnel setup requirement for default deploy, or accidental inclusion of secret files in the build context.
 
 ## 6. Exercise disposable runtime integration
 
-- [ ] 6.1 Add `scripts/test-tunnel-container.sh` with unique project names, synthetic inputs, scrubbed environment, random available loopback host ports and project-scoped cleanup; enforce fixture-only endpoints/egress including accidental fallback; run alongside a dummy occupied port 8000 and prove no unrelated container or volume is touched.
+- [x] 6.1 Add `scripts/test-tunnel-container.sh` with unique project names, synthetic inputs, scrubbed environment, random available loopback host ports and project-scoped cleanup; enforce fixture-only endpoints/egress including accidental fallback; run alongside a dummy occupied port 8000 and prove no unrelated container or volume is touched.
 - [ ] 6.2 Run the actual tunnel image/entrypoint and pinned official binary against the simulated control plane and authenticated real MCP endpoint; verify Docker DNS forwarding, runtime permissions, READ_ONLY gate, Host/Origin/auth failures and no tunnel-published ports.
 - [ ] 6.3 With the actual brokerage supervisor and loopback OpenD stub, prove tunnel-origin MCP:8000 succeeds while OpenD:11111 fails, namespace isolation holds and both services retain outbound connectivity; record stub limitations rather than claiming broker login.
-- [ ] 6.4 Stop/restart/recreate the tunnel while continuously probing host-local MCP, then recreate MCP with a deliberately changed disposable IP; prove local independence and DNS recovery without session reuse or request replay.
-- [ ] 6.5 Exercise delayed startup, control-plane outage, readiness recovery, hung-client restart and bounded termination under actual image hardening; distinguish liveness, readiness, MCP reachability and broker-backed availability in the evidence matrix.
+- [x] 6.4 Stop/restart/recreate the tunnel while continuously probing host-local MCP, then recreate MCP with a deliberately changed disposable IP; prove local independence and DNS recovery without session reuse or request replay.
+- [x] 6.5 Exercise delayed startup, control-plane outage, readiness recovery, hung-client restart and bounded termination under actual image hardening; distinguish liveness, readiness, MCP reachability and broker-backed availability in the evidence matrix.
 - [ ] 6.6 Exercise disablement, migration sequencing and legacy rollback with disposable state markers and simulated systemd lifecycle assertions; verify mutually exclusive tunnel mechanisms, persistent OpenD/journal identities and authenticated local access without Compose down or volume deletion.
 
 ## 7. Integrate CI and operator documentation
 
 - [ ] 7.1 Update CI path triggers and required jobs for optional image/config/helper/overlay inputs, real-client container integration and rootful/rootless permissions; verify fixture-only egress and disposable resources, and separately report component/container results versus the mandatory official-client gate. Prove a failed, skipped or untested gate cannot be overridden by unrelated green jobs; label simulated versus live acceptance.
-- [ ] 7.2 Remove fixed project/host-port assumptions from reused smoke harness paths and their CI image references as needed; verify existing brokerage/paper tests still run without taking port 8000 from a developer stack.
-- [ ] 7.3 Rewrite the private tunnel runbook with Compose-first installation, exact opt-ins, daemon-host staging/mapping, in-container diagnostics, forced-recreation rotation and tunnel-only disable commands; retain labelled legacy systemd migration/rollback instructions and verify command sequencing with synthetic fixtures.
-- [ ] 7.4 Update README, deployment/rootless/restart docs and OpenSpec context to distinguish one two-process brokerage container from one optional tunnel container; review that no previous security assertion or acceptance limitation is silently removed.
-- [ ] 7.5 Document required MCP recreation, preserved project/volumes, stop-and-disable legacy-before-Compose sequence and reverse rollback sequence; explicitly state ordinary bearer mode dependence and stop tunnel before SIMULATE/REAL.
+- [x] 7.2 Remove fixed project/host-port assumptions from reused smoke harness paths and their CI image references as needed; verify existing brokerage/paper tests still run without taking port 8000 from a developer stack.
+- [x] 7.3 Rewrite the private tunnel runbook with Compose-first installation, exact opt-ins, daemon-host staging/mapping, in-container diagnostics, forced-recreation rotation and tunnel-only disable commands; retain labelled legacy systemd migration/rollback instructions and verify command sequencing with synthetic fixtures.
+- [x] 7.4 Update README, deployment/rootless/restart docs and OpenSpec context to distinguish one two-process brokerage container from one optional tunnel container; review that no previous security assertion or acceptance limitation is silently removed.
+- [x] 7.5 Document required MCP recreation, preserved project/volumes, stop-and-disable legacy-before-Compose sequence and reverse rollback sequence; explicitly state ordinary bearer mode dependence and stop tunnel before SIMULATE/REAL.
 
 ## 8. Independent verification and blocked release handoff
 
-- [ ] 8.1 Run Ruff lint/format, basedpyright, relevant/full pytest, disposable brokerage/tunnel/paper checks and `openspec validate --all --strict --no-interactive`; record exact results and environment limitations without claiming unrun checks passed.
-- [ ] 8.2 Produce a verification matrix linking every requested security/network/rotation/recovery behavior to automated evidence; separately record VPS, live OpenAI, full account/positions, ChatGPT web and native iPad milestones as PENDING unless genuinely tested with owner authorization.
+- [x] 8.1 Run Ruff lint/format, basedpyright, relevant/full pytest, disposable brokerage/tunnel/paper checks and `openspec validate --all --strict --no-interactive`; record exact results and environment limitations without claiming unrun checks passed.
+- [x] 8.2 Produce a verification matrix linking every requested security/network/rotation/recovery behavior to automated evidence; separately record VPS, live OpenAI, full account/positions, ChatGPT web and native iPad milestones as PENDING unless genuinely tested with owner authorization.
 - [ ] 8.3 Keep the already-open separate implementation PR #38 in draft while any required gate case is failing/untested or owner authorization is absent. Only after task 1.2 and the remaining final official-client/container tests pass, record reviewed source/release integrity, exact final image provenance and G1–G4 closure; obtain explicit authorization before any ready-for-review transition or release action. Verify no known-failing pin is enabled in production. Do not create a substitute PR to bypass the gate, merge, deploy, enable trading, reopen PR #36, edit its archive or mark live acceptance complete.
+
+## Independent implementation checkpoint
+
+Code, tests and operations documentation are implemented locally. Unchecked rows
+are deliberately not equated with unimplemented code: 4.1/4.4 require unavailable
+rootful verification; 4.5 and 6.2 await that permission/final-image prerequisite
+although both rotations and real-client forwarding pass rootlessly. 5.4/6.6 retain
+the combined final migration/journal-identity gap. 6.3 retains production-outbound
+runtime evidence (the secure fixture intentionally has no internet egress).
+7.1 has local CI definitions but no hosted run because GitHub rejected workflow
+publication for missing OAuth `workflow` scope. No CI file is omitted to bypass
+that rejection. All such gaps remain release prerequisites alongside BLOCKED 1.2
+and incomplete 8.3; see `independent-verification.md` for exact results.

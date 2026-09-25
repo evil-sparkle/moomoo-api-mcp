@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,11 @@ class McpClient:
     authorization: str
     timeout: float = 10.0
     next_id: int = 1
+    allow_compose_mcp: bool = False
+
+    def __post_init__(self) -> None:
+        validate_url(self.url, allow_compose_mcp=self.allow_compose_mcp)
+        validate_timeout(self.timeout)
 
     def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         request_id = self.next_id
@@ -188,6 +194,11 @@ def validate_url(url: str, *, allow_compose_mcp: bool = False) -> None:
         raise PreflightError("MCP URL must be loopback HTTP at /mcp.")
 
 
+def validate_timeout(timeout: float) -> None:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise PreflightError("Timeout must be finite and greater than zero.")
+
+
 def run(
     *,
     url: str,
@@ -200,8 +211,14 @@ def run(
 ) -> list[str]:
     """Run startup-safe or full acceptance and return safe milestone names."""
     validate_url(url, allow_compose_mcp=allow_compose_mcp)
+    validate_timeout(timeout)
     authorization = read_authorization(authorization_file)
-    client = McpClient(url=url, authorization=authorization, timeout=timeout)
+    client = McpClient(
+        url=url,
+        authorization=authorization,
+        timeout=timeout,
+        allow_compose_mcp=allow_compose_mcp,
+    )
     client.initialize()
     milestones = ["initialize"]
     client.list_tools()

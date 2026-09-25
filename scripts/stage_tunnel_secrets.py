@@ -209,11 +209,17 @@ def main() -> int:
         if args.master_directory or args.staging_directory:
             if not args.master_directory or not args.staging_directory:
                 raise StagingError("both master and staging directories are required")
+            # Remove inherited/default ACLs before writing staged files. A failed
+            # staging attempt leaves a root-only directory, never broader access.
+            descriptor = open_directory(args.staging_directory)
+            os.close(descriptor)
+            execute(["setfacl", "-b", "-k", str(args.staging_directory)])
+            os.chmod(args.staging_directory, 0o700)
             stage(args.master_directory, args.staging_directory, mapping)
             acl = ",".join(
                 f"u:{uid}:--x" for uid in {mapping["uid"], mapping["daemon_uid"]} if uid
             )
-            execute(["setfacl", "-b", str(args.staging_directory)])
+            execute(["setfacl", "-b", "-k", str(args.staging_directory)])
             os.chmod(args.staging_directory, 0o700)
             execute(["setfacl", "-m", acl, str(args.staging_directory)])
         print(json.dumps(mapping, sort_keys=True))

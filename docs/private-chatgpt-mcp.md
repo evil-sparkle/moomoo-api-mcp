@@ -89,8 +89,10 @@ before changing MCP to SIMULATE or REAL.
 
 Use the saved wrapper selection consistently. `scripts/compose-prod.sh exec
 chatgpt-tunnel python /opt/tunnel/runtime.py diagnostics` checks the listener on the
-tunnel container's own loopback and separately reports liveness, readiness and MCP
-availability. No health/admin port is published. Raw client output is suppressed;
+tunnel container's own loopback and separately reports liveness, client startup
+readiness and authenticated MCP availability. The official `/readyz` endpoint can
+stay green during a control-plane outage; it is not proof of successful polling
+or end-to-end forwarding. Diagnostics explicitly report that limitation. No health/admin port is published. Raw client output is suppressed;
 manager diagnostics contain only fixed messages, not keys, Authorization headers,
 account results or raw MCP bodies. Official `doctor` currently fails unauthenticated
 OAuth metadata discovery against the authenticated MCP endpoint; it does not replace

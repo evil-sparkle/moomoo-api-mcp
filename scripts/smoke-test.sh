@@ -42,8 +42,14 @@ PROBE_IMAGE="python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c
 
 ENV_FILE="$(mktemp)"
 ISOLATION_FILE="$(mktemp --suffix=.yml)"
+FIXTURE_DIR="$(mktemp -d)"
+chmod 755 "$FIXTURE_DIR"
+cp tests/fixtures/opend_stub.py "$FIXTURE_DIR/opend-stub"
+chmod 755 "$FIXTURE_DIR/opend-stub"
 SMOKE_IMAGE="${SMOKE_IMAGE:-$PROJECT-moomoo-mcp}"
-printf 'services:\n  moomoo-mcp:\n    image: %s\n    ports: !override ["127.0.0.1::8000"]\n' "$SMOKE_IMAGE" > "$ISOLATION_FILE"
+# Choose an available loopback port once, then keep it fixed across Docker restart.
+SMOKE_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+printf 'services:\n  moomoo-mcp:\n    image: %s\n    ports: !override ["127.0.0.1:%s:8000"]\n    volumes:\n      - %s/opend-stub:/opt/opend-stub:ro\n' "$SMOKE_IMAGE" "$SMOKE_PORT" "$FIXTURE_DIR" > "$ISOLATION_FILE"
 # Explicit, because Compose otherwise reads whatever .env a developer has, and
 # this run would assert against their configuration instead of the default one.
 printf 'MCP_AUTH_TOKEN=%s\n' "$TOKEN" > "$ENV_FILE"
@@ -62,6 +68,7 @@ cleanup() {
   fi
   dc down -v --remove-orphans >/dev/null 2>&1 || true
   rm -f "$ENV_FILE" "$ISOLATION_FILE"
+  rm -rf "$FIXTURE_DIR"
 }
 trap cleanup EXIT
 
@@ -254,7 +261,11 @@ wait_for() {
 }
 
 echo "==> starting the stack"
-dc up -d --build --quiet-pull
+if [ "${SMOKE_REUSE_IMAGE:-0}" = 1 ]; then
+  dc up -d --no-build --quiet-pull
+else
+  dc up -d --build --quiet-pull
+fi
 published="$(dc port "$SERVICE" 8000)"
 [[ "$published" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'Invalid fixture publication' >&2; exit 1; }
 ENDPOINT="http://$published/mcp"
@@ -405,6 +416,6 @@ if ! session_still_lists_tools "${session}"; then
 fi
 
 echo "==> the optional tunnel host keeps credential sources root-only"
-./scripts/test-tunnel-host-permissions.sh "${PROJECT}-${SERVICE}"
+./scripts/test-tunnel-host-permissions.sh "$SMOKE_IMAGE"
 
 echo "PASSED: the gateway restarts alone, the server takes the container with it."

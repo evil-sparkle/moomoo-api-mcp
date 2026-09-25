@@ -7,6 +7,7 @@ services:
   chatgpt-tunnel:
     image: ${CHATGPT_TUNNEL_IMAGE:?build and record an immutable tunnel image first}
     platform: linux/amd64
+    pull_policy: never
     user: "10002:10002"
     read_only: true
     cap_drop: [ALL]

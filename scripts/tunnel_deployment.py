@@ -58,6 +58,24 @@ def load(path: Path = SELECTION) -> dict:
     return selection
 
 
+def check_legacy_inactive() -> None:
+    """Legacy and Compose mechanisms must never be enabled together."""
+    for operation in ("is-active", "is-enabled"):
+        result = subprocess.run(
+            ["systemctl", operation, "--quiet", "moomoo-chatgpt-tunnel.service"],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        # systemctl: inactive/disabled/not-found are nonzero. Unknown errors
+        # are not evidence that a possibly enabled legacy unit is safe.
+        acceptable = {3, 4} if operation == "is-active" else {1, 4}
+        if result.returncode not in acceptable:
+            raise ValueError(
+                "Stop and disable the legacy tunnel before Compose enablement"
+            )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -76,6 +94,7 @@ def main() -> int:
                     "RELEASE BLOCKED: OpenSpec task 1.2; "
                     "production tunnel enablement is prohibited"
                 )
+            check_legacy_inactive()
         elif args.command == "select":
             # Selection does not start either mechanism. Future enablement must first
             # stop/disable legacy systemd; the production wrapper still fails closed.

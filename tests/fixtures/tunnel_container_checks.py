@@ -6,16 +6,19 @@ OpenAI acceptance, and it never clears the separate credential-confinement gate.
 
 import argparse
 import atexit
+import errno
 import hashlib
 import json
 import os
 import pathlib
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 import yaml
 
@@ -25,6 +28,18 @@ parser.add_argument("--broker-image", required=True)
 parser.add_argument("--tunnel-image", default="moomoo-chatgpt-tunnel:development")
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parents[2]
+busy_port = socket.socket()
+try:
+    busy_port.bind(("127.0.0.1", 8000))
+except OSError as exc:
+    busy_port.close()
+    if exc.errno != errno.EADDRINUSE:
+        raise
+    print("Port 8000 already occupied; existing listener left untouched", flush=True)
+else:
+    busy_port.listen()
+    atexit.register(busy_port.close)
+    print("Disposable dummy occupies port 8000 throughout this fixture", flush=True)
 workspace = pathlib.Path(tempfile.mkdtemp(prefix="tunnel-runtime-fixture-"))
 atexit.register(shutil.rmtree, workspace, ignore_errors=True)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
@@ -38,7 +53,7 @@ for path in (workspace / "src").rglob("*"):
 shutil.copyfile(root / "tests/fixtures/opend_stub.py", workspace / "opend_stub.py")
 (workspace / "opend_stub.py").chmod(0o755)
 docker = ["docker", "--context", args.docker_context]
-project = "tunnel-fixture-" + str(os.getpid())
+project = "tunnel-fixture-" + uuid.uuid4().hex[:12]
 
 
 def run(args, **kw):
@@ -51,6 +66,43 @@ def run(args, **kw):
 
 
 image = run(docker + ["image", "inspect", "--format", "{{.Id}}", args.tunnel_image])
+# Isolate real child-exit/reaping behavior from startup checks already exercised
+# below. Only this no-network subtest bypasses the gate and deliberately gives
+# the unmodified binary a missing config, forcing a real process exit.
+exit_probe = """import sys
+sys.path.insert(0, '/opt/tunnel')
+import runtime
+runtime.verify_config=lambda: None
+runtime.child_environment=lambda: {'PATH':'/usr/local/bin:/usr/bin:/bin'}
+runtime.gate=lambda stop: True
+runtime.CONFIG='/missing-synthetic-config'
+assert runtime.main()==1
+print('PASS: real client exit is reaped and manager returns nonzero')
+"""
+print(
+    run(
+        docker
+        + [
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--user",
+            "10002:10002",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--entrypoint",
+            "python",
+            image,
+            "-c",
+            exit_probe,
+        ]
+    ),
+    flush=True,
+)
 docker_host = run(
     docker
     + [
@@ -135,6 +187,25 @@ staging_command = [
     "--staging-directory",
     str(secret_root / "staged"),
 ]
+run(staging_command)
+print(
+    run(
+        [
+            "sudo",
+            "-n",
+            "python3",
+            secret_fixture,
+            "verify-rejections",
+            "--directory",
+            str(secret_root),
+            "--runtime-uid",
+            str(mapping["uid"]),
+            "--runtime-gid",
+            str(mapping["gid"]),
+        ]
+    ),
+    flush=True,
+)
 run(staging_command)
 fixture = {
     "services": {
@@ -235,8 +306,15 @@ def wait_for(predicate, seconds=90):
 
 
 try:
-    run(compose + ["up", "-d", "--no-build"], env=env)
-    time.sleep(70)
+    run(
+        compose + ["up", "-d", "--no-build", "tunnel-control-plane", "chatgpt-tunnel"],
+        env=env,
+    )
+    time.sleep(6)
+    assert control_stats()["authenticated"] == 0, "client polled before MCP gate"
+    print("PASS: no official-client polling while MCP startup is delayed", flush=True)
+    run(compose + ["up", "-d", "--no-build", "--no-deps", "moomoo-mcp"], env=env)
+    wait_for(lambda: control_stats()["forwarded_ok"] == 3, 100)
     tunnel_id = run(compose + ["ps", "-q", "chatgpt-tunnel"], env=env)
     assert tunnel_id, "actual tunnel entrypoint did not remain running"
     ports = json.loads(
@@ -251,6 +329,60 @@ try:
     assert stats["authenticated"] > 0 and stats["forwarded_ok"] == 3, (
         "normal authenticated forwarding not proven"
     )
+    # Exercise ordinary MCP bearer conflicts through the unmodified official binary.
+    for route in ("enqueue-wrong", "enqueue-conflict"):
+        observed = control_stats()
+        enqueue_negative = (
+            "import urllib.request;urllib.request.urlopen(urllib.request.Request("
+            "'http://127.0.0.1:8081/" + route + "',data=b''))"
+        )
+        run(
+            compose
+            + ["exec", "-T", "tunnel-control-plane", "python", "-c", enqueue_negative],
+            env=env,
+        )
+        wait_for(
+            lambda observed=observed: control_stats()["responses"]
+            > observed["responses"]
+        )
+        assert control_stats()["forwarded_ok"] == observed["forwarded_ok"], (
+            route + " unexpectedly succeeded"
+        )
+        print("PASS: official forwarding rejects " + route, flush=True)
+    http_negative_probe = """import http.client,json
+from pathlib import Path
+auth=Path('/run/secrets/mcp-authorization').read_text().strip()
+wrong=('Authorization','Bearer synthetic-wrong')
+body=json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/list','params':{}})
+cases=[('approved',[('Authorization',auth)],'moomoo-mcp:8000',None,200),
+       ('host',[('Authorization',auth)],'unexpected:8000',None,421),
+       ('origin',[('Authorization',auth)],'moomoo-mcp:8000','http://moomoo-mcp:8000',403),
+       ('missing',[],'moomoo-mcp:8000',None,401),
+       ('wrong',[wrong],'moomoo-mcp:8000',None,401),
+       ('conflicting',[('Authorization',auth),wrong],'moomoo-mcp:8000',None,401)]
+for label,headers,host,origin,expected in cases:
+    c=http.client.HTTPConnection('moomoo-mcp',8000,timeout=15)
+    c.putrequest('POST','/mcp',skip_host=True)
+    base=[('Host',host),('Content-Type','application/json'),
+          ('Accept','application/json, text/event-stream'),
+          ('Content-Length',str(len(body)))]
+    for name,value in base+headers:
+        c.putheader(name,value)
+    if origin: c.putheader('Origin',origin)
+    c.endheaders(body.encode())
+    response=c.getresponse()
+    assert response.status==expected, label+' unexpected HTTP status'
+    response.read();c.close()
+print('PASS: actual MCP exact Host, Origin and missing/wrong/conflicting bearer checks')
+"""
+    print(
+        run(
+            compose
+            + ["exec", "-T", "chatgpt-tunnel", "python", "-c", http_negative_probe],
+            env=env,
+        ),
+        flush=True,
+    )
     network_probe = """import socket
 s=socket.create_connection(('moomoo-mcp',8000),3)
 s.close()
@@ -263,6 +395,53 @@ print('MCP reachable; OpenD bridge access refused')"""
             compose + ["exec", "-T", "chatgpt-tunnel", "python", "-c", network_probe],
             env=env,
         ),
+        flush=True,
+    )
+    # A refused bridge port is evidence only if the loopback listener is alive.
+    run(
+        compose
+        + [
+            "exec",
+            "-T",
+            "moomoo-mcp",
+            "python",
+            "-c",
+            "import socket;socket.create_connection(('127.0.0.1',11111),3).close()",
+        ],
+        env=env,
+    )
+    run(
+        compose
+        + [
+            "exec",
+            "-T",
+            "tunnel-control-plane",
+            "python",
+            "-c",
+            "import socket;s=socket.socket();s.settimeout(3);"
+            "assert s.connect_ex(('chatgpt-tunnel',8080))!=0",
+        ],
+        env=env,
+    )
+    namespaces = (
+        "import os,json;print(json.dumps([os.readlink('/proc/self/ns/'+n) "
+        "for n in ('net','pid')]))"
+    )
+    brokerage_ns = json.loads(
+        run(compose + ["exec", "-T", "moomoo-mcp", "python", "-c", namespaces], env=env)
+    )
+    tunnel_ns = json.loads(
+        run(
+            compose + ["exec", "-T", "chatgpt-tunnel", "python", "-c", namespaces],
+            env=env,
+        )
+    )
+    assert all(
+        left != right for left, right in zip(brokerage_ns, tunnel_ns, strict=True)
+    )
+    print(
+        "PASS: OpenD is alive on brokerage loopback; "
+        "health/admin is private; namespaces differ",
         flush=True,
     )
     published = run(compose + ["port", "moomoo-mcp", "8000"], env=env)
@@ -301,12 +480,13 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
     for uid, gid in (
         (mapping["daemon_uid"], mapping["daemon_uid"]),
         (mapping["uid"] - 1, mapping["gid"] - 1),
+        (mapping["uid"], mapping["gid"]),
     ):
         if uid:
             for area in ("master", "staged"):
                 probe_code = (
                     "import os,sys; assert os.geteuid()==int(sys.argv[1]); "
-                    "assert not os.access(sys.argv[2],os.R_OK)"
+                    "assert os.access(sys.argv[2],os.R_OK)==(sys.argv[3]=='1')"
                 )
                 run(
                     [
@@ -321,6 +501,7 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
                         probe_code,
                         str(uid),
                         str(secret_root / area / "control-plane-api-key"),
+                        "1" if uid == mapping["uid"] and area == "staged" else "0",
                     ]
                 )
     print("PASS: unrelated identities cannot read protected host sources", flush=True)
@@ -544,6 +725,202 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
     print(
         "PASS: hung real client triggers independent Docker restart; "
         "host MCP stays usable",
+        flush=True,
+    )
+
+    # Repeat MCP IP replacement while keeping the tunnel process/container alive.
+    broker_id = run(compose + ["ps", "-q", "moomoo-mcp"], env=env)
+    networks = json.loads(
+        run(
+            docker
+            + ["inspect", "--format", "{{json .NetworkSettings.Networks}}", broker_id]
+        )
+    )
+    old_ip = networks[isolated]["IPAddress"]
+    tunnel_id = run(compose + ["ps", "-q", "chatgpt-tunnel"], env=env)
+    tunnel_image = run(docker + ["inspect", "--format", "{{.Image}}", tunnel_id])
+    run(compose + ["stop", "moomoo-mcp"], env=env)
+    run(compose + ["rm", "-f", "moomoo-mcp"], env=env)
+    holder = project + "-dns-old-ip"
+    run(
+        docker
+        + [
+            "run",
+            "-d",
+            "--name",
+            holder,
+            "--network",
+            isolated,
+            "--ip",
+            old_ip,
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--entrypoint",
+            "python",
+            image,
+            "-c",
+            "import time;time.sleep(300)",
+        ]
+    )
+    try:
+        run(compose + ["up", "-d", "--no-deps", "moomoo-mcp"], env=env)
+        published = run(compose + ["port", "moomoo-mcp", "8000"], env=env)
+        wait_for(new_local_ready)
+        before = control_stats()["forwarded_ok"]
+        run(
+            compose + ["exec", "-T", "tunnel-control-plane", "python", "-c", enqueue],
+            env=env,
+        )
+        wait_for(lambda: control_stats()["forwarded_ok"] > before)
+        assert run(compose + ["ps", "-q", "chatgpt-tunnel"], env=env) == tunnel_id
+        print(
+            "PASS: running official client recovers after MCP IP replacement "
+            "without tunnel recreation",
+            flush=True,
+        )
+    finally:
+        run(docker + ["rm", "-f", holder])
+
+    # Control-plane availability is not the same as the client's local /readyz.
+    control_id = run(compose + ["ps", "-q", "tunnel-control-plane"], env=env)
+    restart_count = run(
+        docker + ["inspect", "--format", "{{.RestartCount}}", tunnel_id]
+    )
+    run(docker + ["network", "disconnect", isolated, control_id])
+    try:
+        for _ in range(4):
+            local_mcp("synthetic-mcp-token-rotated")
+            time.sleep(10)
+        local_status = (
+            "import sys,json;sys.path.insert(0,'/opt/tunnel');import runtime;"
+            "print(json.dumps({'liveness':runtime.probe('healthz'),"
+            "'client_startup_readiness':runtime.probe('readyz')}))"
+        )
+        status = json.loads(
+            run(
+                compose
+                + ["exec", "-T", "chatgpt-tunnel", "python", "-c", local_status],
+                env=env,
+            )
+        )
+        assert status["liveness"]
+        assert (
+            run(docker + ["inspect", "--format", "{{.RestartCount}}", tunnel_id])
+            == restart_count
+        )
+        print(
+            json.dumps({"control_plane_disconnected_local_status": status}), flush=True
+        )
+    finally:
+        run(
+            docker
+            + [
+                "network",
+                "connect",
+                "--alias",
+                "tunnel-control-plane",
+                isolated,
+                control_id,
+            ]
+        )
+    before = control_stats()["forwarded_ok"]
+    run(
+        compose + ["exec", "-T", "tunnel-control-plane", "python", "-c", enqueue],
+        env=env,
+    )
+    wait_for(lambda: control_stats()["forwarded_ok"] > before)
+    print(
+        "PASS: control-plane outage avoids restart loop; "
+        "authenticated forwarding recovers",
+        flush=True,
+    )
+
+    # Test SIGINT on the actual manager after the child is running.
+    run(docker + ["update", "--restart", "no", tunnel_id])
+    run(docker + ["kill", "--signal", "SIGINT", tunnel_id])
+    wait_for(
+        lambda: run(docker + ["inspect", "--format", "{{.State.Running}}", tunnel_id])
+        == "false",
+        20,
+    )
+    assert (
+        run(docker + ["inspect", "--format", "{{.State.ExitCode}}", tunnel_id]) == "0"
+    )
+    local_mcp("synthetic-mcp-token-rotated")
+    assert (
+        run(docker + ["inspect", "--format", "{{.Image}}", tunnel_id]) == tunnel_image
+    )
+    print(
+        "PASS: real manager handles SIGINT; recorded image identity "
+        "and host access preserved",
+        flush=True,
+    )
+
+    # Exercise the actual manager against mode/auth/result refusals. These modes
+    # exist only in a stdlib response fixture; brokerage trading is never enabled.
+    shutil.copyfile(
+        root / "tests/fixtures/tunnel_preflight_server.py",
+        workspace / "preflight-server.py",
+    )
+    (workspace / "preflight-server.py").chmod(0o444)
+    before = control_stats()["authenticated"]
+    for behavior, diagnostic in (
+        ("SIMULATE", "READ_ONLY"),
+        ("REAL", "READ_ONLY"),
+        ("wrong-auth", "HTTP 401"),
+        ("malformed", "malformed JSON"),
+    ):
+        fixture["services"]["moomoo-mcp"]["image"] = image
+        fixture["services"]["moomoo-mcp"]["entrypoint"] = [
+            "python",
+            "/preflight-server.py",
+        ]
+        fixture["services"]["moomoo-mcp"]["environment"]["FIXTURE_BEHAVIOR"] = behavior
+        fixture["services"]["moomoo-mcp"]["volumes"] = [
+            str(workspace / "preflight-server.py") + ":/preflight-server.py:ro"
+        ]
+        updated = (
+            yaml.safe_dump(fixture)
+            .replace(
+                "    container_name: null",
+                "    container_name: !reset null\n"
+                '    ports: !override ["127.0.0.1::8000"]',
+            )
+            .replace("    build: null", "    build: !reset null")
+        )
+        (workspace / "fixture.yml").write_text(updated)
+        run(
+            compose + ["up", "-d", "--no-deps", "--force-recreate", "moomoo-mcp"],
+            env=env,
+        )
+        result = subprocess.run(
+            compose + ["run", "--rm", "--no-deps", "chatgpt-tunnel"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 1 and diagnostic in result.stdout
+        assert control_stats()["authenticated"] == before
+        print(
+            "PASS: actual manager refuses " + behavior + " before client polling",
+            flush=True,
+        )
+    run(compose + ["stop", "moomoo-mcp"], env=env)
+    started = time.monotonic()
+    result = subprocess.run(
+        compose + ["run", "--rm", "--no-deps", "chatgpt-tunnel"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=110,
+    )
+    assert result.returncode == 1 and "deadline exhausted" in result.stdout
+    assert time.monotonic() - started < 105
+    assert control_stats()["authenticated"] == before
+    print(
+        "PASS: actual image exhausts bounded startup deadline without client polling",
         flush=True,
     )
 

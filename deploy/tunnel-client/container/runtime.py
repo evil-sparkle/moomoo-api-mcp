@@ -58,7 +58,9 @@ def gate(stop: threading.Event, *, deadline_seconds: float = 90) -> bool:
     authorization = read_authorization(AUTHORIZATION)
     while not stop.is_set():
         try:
-            client = McpClient(COMPOSE_URL, authorization, timeout=10)
+            client = McpClient(
+                COMPOSE_URL, authorization, timeout=10, allow_compose_mcp=True
+            )
             for operation in (
                 client.initialize,
                 client.list_tools,
@@ -124,7 +126,10 @@ def main() -> int:
     os.umask(0o077)
     if len(sys.argv) == 2 and sys.argv[1] == "diagnostics":
         report("process liveness: " + ("up" if probe("healthz") else "down"))
-        report("tunnel readiness: " + ("ready" if probe("readyz") else "not ready"))
+        report(
+            "client startup readiness: " + ("ready" if probe("readyz") else "not ready")
+        )
+        report("control-plane forwarding: not proven by local health endpoints")
         return 0 if gate(threading.Event(), deadline_seconds=15) else 1
     stop = threading.Event()
     received = [signal.SIGTERM]
@@ -163,7 +168,7 @@ def main() -> int:
                 report(
                     "liveness="
                     + ("up" if alive else "down")
-                    + " readiness="
+                    + " client-startup-readiness="
                     + ("ready" if probe("readyz") else "not-ready")
                 )
                 if failures >= 3:

@@ -85,7 +85,9 @@ class Handler(BaseHTTPRequestHandler):
                         "command_type": "jsonrpc",
                         "channel": "main",
                         "created_at": "2026-09-25T00:00:00Z",
-                        "headers": {"Accept": ["application/json"]},
+                        "headers": command.pop(
+                            "_headers", {"Accept": ["application/json"]}
+                        ),
                         "jsonrpc": command,
                     }
                 ]
@@ -93,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self):
-        if self.path == "/enqueue":
+        if self.path in {"/enqueue", "/enqueue-wrong", "/enqueue-conflict"}:
             with lock:
                 pending.append(
                     {
@@ -103,6 +105,17 @@ class Handler(BaseHTTPRequestHandler):
                         "params": {},
                     }
                 )
+                if self.path == "/enqueue-wrong":
+                    pending[-1]["_headers"] = {
+                        "Authorization": ["Bearer synthetic-wrong"]
+                    }
+                elif self.path == "/enqueue-conflict":
+                    pending[-1]["_headers"] = {
+                        "Authorization": [
+                            "Bearer synthetic-mcp-token",
+                            "Bearer synthetic-conflict",
+                        ]
+                    }
             self.answer(200, {})
             return
         if not self.authenticated():

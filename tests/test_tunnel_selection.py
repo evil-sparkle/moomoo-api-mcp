@@ -63,3 +63,87 @@ def test_production_wrapper_refuses_known_failing_pin(tmp_path, operation):
     assert result.returncode != 0
     assert "RELEASE BLOCKED" in result.stdout
     assert "synthetic/protected" not in result.stdout
+
+
+@pytest.mark.parametrize("codes", [(0, 1), (3, 0), (1, 1), (3, 2)])
+def test_legacy_active_enabled_or_unknown_refuses_start(monkeypatch, codes):
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(
+        selection.subprocess,
+        "run",
+        Mock(side_effect=[subprocess.CompletedProcess([], code) for code in codes]),
+    )
+    with pytest.raises(ValueError, match="legacy"):
+        selection.check_legacy_inactive()
+
+
+def test_legacy_inactive_and_disabled_can_be_confirmed_without_starting_it(monkeypatch):
+    from unittest.mock import Mock
+
+    runner = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 3),
+            subprocess.CompletedProcess([], 1),
+        ]
+    )
+    monkeypatch.setattr(selection.subprocess, "run", runner)
+    selection.check_legacy_inactive()
+    assert [call.args[0][1] for call in runner.call_args_list] == [
+        "is-active",
+        "is-enabled",
+    ]
+
+
+@pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])
+def test_resolved_selected_tunnel_refuses_non_read_only(monkeypatch, mode):
+    from unittest.mock import Mock
+
+    from scripts import deploy_verify
+
+    model = {
+        "services": {
+            "moomoo-mcp": {
+                "environment": {
+                    "MCP_AUTH_TOKEN": "synthetic",
+                    "MOOMOO_TRADING_MODE": mode,
+                }
+            },
+            "chatgpt-tunnel": {},
+        }
+    }
+    monkeypatch.setattr(
+        deploy_verify.subprocess,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps(model).encode()
+            )
+        ),
+    )
+    with pytest.raises(deploy_verify.ConfigError, match="READ_ONLY"):
+        deploy_verify.resolve_token(["fixture-only"])
+
+
+def test_disable_only_stops_and_removes_tunnel_then_clears_selection(
+    tmp_path, monkeypatch
+):
+    import sys
+    from unittest.mock import Mock
+
+    selected = tmp_path / ".chatgpt-deploy.json"
+    selection.save(fixture_selection(), selected)
+    marker = tmp_path / "synthetic-brokerage-state"
+    marker.write_text("preserve")
+    monkeypatch.setattr(selection, "SELECTION", selected)
+    monkeypatch.setattr(selection, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["tunnel_deployment.py", "disable"])
+    runner = Mock(return_value=subprocess.CompletedProcess([], 0))
+    monkeypatch.setattr(selection.subprocess, "run", runner)
+    assert selection.main() == 0
+    assert [call.args[0][1:] for call in runner.call_args_list] == [
+        ["stop", "chatgpt-tunnel"],
+        ["rm", "-f", "chatgpt-tunnel"],
+    ]
+    assert not selected.exists()
+    assert marker.read_text() == "preserve"
