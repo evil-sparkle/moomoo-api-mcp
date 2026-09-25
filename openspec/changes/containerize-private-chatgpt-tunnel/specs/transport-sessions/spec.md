@@ -52,3 +52,18 @@ DNS-rebinding protection SHALL NOT be used as a compatibility workaround.
 - **THEN** protected Authorization headers SHALL NOT reach that destination or proxy
 - **AND** preflight SHALL refuse redirects and ignore inherited proxy configuration
 - **AND** container forwarding SHALL be configured and behaviorally verified to preserve approved-origin credential confinement
+
+
+#### Scenario: Control-plane runtime key remains destination confined
+
+- **WHEN** the official client handles a control-plane request or any redirect hop
+- **THEN** the OpenAI runtime credential SHALL NOT be injected into or retained on a request to an unapproved destination
+- **AND** redirect checks SHALL prevent protected headers or bodies from reaching an unapproved destination
+- **AND** this requirement SHALL be tested separately from ordinary MCP bearer confinement
+
+#### Scenario: Normal operation and confinement are both required
+
+- **WHEN** compatibility is verified for the final official binary
+- **THEN** normal authenticated control-plane polling/response delivery and MCP discovery/startup/forwarding SHALL succeed against isolated fixtures
+- **AND** redirect/proxy confinement and missing/wrong/conflicting credential refusal SHALL also pass for their respective paths
+- **AND** preventing all traffic or replacing the official binary with a stub SHALL NOT count as successful compatibility

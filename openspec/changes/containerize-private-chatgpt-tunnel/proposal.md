@@ -12,6 +12,7 @@ PR #36 made private ChatGPT access depend on a host-installed daemon and systemd
 - Build a small dedicated image, verify the existing release, run a numeric non-root identity with restrictive filesystem/capability settings, and gate forwarding on bounded authenticated startup checks.
 - Provision container-readable secret copies with measured rootless/rootful identity mappings while retaining root-only masters. Specify atomic rotation and forced recreation, with behavioral evidence of new credentials being used.
 - Integrate disposable container tests into CI and document installation, diagnostics, migration, rotation, disablement and rollback.
+- Separate independent synthetic-fixture implementation from mandatory official-client compatibility and release gates. The demonstrated OpenAI runtime-key redirect failure remains a hard release/production-enablement blocker; ordinary MCP bearer paths require separate evidence.
 
 ## Capabilities
 
@@ -30,4 +31,4 @@ None; extend the existing security and deployment contracts.
 
 Expected implementation touches `deploy/tunnel-client/`, a new `docker-compose.chatgpt.yml`, deployment wrappers, preflight and credential helpers, `server.py`/`settings.py`, CI, focused tests and deployment documentation. The design lists concrete paths and verification gates. No gateway redesign, OAuth, public ingress, trading enablement, tool expansion, release upgrade, or live deployment is included.
 
-Baseline: `origin/main` at `cd6bb2d821550d82b90dfba0214e9891a3c319f5` (merged PR #36). The archived `add-private-chatgpt-mcp-access` remains unchanged. This change is proposal-only until reviewed and separately authorized for implementation and a new PR.
+Baseline: `origin/main` at `cd6bb2d821550d82b90dfba0214e9891a3c319f5` (merged PR #36). The archived `add-private-chatgpt-mcp-access` remains unchanged. PR #37 was approved at `96b82bed`; the separate implementation PR #38 is a blocked draft. This revision authorizes planning changes only and must be presented for review before implementation resumes. The production client pin remains v0.0.14; the feature remains default-off. No merge, VPS deployment, real credentials, real OpenAI traffic, trading enablement or live ChatGPT/iPad acceptance is authorized. See design.md for the current gate matrix and tasks.md for the revised dependency graph. A local build or unrelated test success cannot make the migration ready.
