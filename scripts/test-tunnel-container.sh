@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 exec uv run --frozen python tests/fixtures/tunnel_container_checks.py \
+  ${TUNNEL_USE_IMAGE_SOURCE:+--use-image-source} \
   --docker-context "${DOCKER_CONTEXT:-rootless}" \
   --broker-image "${1:?Supply an existing brokerage image}" \
   --tunnel-image "${2:-moomoo-chatgpt-tunnel:development}"

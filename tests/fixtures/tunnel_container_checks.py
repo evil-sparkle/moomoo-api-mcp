@@ -25,6 +25,7 @@ import yaml
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--docker-context", default="rootless")
 parser.add_argument("--broker-image", required=True)
+parser.add_argument("--use-image-source", action="store_true")
 parser.add_argument("--tunnel-image", default="moomoo-chatgpt-tunnel:development")
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parents[2]
@@ -224,6 +225,7 @@ fixture = {
             "volumes": [
                 str(workspace / "opend_stub.py") + ":/opt/moomooOpenD/OpenD:ro",
                 str(workspace / "src") + ":/fixture-src:ro",
+                "fixture-journal:/var/lib/moomoo-mcp/data",
             ],
         },
         "chatgpt-tunnel": {
@@ -248,7 +250,14 @@ fixture = {
         },
     },
     "networks": {"default": {"internal": False}, "fixture-only": {"internal": True}},
+    "volumes": {"fixture-journal": {}},
 }
+if args.use_image_source:
+    del fixture["services"]["moomoo-mcp"]["environment"]["PYTHONPATH"]
+    fixture["services"]["moomoo-mcp"]["volumes"].remove(
+        str(workspace / "src") + ":/fixture-src:ro"
+    )
+
 # YAML override tags are required to replace the fixed production host publication.
 
 text = yaml.safe_dump(fixture)
@@ -579,9 +588,20 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
     marker_code = (
         "from pathlib import Path; "
         "p=Path('/home/opend/.com.moomoo.OpenD/tunnel-fixture-marker');"
-        "p.write_text('synthetic-state')"
+        "p.write_text('synthetic-state');"
+        "from moomoo_mcp.services.execution_store import ExecutionStore;"
+        "s=ExecutionStore(Path('/var/lib/moomoo-mcp/data/execution.sqlite3'),create=True);"
+        "s.review();s.admit('migration-marker',s.epoch,123,'PLACE','{}',{});"
+        "s.close()"
     )
     run(compose + ["exec", "-T", "moomoo-mcp", "python", "-c", marker_code], env=env)
+    original_mounts = json.loads(
+        run(docker + ["inspect", "--format", "{{json .Mounts}}", broker_id])
+    )
+    persistent_names = {
+        m["Destination"]: m["Name"] for m in original_mounts if m["Type"] == "volume"
+    }
+    assert "/var/lib/moomoo-mcp/data" in persistent_names
     networks = json.loads(
         run(
             docker
@@ -673,11 +693,26 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
         marker_check = (
             "from pathlib import Path;"
             "assert Path('/home/opend/.com.moomoo.OpenD/tunnel-fixture-marker')"
-            ".read_text()=='synthetic-state'"
+            ".read_text()=='synthetic-state';"
+            "from moomoo_mcp.services.execution_store import ExecutionStore;"
+            "s=ExecutionStore(Path('/var/lib/moomoo-mcp/data/execution.sqlite3'));"
+            "assert s.lookup('migration-marker') is not None;s.close()"
         )
         run(
             compose + ["exec", "-T", "moomoo-mcp", "python", "-c", marker_check],
             env=env,
+        )
+        replacement_mounts = json.loads(
+            run(docker + ["inspect", "--format", "{{json .Mounts}}", replacement])
+        )
+        assert {
+            m["Destination"]: m["Name"]
+            for m in replacement_mounts
+            if m["Type"] == "volume"
+        } == persistent_names
+        print(
+            "PASS: actual journal row, OpenD marker and volume identities preserved",
+            flush=True,
         )
         before = control_stats()
         run(
@@ -856,6 +891,86 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
         "and host access preserved",
         flush=True,
     )
+
+    # Run the real disable helper against this disposable Compose project only.
+    # The temporary wrapper contains paths/selection metadata, never credentials.
+    from scripts import tunnel_deployment
+
+    wrapper = workspace / "scripts" / "compose-prod.sh"
+    wrapper.parent.mkdir()
+    wrapper.write_text(
+        "#!/usr/bin/env python3\nimport os,sys\n"
+        + "os.execvpe("
+        + repr(compose[0])
+        + ", "
+        + repr(compose)
+        + "+sys.argv[1:], "
+        + repr(env)
+        + ")\n"
+    )
+    wrapper.chmod(0o700)
+    selection_file = workspace / ".chatgpt-deploy.json"
+    tunnel_deployment.save(
+        {
+            "version": 1,
+            "image": image,
+            "secret_directory": str(secret_root / "staged"),
+            "project": project,
+        },
+        selection_file,
+    )
+    prior_root, prior_selection = tunnel_deployment.ROOT, tunnel_deployment.SELECTION
+    prior_args = sys.argv
+    try:
+        tunnel_deployment.ROOT, tunnel_deployment.SELECTION = workspace, selection_file
+        sys.argv = ["tunnel_deployment.py", "disable"]
+        assert tunnel_deployment.main() == 0
+    finally:
+        tunnel_deployment.ROOT, tunnel_deployment.SELECTION = (
+            prior_root,
+            prior_selection,
+        )
+        sys.argv = prior_args
+    assert not selection_file.exists()
+    assert not run(compose + ["ps", "-a", "-q", "chatgpt-tunnel"], env=env)
+    local_mcp("synthetic-mcp-token-rotated")
+    run(compose + ["exec", "-T", "moomoo-mcp", "python", "-c", marker_check], env=env)
+    print(
+        "PASS: real scoped disable preserves journal, OpenD and local MCP", flush=True
+    )
+
+    # No client, secret mounts or credential environment in these egress probes.
+    # They use the production-style non-internal bridge and only a public TLS
+    # handshake to example.com; the control-plane fixture remains internal-only.
+    egress_probe = (
+        "import socket,ssl;"
+        "s=socket.create_connection(('example.com',443),15);"
+        "s=ssl.create_default_context().wrap_socket(s,server_hostname='example.com');"
+        "s.close();print('PASS: outbound DNS and verified TLS without credentials')"
+    )
+    for probe_image in (image, args.broker_image):
+        print(
+            run(
+                docker
+                + [
+                    "run",
+                    "--rm",
+                    "--network",
+                    project + "_default",
+                    "--read-only",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "--entrypoint",
+                    "python",
+                    probe_image,
+                    "-c",
+                    egress_probe,
+                ]
+            ),
+            flush=True,
+        )
 
     # Exercise the actual manager against mode/auth/result refusals. These modes
     # exist only in a stdlib response fixture; brokerage trading is never enabled.

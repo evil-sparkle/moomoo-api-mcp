@@ -62,6 +62,8 @@ jobs:
       - name: Set up the disposable rootless daemon
         if: matrix.context == 'rootless'
         run: |
+          engine_version=$(dpkg-query -W -f='${Version}' docker-ce)
+          sudo apt-get install -y "docker-ce-rootless-extras=$engine_version"
           command -v dockerd-rootless-setuptool.sh
           dockerd-rootless-setuptool.sh install --force
           docker --context rootless info
@@ -70,7 +72,7 @@ jobs:
           docker build -t moomoo-tunnel-broker:ci .
           ./scripts/build-tunnel-image.sh
       - name: Exercise the pinned client, real entrypoint and secret permissions
-        run: ./scripts/test-tunnel-container.sh moomoo-tunnel-broker:ci
+        run: TUNNEL_USE_IMAGE_SOURCE=1 ./scripts/test-tunnel-container.sh moomoo-tunnel-broker:ci
       - name: Describe the acceptance boundary
         if: always()
         run: |
