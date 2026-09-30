@@ -118,3 +118,12 @@ runtime evidence (the secure fixture intentionally has no internet egress).
 publication for missing OAuth `workflow` scope. No CI file is omitted to bypass
 that rejection. All such gaps remain release prerequisites alongside BLOCKED 1.2
 and incomplete 8.3; see `independent-verification.md` for exact results.
+
+## Publication status — 2026-09-30
+
+The earlier GitHub workflow-scope rejection is resolved. Commits `a1bafc1` and
+`580f3ac` were successfully pushed. Any earlier permission-blocker statements above
+are historical checkpoint observations, not current prerequisites. Current main
+is being integrated without changing the official pin or preserved reproduction;
+hosted CI results are tracked in the continuation evidence. Tasks 1.2 and 8.3
+remain incomplete and PR #38 stays draft.

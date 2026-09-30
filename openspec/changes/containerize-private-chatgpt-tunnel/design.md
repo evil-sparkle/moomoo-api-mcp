@@ -188,3 +188,12 @@ The following is a future operator procedure, not permission to execute it. Rele
 ## Assumptions and External Prerequisites
 
 Docker Compose must support the repository's existing reset/override syntax; implementation records its tested minimum version. Provisioning needs host root for ownership/ACL operations, while runtime stays non-root and the production daemon stays rootless. An approved immutable slim-image digest and available official v0.0.14 archive are build prerequisites, not claims of a build already performed. Live use requires owner-selected tunnel, limited Read + Use key, permitted outbound OpenAI HTTPS, and eligible linked organization/workspace. The proposal creates no account resources and inspects no real credentials.
+
+## Publication status — 2026-09-30
+
+The earlier GitHub workflow-scope rejection is resolved. Commits `a1bafc1` and
+`580f3ac` were successfully pushed. Any earlier permission-blocker statements above
+are historical checkpoint observations, not current prerequisites. Current main
+is being integrated without changing the official pin or preserved reproduction;
+hosted CI results are tracked in the continuation evidence. Tasks 1.2 and 8.3
+remain incomplete and PR #38 stays draft.

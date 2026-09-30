@@ -112,3 +112,12 @@ issue/report or additional public security disclosure was sent.
 Publication additionally requires the repository credential's GitHub `workflow`
 scope. Do not remove CI files to bypass that rejection. Rootful tests and the fresh
 brokerage build remain pending external capacity/CI; local results are not a waiver.
+
+## Publication status — 2026-09-30
+
+The earlier GitHub workflow-scope rejection is resolved. Commits `a1bafc1` and
+`580f3ac` were successfully pushed. Any earlier permission-blocker statements above
+are historical checkpoint observations, not current prerequisites. Current main
+is being integrated without changing the official pin or preserved reproduction;
+hosted CI results are tracked in the continuation evidence. Tasks 1.2 and 8.3
+remain incomplete and PR #38 stays draft.
