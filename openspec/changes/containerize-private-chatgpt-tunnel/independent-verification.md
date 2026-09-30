@@ -9,13 +9,14 @@ release manifest are unchanged.
 ## Current evidence
 
 [Continuation evidence](continuation-verification.md) records new heads, hosted
-runs, expanded matrix results and remaining coverage. At `89cac04`:
+runs, expanded matrix results and remaining coverage. At tested code head `bbd33f6` (reconfirming `89cac04`):
 
-- [General CI](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/36652723276)
+- [General CI](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/36653940502)
   **PASSED**: lint, formatting, full pytest/type checks, OpenSpec, fresh brokerage
   image build and container smoke.
-- [Tunnel workflow](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/36652723262)
-  **FAILED at the mandatory confinement gate**, as required. Its independent
+- [Tunnel workflow](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/36653940564)
+  **FAILED at both mandatory security jobs**, as required. The expanded matrix
+  records **49 PASS, 13 FAIL, zero fixture errors** across 62 cases. Its independent
   **rootful and rootless container jobs both PASSED** on fresh images.
 - Both real runtime identities read the intended config/staged secret mounts;
   unrelated/brokerage identities cannot read protected sources, runtime cannot
