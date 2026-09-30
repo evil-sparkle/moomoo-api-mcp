@@ -8,6 +8,7 @@ import argparse
 import atexit
 import errno
 import hashlib
+import ipaddress
 import json
 import os
 import pathlib
@@ -208,6 +209,24 @@ print(
     flush=True,
 )
 run(staging_command)
+# Docker 28 requires an explicitly configured subnet for the old-IP holder.
+# Select a free benchmark-network subnet only for this disposable fixture.
+network_ids = run(docker + ["network", "ls", "-q"]).splitlines()
+existing_networks = json.loads(run(docker + ["network", "inspect", *network_ids]))
+occupied = [
+    ipaddress.ip_network(c["Subnet"])
+    for n in existing_networks
+    for c in (n.get("IPAM", {}).get("Config") or [])
+    if c.get("Subnet")
+]
+fixture_subnet = next(
+    str(candidate)
+    for candidate in (
+        ipaddress.ip_network(f"198.18.{offset}.0/24") for offset in range(256)
+    )
+    if not any(candidate.overlaps(n) for n in occupied if n.version == 4)
+)
+
 fixture = {
     "services": {
         "moomoo-mcp": {
@@ -249,7 +268,13 @@ fixture = {
             ],
         },
     },
-    "networks": {"default": {"internal": False}, "fixture-only": {"internal": True}},
+    "networks": {
+        "default": {"internal": False},
+        "fixture-only": {
+            "internal": True,
+            "ipam": {"config": [{"subnet": fixture_subnet}]},
+        },
+    },
     "volumes": {"fixture-journal": {}},
 }
 if args.use_image_source:

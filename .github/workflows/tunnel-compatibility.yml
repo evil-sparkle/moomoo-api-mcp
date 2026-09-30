@@ -62,6 +62,10 @@ jobs:
       - name: Set up the disposable rootless daemon
         if: matrix.context == 'rootless'
         run: |
+          sudo install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/tunnel-test-docker.list >/dev/null
+          sudo apt-get update
           engine_version=$(dpkg-query -W -f='${Version}' docker-ce)
           sudo apt-get install -y "docker-ce-rootless-extras=$engine_version"
           command -v dockerd-rootless-setuptool.sh
