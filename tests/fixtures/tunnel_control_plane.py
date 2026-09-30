@@ -7,7 +7,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 lock = threading.Lock()
-stats = {"authenticated": 0, "rejected": 0, "responses": 0, "forwarded_ok": 0}
+stats = {
+    "authenticated": 0,
+    "rejected": 0,
+    "responses": 0,
+    "forwarded_ok": 0,
+    "proxy_hits": 0,
+}
 pending = [
     {
         "jsonrpc": "2.0",
@@ -130,4 +136,20 @@ class Handler(BaseHTTPRequestHandler):
         self.answer(200, {})
 
 
+class PoisonProxy(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        _ = format, args
+
+    def do_GET(self):
+        with lock:
+            stats["proxy_hits"] += 1
+        self.send_response(502)
+        self.end_headers()
+
+    do_POST = do_GET
+    do_CONNECT = do_GET
+
+
+proxy = ThreadingHTTPServer(("0.0.0.0", 8082), PoisonProxy)
+threading.Thread(target=proxy.serve_forever, daemon=True).start()
 ThreadingHTTPServer(("0.0.0.0", 8081), Handler).serve_forever()

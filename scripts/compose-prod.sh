@@ -16,6 +16,7 @@ if [ -f .chatgpt-deploy.json ]; then
   case "$argument" in
     up|start|restart|run|create)
       python3 scripts/tunnel_deployment.py check-release
+      python3 scripts/deploy_verify.py check-config
       ;;
   esac
   done

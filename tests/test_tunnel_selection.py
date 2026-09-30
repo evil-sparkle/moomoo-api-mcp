@@ -147,3 +147,56 @@ def test_disable_only_stops_and_removes_tunnel_then_clears_selection(
     ]
     assert not selected.exists()
     assert marker.read_text() == "preserve"
+
+
+@pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])
+def test_future_approved_wrapper_checks_mode_before_start(tmp_path, mode):
+    # Only disposable script copies simulate a cleared gate. Production stays false.
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in ("compose-prod.sh", "tunnel_deployment.py", "deploy_verify.py"):
+        shutil.copy2(ROOT / "scripts" / name, scripts / name)
+    helper = scripts / "tunnel_deployment.py"
+    helper.write_text(
+        helper.read_text().replace(
+            "RELEASE_GATE_PASSED = False", "RELEASE_GATE_PASSED = True"
+        )
+    )
+    selection.save(fixture_selection(), tmp_path / ".chatgpt-deploy.json")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    systemctl = fake_bin / "systemctl"
+    systemctl.write_text('#!/bin/sh\n[ "$1" = is-active ] && exit 3\nexit 1\n')
+    systemctl.chmod(0o755)
+    model = {
+        "services": {
+            "moomoo-mcp": {
+                "environment": {
+                    "MCP_AUTH_TOKEN": "synthetic-only",
+                    "MOOMOO_TRADING_MODE": mode,
+                }
+            },
+            "chatgpt-tunnel": {},
+        }
+    }
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env python3\nimport pathlib,sys\n"
+        + "if 'config' in sys.argv: print("
+        + repr(json.dumps(model))
+        + ")\n"
+        + "else: pathlib.Path('unexpected-start').touch()\n"
+    )
+    docker.chmod(0o755)
+    result = subprocess.run(
+        [str(scripts / "compose-prod.sh"), "up", "-d"],
+        cwd=tmp_path,
+        env={"PATH": str(fake_bin) + ":" + os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "READ_ONLY" in result.stdout + result.stderr
+    assert not (tmp_path / "unexpected-start").exists()
+    assert "synthetic-only" not in result.stdout + result.stderr

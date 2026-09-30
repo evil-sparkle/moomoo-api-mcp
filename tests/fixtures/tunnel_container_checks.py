@@ -249,6 +249,19 @@ fixture = {
         },
         "chatgpt-tunnel": {
             "restart": "no",
+            "environment": dict.fromkeys(
+                (
+                    "HTTP_PROXY",
+                    "http_proxy",
+                    "HTTPS_PROXY",
+                    "https_proxy",
+                    "ALL_PROXY",
+                    "all_proxy",
+                    "NO_PROXY",
+                    "no_proxy",
+                ),
+                "http://tunnel-control-plane:8082",
+            ),
             "networks": ["fixture-only"],
             "volumes": [
                 str(workspace / "client.yaml") + ":/etc/tunnel-client.yaml:ro",
@@ -415,6 +428,22 @@ print('PASS: actual MCP exact Host, Origin and missing/wrong/conflicting bearer 
             + ["exec", "-T", "chatgpt-tunnel", "python", "-c", http_negative_probe],
             env=env,
         ),
+        flush=True,
+    )
+    assert control_stats()["proxy_hits"] == 0
+    proxy_positive = (
+        "import http.client; c=http.client.HTTPConnection('127.0.0.1',8082);"
+        "c.request('GET','/synthetic-canary');assert c.getresponse().status==502"
+    )
+    run(
+        compose
+        + ["exec", "-T", "tunnel-control-plane", "python", "-c", proxy_positive],
+        env=env,
+    )
+    assert control_stats()["proxy_hits"] == 1
+    print(
+        "PASS: poisoned proxy environment cannot divert "
+        "manager or official child traffic",
         flush=True,
     )
     network_probe = """import socket
@@ -996,6 +1025,8 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
             ),
             flush=True,
         )
+
+    assert control_stats()["proxy_hits"] == 1
 
     # Exercise the actual manager against mode/auth/result refusals. These modes
     # exist only in a stdlib response fixture; brokerage trading is never enabled.

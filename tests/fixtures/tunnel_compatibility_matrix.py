@@ -13,6 +13,7 @@ import os
 import secrets
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -35,6 +36,7 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
             "successes",
             "anonymous",
             "rejected",
+            "fixture_errors",
         ),
         0,
     )
@@ -42,6 +44,15 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
     sent = False
     revoked = False
     redirect_seen = False
+
+    class FixtureServer(ThreadingHTTPServer):
+        def handle_error(self, request, client_address):
+            _ = request, client_address
+            if not isinstance(
+                sys.exc_info()[1],
+                (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError),
+            ):
+                counts["fixture_errors"] += 1
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -94,7 +105,7 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
                 done.set()
                 return
             expected = "Bearer " + runtime_key if is_control else mcp_key
-            if auth != expected:
+            if auth != expected or len(self.headers.get_all("Authorization", [])) != 1:
                 counts["rejected"] += 1
                 self.answer(401, {})
                 return
@@ -196,9 +207,9 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
         do_POST = handle_request
 
     sink_address = "127.0.0.1" if "same-host-port" in case else "127.0.0.2"
-    sink = ThreadingHTTPServer((sink_address, 0), Handler)
-    control = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    mcp = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    sink = FixtureServer((sink_address, 0), Handler)
+    control = FixtureServer(("127.0.0.1", 0), Handler)
+    mcp = FixtureServer(("127.0.0.1", 0), Handler)
     sink_host = "sink.control.fixture.test" if "subdomain" in case else sink_address
     control_host = (
         "control.fixture.test"
@@ -344,6 +355,8 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
             leak = counts["runtime_leaks"] + counts["mcp_leaks"] > 0
             if leak:
                 status = "FAIL"
+            elif counts["fixture_errors"]:
+                status = "INCONCLUSIVE"
             elif path == "auth-negative":
                 status = (
                     "PASS"
