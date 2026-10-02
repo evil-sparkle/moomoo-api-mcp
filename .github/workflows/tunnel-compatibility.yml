@@ -42,6 +42,7 @@ jobs:
   expanded-official-client-matrix:
     name: BLOCKED — expanded synthetic client matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Verify the unchanged official release
@@ -50,14 +51,14 @@ jobs:
         run: |
           docker run --rm --network none --read-only --user 10002:10002 \
             --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /tmp:uid=10002,gid=10002,mode=0700,size=16m \
+            --tmpfs /tmp:uid=10002,gid=10002,mode=0700,size=32m \
             --add-host control.fixture.test:127.0.0.1 \
             --add-host sink.control.fixture.test:127.0.0.2 \
             --add-host mcp.fixture.test:127.0.0.1 \
             --mount "type=bind,src=$RUNNER_TEMP/tunnel-client,dst=/verified/tunnel-client,readonly" \
             --mount "type=bind,src=$PWD/tests/fixtures/tunnel_compatibility_matrix.py,dst=/matrix.py,readonly" \
             python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
-            python /matrix.py --binary /verified/tunnel-client
+            python /matrix.py --binary /verified/tunnel-client --workers 6
       - name: Retain the release boundary
         if: always()
         run: |
