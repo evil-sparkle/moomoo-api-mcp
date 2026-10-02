@@ -746,7 +746,7 @@ def case_definitions():
         ("CP6", "poll"),
         ("CP6", "response"),
         ("MD2", "discovery"),
-        ("MD2", "startup"),
+        ("MD2", "initialize"),
         ("MD2", "tools-list"),
         ("MD2", "notification"),
         ("MF2", "forward"),
@@ -792,7 +792,7 @@ def case_definitions():
             cases.append((f"MP1-{path}-var-{variable}", path, 302))
     for kind in ("omitted", "empty", "file"):
         cases.append((f"CP8-missing-key-{kind}", "normal", 302))
-    for path in ("metadata", "poll", "response", "discovery", "startup", "forward"):
+    for path in ("metadata", "poll", "response", "discovery", "initialize", "forward"):
         for status in (401, 403):
             cases.append((f"AUTH-{path}-auth-{status}", path, 302))
         for status in (429, 503):
