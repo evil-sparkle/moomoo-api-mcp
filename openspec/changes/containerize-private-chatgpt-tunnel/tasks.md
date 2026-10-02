@@ -12,7 +12,7 @@ The dependency table is authoritative; section order is organizational, not a bl
 | Task(s) | Prerequisites | Work classification and completion boundary |
 | --- | --- | --- |
 | 1.1 | None | COMPLETE: existing pin integrity/source audit only |
-| 1.2 | 1.1; local protocol fixtures; 4.5 and 6.2 for completed rotation/forwarding evidence (fixture development can start earlier) | MANDATORY GATE: fixture development and synthetic real-binary runs can proceed; completion BLOCKED by CP1/CP2 and all untested CP/MCP cases |
+| 1.2 | 1.1; local protocol fixtures; 4.5 and 6.2 for completed rotation/forwarding evidence (fixture development can start earlier) | MANDATORY GATE: fixture development and synthetic real-binary runs can proceed; completion BLOCKED by observed CP/MCP failures; the 515-case synthetic inventory is exercised, with exact results in synthetic-compatibility-20261002.md |
 | 1.3 | 1.1 | Independent image-input/writable-path experiment; no security approval or production pin change |
 | 2.1, 2.2 | None beyond new apply authorization | Independent exact Host setting and URL/preflight implementation |
 | 2.3 | 2.1, 2.2 | Independent bearer/Host/Origin/session component tests; cannot satisfy official-client gate by themselves |
@@ -121,3 +121,13 @@ original proposal was integrated without reverting this approved dependency grap
 or changing historical evidence. See `independent-verification.md` and
 `continuation-verification.md` for exact hosted run links, per-case observations,
 remaining compatibility coverage and the next head's verification status.
+
+## Synthetic matrix follow-up — 2026-10-02
+
+The owner authorized completion of the remaining synthetic cases and preparation
+of a private upstream report. The expanded fixture explicitly enumerates 515
+cases, including same-origin/loop redirects, actual endpoint methods and bodies,
+individual proxy variables, missing keys and authentication/retry ambiguities.
+See [current evidence](synthetic-compatibility-20261002.md) for exact runs and
+fixture corrections. No checkbox changes: 34/36 complete, 1.2 BLOCKED and 8.3
+incomplete. The private report is outside tracked files and has not been sent.

@@ -114,3 +114,11 @@ missing runtime-key cases and comprehensive authentication/retry ambiguities. No
 per-case PASS is promoted to a group PASS across unexecuted combinations. Official
 doctor's unauthenticated OAuth probe remains failed. No upstream remediation is
 shipped; the private report is prepared for owner review only, outside tracked files.
+
+## Superseding synthetic follow-up — 2026-10-02
+
+The previously untested same-origin/loop, method/body, proxy-variable and
+authentication/retry members were added to the explicit 515-case fixture. See
+[the follow-up evidence](synthetic-compatibility-20261002.md). This dated record
+retains its original observed results; new coverage does not retroactively clear
+old failures or change the official release pin.

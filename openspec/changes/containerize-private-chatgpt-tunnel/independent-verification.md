@@ -1,12 +1,21 @@
 # Independent implementation evidence — release BLOCKED
 
-**Current status (2026-09-30): 34/36 tasks complete. Tasks 1.2 and 8.3 remain
+**Current status (2026-10-02): 34/36 tasks complete. Tasks 1.2 and 8.3 remain
 incomplete.** PR #38 remains draft. The GitHub workflow-permission problem is
-resolved, implementation is pushed, and hosted CI is running. Historical
+resolved and implementation is pushed. See the dated evidence below for actual
+hosted run states. Historical
 `compatibility.md`, `verification.md`, the original reproduction and production
 release manifest are unchanged.
 
 ## Current evidence
+
+[2026-10-02 synthetic matrix completion](synthetic-compatibility-20261002.md)
+records the 515-case follow-up: **361 PASS / 154 FAIL, zero inconclusive cases or
+fixture errors** at `5790462`. General CI and both fresh-image rootful/rootless
+jobs passed; both security jobs failed. It includes corrected discovery negatives
+and private-report status. It supersedes earlier untested-case claims;
+known failures remain failures. The following container evidence is retained
+with its original tested-head provenance.
 
 [Continuation evidence](continuation-verification.md) records new heads, hosted
 runs, expanded matrix results and remaining coverage. At tested code head `bbd33f6` (reconfirming `89cac04`):
