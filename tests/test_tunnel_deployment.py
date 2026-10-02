@@ -197,8 +197,16 @@ def test_runbook_permissions_allow_config_but_protect_credential_sources() -> No
     assert "owner_gid=0" in installer
 
 
-def test_optional_assets_do_not_modify_compose_topology() -> None:
-    compose_files = sorted(ROOT.glob("docker-compose*.yml"))
+def test_default_assets_preserve_brokerage_topology() -> None:
+    compose_files = [
+        ROOT / name
+        for name in (
+            "docker-compose.yml",
+            "docker-compose.prod.yml",
+            "docker-compose.paper.yml",
+            "docker-compose.smoke.yml",
+        )
+    ]
     assert compose_files
     combined = "\n".join(path.read_text(encoding="utf-8") for path in compose_files)
 

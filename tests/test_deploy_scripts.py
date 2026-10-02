@@ -260,6 +260,20 @@ if name == "curl":
         )
         return repo
 
+    def test_selected_tunnel_refuses_unsupported_target_before_checkout(self):
+        wrapper = self.repo / "scripts" / "compose-prod.sh"
+        wrapper.write_text("#!/bin/sh\nexit 0\n")
+        self.git("add", "scripts/compose-prod.sh")
+        self.git("commit", "-m", "test unsupported tunnel target")
+        unsupported = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "--quiet", "--detach", self.commit)
+        (self.repo / ".chatgpt-deploy.json").write_text("{}")
+        result = self.deploy(unsupported)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Disable the tunnel", result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual(self.calls(), [])
+
     def test_cleanup_keeps_both_images_and_their_aliases(self):
         repo = self.seed_images()
         result = self.deploy()

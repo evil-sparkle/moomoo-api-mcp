@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 DEFAULT_URL = "http://127.0.0.1:8000/mcp"
+COMPOSE_URL = "http://moomoo-mcp:8000/mcp"
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 PROTOCOL_VERSION = "2025-06-18"
 REQUIRED_TOOLS = frozenset({"check_health", "get_accounts", "get_positions"})
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -26,6 +29,16 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 class PreflightError(Exception):
     """A safe-to-display verification failure."""
+
+    def __init__(self, message: str, *, transient: bool = False):
+        super().__init__(message)
+        self.transient = transient
+
+
+class RefuseRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _ = req, fp, code, msg, headers, newurl
+        return None
 
 
 @dataclass
@@ -36,6 +49,11 @@ class McpClient:
     authorization: str
     timeout: float = 10.0
     next_id: int = 1
+    allow_compose_mcp: bool = False
+
+    def __post_init__(self) -> None:
+        validate_url(self.url, allow_compose_mcp=self.allow_compose_mcp)
+        validate_timeout(self.timeout)
 
     def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         request_id = self.next_id
@@ -60,14 +78,23 @@ class McpClient:
             },
         )
         try:
-            with urlopen(request, timeout=self.timeout) as response:  # noqa: S310
+            with build_opener(ProxyHandler({}), RefuseRedirects()).open(
+                request, timeout=self.timeout
+            ) as response:
                 status = response.status
                 content_type = response.headers.get_content_type()
-                raw = response.read()
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise PreflightError("MCP response exceeded size limit.")
         except HTTPError as exc:
-            raise PreflightError(f"MCP endpoint returned HTTP {exc.code}.") from None
+            raise PreflightError(
+                f"MCP endpoint returned HTTP {exc.code}.",
+                transient=500 <= exc.code < 600,
+            ) from None
         except (URLError, TimeoutError, OSError):
-            raise PreflightError("MCP endpoint is unreachable.") from None
+            raise PreflightError(
+                "MCP endpoint is unreachable.", transient=True
+            ) from None
         if status != 200:
             raise PreflightError(f"MCP endpoint returned HTTP {status}.")
         if content_type != "application/json":
@@ -146,10 +173,17 @@ def read_authorization(path: Path) -> str:
     return value
 
 
-def validate_url(url: str) -> None:
-    parts = urlsplit(url)
+def validate_url(url: str, *, allow_compose_mcp: bool = False) -> None:
+    if allow_compose_mcp and url == COMPOSE_URL:
+        return
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        raise PreflightError("MCP URL must be loopback HTTP at /mcp.") from None
     if (
         parts.scheme != "http"
+        or (port is not None and not 1 <= port <= 65535)
         or parts.hostname not in LOOPBACK_HOSTS
         or parts.path != "/mcp"
         or parts.username is not None
@@ -160,6 +194,11 @@ def validate_url(url: str) -> None:
         raise PreflightError("MCP URL must be loopback HTTP at /mcp.")
 
 
+def validate_timeout(timeout: float) -> None:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise PreflightError("Timeout must be finite and greater than zero.")
+
+
 def run(
     *,
     url: str,
@@ -168,11 +207,18 @@ def run(
     trd_env: str | None = None,
     account_id: str | None = None,
     timeout: float = 10.0,
+    allow_compose_mcp: bool = False,
 ) -> list[str]:
     """Run startup-safe or full acceptance and return safe milestone names."""
-    validate_url(url)
+    validate_url(url, allow_compose_mcp=allow_compose_mcp)
+    validate_timeout(timeout)
     authorization = read_authorization(authorization_file)
-    client = McpClient(url=url, authorization=authorization, timeout=timeout)
+    client = McpClient(
+        url=url,
+        authorization=authorization,
+        timeout=timeout,
+        allow_compose_mcp=allow_compose_mcp,
+    )
     client.initialize()
     milestones = ["initialize"]
     client.list_tools()
@@ -204,6 +250,7 @@ def run(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=DEFAULT_URL)
+    parser.add_argument("--allow-compose-mcp", action="store_true")
     parser.add_argument("--authorization-file", required=True, type=Path)
     parser.add_argument("--mode", choices=("startup-safe", "full"), required=True)
     parser.add_argument("--trd-env", choices=("REAL", "SIMULATE"))
@@ -217,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         milestones = run(
             url=args.url,
+            allow_compose_mcp=args.allow_compose_mcp,
             authorization_file=args.authorization_file,
             mode=args.mode,
             trd_env=args.trd_env,

@@ -111,6 +111,7 @@ docker-compose.*.yml
 !docker-compose.prod.yml
 !docker-compose.smoke.yml
 !docker-compose.paper.yml
+!docker-compose.chatgpt.yml
 docs/deploy-*.md
 !docs/deploy-vps.md
 .deploy.env
@@ -122,3 +123,6 @@ docs/deploy-*.md
 .claude/*
 !.claude/commands/
 !.claude/skills/
+
+.chatgpt-deploy.json
+.chatgpt-selection-*

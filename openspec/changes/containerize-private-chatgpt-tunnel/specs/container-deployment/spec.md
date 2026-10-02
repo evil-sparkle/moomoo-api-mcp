@@ -94,3 +94,11 @@ CI SHALL exercise the actual tunnel image, entrypoint, runtime permissions and p
 
 - **WHEN** only synthetic container and simulated control-plane checks passed
 - **THEN** VPS deployment, credentialed OpenAI access, ChatGPT web invocation and native iPad acceptance SHALL remain pending
+
+
+#### Scenario: Fixtures remain isolated while the release is blocked
+
+- **WHEN** independent container implementation is exercised before official-client release-gate closure
+- **THEN** tests SHALL use synthetic credential sources and disposable resources with enforced fixture-only destinations and no real OpenAI traffic
+- **AND** image hardening, secret permissions, Compose integration and lifecycle results SHALL be reported separately from official-client compatibility
+- **AND** neither those results nor an explicitly selected test overlay SHALL authorize production enablement

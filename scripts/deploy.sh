@@ -57,6 +57,13 @@ fi
 git fetch --quiet origin main
 commit="$(git rev-parse --verify --end-of-options "${1:-origin/main}^{commit}")"
 short="${commit:0:7}"
+if [ -f .chatgpt-deploy.json ]; then
+  if ! git show "${commit}:scripts/compose-prod.sh" | grep -q chatgpt-selection-schema-v1; then
+    echo 'Disable the tunnel before selecting an older unsupported deployment.' >&2
+    exit 1
+  fi
+  python3 scripts/tunnel_deployment.py check-release
+fi
 
 if [ "${DEPLOY_REEXEC:-0}" != "1" ]; then
   if git cat-file -e "${commit}:scripts/deploy.sh" 2>/dev/null; then

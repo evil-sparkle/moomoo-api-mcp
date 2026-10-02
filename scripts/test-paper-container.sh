@@ -10,12 +10,17 @@ project="paper-journal-check-$(date +%s)-$$"
 execution_volume="$project-execution"
 device_volume="$project-device"
 holder="$project-holder"
-fixture="$(pwd)/tests/fixtures/paper_container_checks.py"
+fixture_dir="$(mktemp -d)"
+chmod 755 "$fixture_dir"
+cp tests/fixtures/paper_container_checks.py "$fixture_dir/checks.py"
+chmod 644 "$fixture_dir/checks.py"
+fixture="$fixture_dir/checks.py"
 cleanup() {
   for action in seed recreated holder contender restore dirty read-only; do
     docker rm -f "$project-$action" >/dev/null 2>&1 || true
   done
   docker volume rm "$execution_volume" "$device_volume" >/dev/null 2>&1 || true
+  rm -rf "$fixture_dir"
 }
 trap cleanup EXIT
 # Names are unique to this invocation. Existing deployment volumes are untouched.

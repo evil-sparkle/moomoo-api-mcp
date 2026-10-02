@@ -79,7 +79,7 @@ select = [
 known-first-party = ["moomoo_mcp"]
 
 [tool.basedpyright]
-include = ["src", "tests", "scripts"]
+include = ["src", "tests", "scripts", "deploy/tunnel-client/container"]
 pythonVersion = "3.10"
 venvPath = "."
 venv = ".venv"

@@ -137,6 +137,10 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
     environment = service.get("environment")
     if not isinstance(environment, dict) or TOKEN_VARIABLE not in environment:
         raise ConfigError(f"{SERVICE} does not set {TOKEN_VARIABLE}.")
+    if isinstance(services, dict) and "chatgpt-tunnel" in services:
+        mode = (environment.get("MOOMOO_TRADING_MODE") or "READ_ONLY").strip().upper()
+        if mode != "READ_ONLY":
+            raise ConfigError("The selected tunnel requires READ_ONLY; stop it first.")
     token = environment[TOKEN_VARIABLE]
     if not isinstance(token, str):
         raise ConfigError(

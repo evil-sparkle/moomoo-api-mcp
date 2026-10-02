@@ -224,3 +224,34 @@ The container SHALL validate authenticated initialize, discovery and check_healt
 - **WHEN** the brokerage container is recreated and its IP changes
 - **THEN** subsequent requests SHALL recover through service DNS without hard-coded addresses or old MCP session state
 - **AND** requests lost during the outage SHALL NOT be replayed as recovery
+
+
+### Requirement: Independent fixture work does not clear the release gate
+
+Independent implementation and verification SHALL use only synthetic credentials and disposable local/container resources until separately authorized otherwise. The feature SHALL remain default-off. A failing or untested mandatory official-client compatibility scenario SHALL block release and production enablement regardless of successful local builds, component tests or other CI jobs. The OpenAI runtime-key control-plane path and ordinary MCP bearer discovery/startup/forwarding paths SHALL have separate evidence. No patched client or proxy workaround SHALL substitute for a reviewed official release that satisfies credential confinement.
+
+#### Scenario: Local image builds while runtime-key confinement fails
+
+- **WHEN** an isolated image, Compose, permissions, Host/URL, signals or lifecycle test passes while the official client still fails a required credential-confinement case
+- **THEN** only that independent result SHALL be recorded as passed
+- **AND** release and production enablement SHALL remain blocked with the feature default-off
+
+#### Scenario: Distinct credentials have distinct coverage
+
+- **WHEN** a control-plane redirect exposes a synthetic OpenAI runtime key in a fixture
+- **THEN** that failure SHALL be recorded against the control-plane path
+- **AND** MCP bearer discovery and forwarding cases SHALL retain their independently observed status, including UNTESTED where no runtime evidence exists
+
+#### Scenario: Incomplete or unrelated evidence cannot satisfy a gate
+
+- **WHEN** any mandatory official-client case is failed, untested, skipped, inconclusive or marked expected-failure
+- **THEN** unrelated successful tests SHALL NOT make that gate pass
+- **AND** every missing or failing case SHALL remain explicit in the release evidence
+
+#### Scenario: Required evidence for technical closure
+
+- **WHEN** closure of the compatibility blocker is considered
+- **THEN** source/release integrity and exact binary/image provenance SHALL be reviewed
+- **AND** redirect-confinement, proxy-confinement, normal authenticated control-plane and MCP operations, negative authentication, rotation and the remaining approved real-client/container scenarios SHALL all pass on the final reviewed official artifact
+- **AND** a proposed fix or upgrade without that evidence SHALL NOT close the blocker
+- **AND** passing technical gates SHALL NOT itself authorize production enablement, real credentials or live product acceptance
