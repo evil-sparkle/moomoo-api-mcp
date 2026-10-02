@@ -296,7 +296,11 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
                     if commands and (path == "tools-list" or "MD1-tools-list" in case):
                         commands[0]["jsonrpc"]["method"] = "tools/list"
                         commands[0]["jsonrpc"]["params"] = {}
-                    if commands and ("oauth" in case or path == "mcp-proxy-discovery"):
+                    if commands and (
+                        "oauth" in case
+                        or path == "mcp-proxy-discovery"
+                        or "static-negative-discovery" in case
+                    ):
                         commands[0].pop("jsonrpc")
                         commands[0]["command_type"] = "oauth_discovery"
                     if commands and "MA1-wrong" in case:
@@ -460,7 +464,15 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
                 )
                 block = f"  {scope}:\n    Authorization: file:{root}/mcp\n"
                 if "missing" in case:
-                    config.write_text(config.read_text().replace(block, ""))
+                    text = config.read_text().replace(block, "")
+                    if "discovery" in case:
+                        # Discovery inherits runtime headers when no override exists.
+                        # Remove both to exercise genuinely missing authentication.
+                        text = text.replace(
+                            f"  extra_headers:\n    Authorization: file:{root}/mcp\n",
+                            "",
+                        )
+                    config.write_text(text)
                 else:
                     wrong = root / "wrong"
                     wrong.write_text("Bearer synthetic-wrong")
@@ -568,10 +580,21 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
             elif counts["fixture_errors"]:
                 status = "INCONCLUSIVE"
             elif "static-negative" in case:
+                exercised = (
+                    counts["oauth_requests"]
+                    if "discovery" in case
+                    else counts["responses"]
+                )
                 status = (
-                    "PASS"
-                    if counts["rejected"] and not counts["forward_dispatches"]
-                    else "FAIL"
+                    "INCONCLUSIVE"
+                    if not exercised
+                    else (
+                        "PASS"
+                        if counts["rejected"]
+                        and not counts["forward_dispatches"]
+                        and not counts["discovery_successes"]
+                        else "FAIL"
+                    )
                 )
             elif missing_key:
                 status = (
@@ -589,7 +612,11 @@ def scenario(binary: Path, case: str, path: str, code: int = 302) -> dict:
                 )
             elif "MD1-tools-list" in case:
                 status = "PASS" if counts["list_successes"] else "FAIL"
-            elif "oauth" in case or path == "mcp-proxy-discovery":
+            elif (
+                "oauth" in case
+                or path == "mcp-proxy-discovery"
+                or "static-negative-discovery" in case
+            ):
                 status = (
                     "PASS"
                     if counts["discovery_successes"] and not counts["oauth_anonymous"]
