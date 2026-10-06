@@ -209,9 +209,16 @@ context: |
   selected separate Compose container; the brokerage container still supervises
   only MCP and OpenD. The 2026-10-07 revision uses the unmodified official client,
   fixed endpoints, clean environment and authenticated READ_ONLY startup. Managed
-  integration checks are required; direct-client redirect/proxy/doctor findings
-  remain diagnostic evidence with original verdicts. Preserve the official pin
-  and historical results. Live OpenAI/ChatGPT/iPad milestones remain separate.
+  integration checks are required; prior redirect/proxy/doctor findings are
+  retained in earlier Git commits; dated reports, diagnostic runners and their
+  report job are removed from the current tree. Preserve the official pin. Live OpenAI/ChatGPT/iPad milestones remain separate.
+  CI publishes the optional image to the existing ECR repository using tunnel-prefixed
+  commit tags. Enabled deployments resolve and save its immutable digest and pull
+  both images; production hosts do not build it separately. Default remains off.
+  The tunnel reuses the deployment MCP_AUTH_TOKEN through explicit Compose
+  environment injection; only the OpenAI runtime key and tunnel ID are staged as
+  protected files. Ordinary bearer rotation recreates both containers and updates
+  authorized local clients; restarts retain the old container environment.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
@@ -234,4 +241,3 @@ context: |
 #     archive:
 #       guidance:
 #         - Summarize the archive outcome before finishing
-

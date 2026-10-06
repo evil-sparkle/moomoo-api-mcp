@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 # The saved deployment is authoritative, including after a new deployment.
 unset ECR_REGISTRY IMAGE_TAG
 # chatgpt-selection-schema-v1: kept across checkouts; no credential values here.
+# chatgpt-selection-ecr-v1: immutable ECR references and CI-managed updates.
 optional=()
 if [ -f .chatgpt-deploy.json ]; then
   if ! values="$(python3 scripts/tunnel_deployment.py compose-values)"; then
@@ -24,7 +25,12 @@ if [ -f .chatgpt-deploy.json ]; then
   esac
   done
   if [ "$#" = 1 ] && [ "$1" = pull ]; then
-    set -- pull moomoo-mcp
+    if [[ "${selected[0]}" == sha256:* ]]; then
+      # Local image IDs remain supported for disposable tests and development.
+      set -- pull moomoo-mcp
+    else
+      set -- pull moomoo-mcp chatgpt-tunnel
+    fi
   fi
 fi
 exec docker --context rootless compose --env-file .env --env-file .deploy.env \

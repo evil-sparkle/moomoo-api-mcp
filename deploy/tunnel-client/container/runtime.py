@@ -20,11 +20,9 @@ from private_chatgpt_preflight import (  # pyright: ignore[reportMissingImports]
     McpClient,
     PreflightError,
     RefuseRedirects,
-    read_authorization,
 )
 
 RUNTIME = Path("/run/moomoo-chatgpt-tunnel")
-AUTHORIZATION = Path("/run/secrets/mcp-authorization")
 BINARY = "/usr/local/bin/tunnel-client"
 CONFIG = "/etc/tunnel-client.yaml"
 CONFIG_DIGEST = Path("/opt/tunnel/config.sha256")
@@ -42,6 +40,18 @@ def verify_config() -> None:
         raise ValueError("unapproved tunnel configuration")
 
 
+def authorization_header() -> str:
+    token = os.environ.get("MCP_AUTH_TOKEN", "")
+    if not token.strip() or any(
+        character < " " or character > "~" for character in token
+    ):
+        raise PreflightError(
+            "MCP_AUTH_TOKEN must contain a valid ordinary bearer token."
+        )
+    # Match the MCP settings parser's normalization of the shared token.
+    return "Bearer " + token.strip()
+
+
 def child_environment() -> dict[str, str]:
     tunnel_id = TUNNEL_ID.read_text().strip()
     if not re.fullmatch(r"tunnel_[a-zA-Z0-9_-]{1,128}", tunnel_id):
@@ -50,12 +60,17 @@ def child_environment() -> dict[str, str]:
         "HOME": str(RUNTIME),
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "CONTROL_PLANE_TUNNEL_ID": tunnel_id,
+        "MCP_AUTHORIZATION": authorization_header(),
     }
 
 
 def gate(stop: threading.Event, *, deadline_seconds: float = 90) -> bool:
     deadline = time.monotonic() + deadline_seconds
-    authorization = read_authorization(AUTHORIZATION)
+    try:
+        authorization = authorization_header()
+    except PreflightError as exc:
+        report(str(exc))
+        return False
     while not stop.is_set():
         try:
             client = McpClient(
@@ -180,7 +195,9 @@ def main() -> int:
         finally:
             stop_child(child, received[0])
     except (OSError, ValueError, PreflightError, subprocess.SubprocessError):
-        report("startup failed; inspect file permissions and safe configuration")
+        report(
+            "startup failed; inspect credentials, file permissions and configuration"
+        )
         return 1
 
 

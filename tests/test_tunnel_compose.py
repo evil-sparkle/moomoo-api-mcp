@@ -19,6 +19,7 @@ def test_default_off_and_enabled_boundaries(overlays):
         **PROD_ENV,
         "CHATGPT_TUNNEL_IMAGE": "sha256:" + "a" * 64,
         "CHATGPT_TUNNEL_SECRET_DIR": "/synthetic/protected",
+        "MCP_AUTH_TOKEN": "synthetic-shared-mcp-token",
     }
     default = _render("docker-compose.yml", *overlays, env=PROD_ENV)
     assert set(default["services"]) == {"moomoo-mcp"}
@@ -39,10 +40,12 @@ def test_default_off_and_enabled_boundaries(overlays):
     assert not tunnel.get("ports")
     assert not tunnel.get("privileged")
     assert "network_mode" not in tunnel and "pid" not in tunnel
-    assert not tunnel.get("environment")
+    assert tunnel["environment"] == {
+        "MCP_AUTH_TOKEN": broker["environment"]["MCP_AUTH_TOKEN"]
+    }
+    assert tunnel["environment"]["MCP_AUTH_TOKEN"] == env["MCP_AUTH_TOKEN"]
     assert {mount["target"] for mount in tunnel["volumes"]} == {
         "/run/secrets/control-plane-api-key",
-        "/run/secrets/mcp-authorization",
         "/run/secrets/tunnel-id",
     }
     assert all(mount["read_only"] for mount in tunnel["volumes"])

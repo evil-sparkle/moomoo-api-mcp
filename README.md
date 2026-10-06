@@ -10,7 +10,7 @@ This MCP server empowers developers to build custom trading skills and strategie
 
 ## About this fork
 
-This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp). The PyPI package `moomoo-api-mcp` (what `uvx moomoo-api-mcp` and `uv tool install moomoo-api-mcp` install) is published by upstream, not by this fork; this fork does not publish to PyPI, and `.github/workflows/python-publish.yml` and `manual-release.yml` are inherited from upstream and not maintained here. What this fork builds and maintains is the container deployment — CI (`.github/workflows/ci.yml`) builds the `moomoo-api-mcp` image — which carries the OpenD gateway alongside the server — and `docs/deploy-vps.md` deploys it. A PyPI install therefore runs upstream's release, which can differ from this fork's code — use the Docker deployment or a local checkout (`uv run moomoo-api-mcp`) to run this fork.
+This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp). The PyPI package `moomoo-api-mcp` (what `uvx moomoo-api-mcp` and `uv tool install moomoo-api-mcp` install) is published by upstream, not by this fork; this fork does not publish to PyPI, and `.github/workflows/python-publish.yml` and `manual-release.yml` are inherited from upstream and not maintained here. What this fork builds and maintains is the container deployment: CI (`.github/workflows/ci.yml`) builds the application image, carrying OpenD alongside the server, and the optional ChatGPT tunnel image. Main pushes publish both to the existing ECR repository under separate commit tags; `docs/deploy-vps.md` deploys them without a VPS build. A PyPI install therefore runs upstream's release, which can differ from this fork's code — use the Docker deployment or a local checkout (`uv run moomoo-api-mcp`) to run this fork.
 
 ## Features
 
@@ -716,7 +716,7 @@ The explicit `docker-compose.chatgpt.yml` overlay adds a separate optional tunne
 container; normal deployments need no tunnel settings. It uses the verified
 official client with fixed endpoints, proxy-filtered startup, authentication and
 server-enforced READ_ONLY. Direct-client redirect/proxy/doctor limitations remain
-documented characterization; managed integration checks define acceptance. See [the tunnel migration runbook](docs/private-chatgpt-mcp.md)
+documented historical findings; current managed integration checks define acceptance. See [the tunnel migration runbook](docs/private-chatgpt-mcp.md)
 for measured rootful/rootless secret mapping, forced-recreation rotation, legacy
 systemd migration, and tunnel-only disable/rollback. Preserve the existing project,
 OpenD/journal volumes and `127.0.0.1:8000:8000`; never publish OpenD or share its

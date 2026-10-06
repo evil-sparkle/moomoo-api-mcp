@@ -21,8 +21,12 @@ def validate(selection: dict) -> None:
         or selection["version"] != 1
     ):
         raise ValueError("unsupported tunnel selection schema")
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", selection["image"]):
-        raise ValueError("select an immutable local image ID")
+    if not re.fullmatch(
+        r"(?:[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/"
+        r"moomoo-api-mcp@)?sha256:[0-9a-f]{64}",
+        selection["image"],
+    ):
+        raise ValueError("select an immutable ECR digest or local image ID")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", selection["project"]):
         raise ValueError("use the existing Compose project identity")
     path = selection["secret_directory"]
@@ -81,6 +85,8 @@ def main() -> int:
     select.add_argument("--image", required=True)
     select.add_argument("--secret-directory", required=True)
     select.add_argument("--project", required=True)
+    update = commands.add_parser("set-image")
+    update.add_argument("--image", required=True)
     commands.add_parser("compose-values")
     commands.add_parser("check-start")
     # Retain the old command for existing operator scripts.
@@ -107,6 +113,10 @@ def main() -> int:
             selection = load()
             for key in ("image", "secret_directory", "project"):
                 print(selection[key])
+        elif args.command == "set-image":
+            selection = load()
+            selection["image"] = args.image
+            save(selection)
         elif args.command == "disable":
             if SELECTION.exists():
                 wrapper = str(ROOT / "scripts/compose-prod.sh")

@@ -4,7 +4,7 @@ The owner approved the managed official-client approach on 2026-10-07. Use the
 unmodified, integrity-verified v0.0.14 release; this project maintains no tunnel
 client fork. Normal deployment remains tunnel-free. Explicit Compose selection
 retains authentication, server-enforced READ_ONLY, legacy-service exclusivity and
-bounded authenticated startup checks. PR #38 remains a draft implementation.
+bounded authenticated startup checks.
 
 ## Managed deployment assumptions and known limitations
 
@@ -14,7 +14,7 @@ host. It fixes the private MCP URL and strips inherited proxy, custom-CA and
 endpoint/configuration overrides. Runtime key permissions are Tunnels Read + Use;
 OpenAI admin, brokerage and operator credentials do not enter the tunnel.
 
-The preserved synthetic tests demonstrate upstream redirect credential diversion,
+The [historical investigation](https://github.com/evil-sparkle/moomoo-api-mcp/tree/76470318f3d9dbe3eca51ee10902580d50dfad1c/openspec/changes/containerize-private-chatgpt-tunnel) recorded upstream redirect credential diversion,
 direct-client proxy behavior and omitted authentication on doctor/redirected MCP
 requests. The owner accepts those conditional limitations for this fixed managed
 setup. Proxy filtering does not fix the upstream redirect behavior. No malicious
@@ -22,10 +22,10 @@ redirect from the real OpenAI endpoint or actual credential exposure is establis
 Normal authenticated forwarding, preflight, negative auth, rotation, isolation and
 recovery through the managed image remain mandatory acceptance checks.
 
-The direct-client runners retain their FAIL/INCONCLUSIVE verdicts. CI validates
-and publishes their sanitized reports separately from required managed integration;
-malformed/incomplete reports or fixture errors fail reporting. Historical evidence
-is unchanged. Live OpenAI, VPS, ChatGPT web and native iPad acceptance remain
+The recurring upstream-client diagnostic job and its unused runners/fixtures have
+been retired. Dated reports/results are removed from the current tree and remain
+in earlier Git commits. Required CI checks exercise the actual
+rootful/rootless managed deployment. Live OpenAI, VPS, ChatGPT web and native iPad acceptance remain
 PENDING; implementation and synthetic CI do not demonstrate those milestones.
 
 ## Intended managed deployment
@@ -49,19 +49,53 @@ inherited proxies. The ordinary MCP bearer protects initialization,
 discovery and calls. It is distinct from the limited OpenAI runtime key. Never
 supply an operator token, broker login, unlock material or OpenAI admin key.
 
-## Build and protect the inputs
+## Use CI-published images and protect the inputs
 
 These are operator preparation instructions. This implementation request does not
 execute a production migration or read actual credential files.
-Build `scripts/build-tunnel-image.sh` using the selected Docker context. Only its
-enumerated public files enter the build context. The image uses the unchanged
-reviewed release manifest, verifies the archive before executing the binary, and
-pins the slim base image by digest. There is no runtime download. Record the local
-immutable image ID and the reviewed source commit; reuse that ID for recreation.
+GitHub Actions builds the application and tunnel images and publishes them on
+main pushes to the existing `moomoo-api-mcp` ECR repository. Application tags stay
+unchanged; the tunnel uses `tunnel-<seven-character-commit>` tags. PRs build without
+publishing. Unchanged images are retagged for each main commit, with a fresh build
+if the baseline image is unavailable. Wait for both image jobs before deployment.
+No additional ECR repository or IAM setup is needed, and **no image build is
+required on the VPS**. `scripts/build-tunnel-image.sh` is for development and
+disposable container tests only.
+
+Only enumerated public files enter the tunnel build context. The image uses the
+unchanged reviewed release manifest, verifies the archive before executing the
+binary, and pins the slim base image by digest. There is no runtime download.
+For first-time provisioning, pull the CI image for the reviewed main commit using
+the existing ECR credential helper:
+
+```bash
+docker --context rootless pull '<registry>/moomoo-api-mcp:tunnel-<commit>'
+docker --context rootless image inspect \
+  --format '{{.Id}} {{json .RepoDigests}}' \
+  '<registry>/moomoo-api-mcp:tunnel-<commit>'
+```
+
+Record its local `sha256:...` image ID for the mapping probe and its immutable
+`<registry>/moomoo-api-mcp@sha256:...` reference for selection. Both are non-secret.
+Once selected, the ordinary `scripts/deploy.sh [commit]` workflow resolves the
+matching tunnel commit tag to a digest, saves it and pulls both images. Missing or
+failed tunnel lookup stops deployment before checkout or selection changes.
+Restart and forced recreation reuse the saved digest; deploy rollback restores
+the previous image selection together with application settings and checkout.
 The daemon runs as numeric UID/GID `10002:10002`, with a read-only root, no
 capabilities, no-new-privileges and a bounded private runtime tmpfs.
 
-Keep existing master credentials root:root mode `0600`. The existing no-echo
+Compose explicitly supplies the existing `MCP_AUTH_TOKEN` to both MCP and tunnel.
+Use the raw token already configured in the deployment environment; no extra
+bearer file or manually assembled header is needed. The launcher validates it
+and derives `Bearer <token>` for the official client's normal and discovery
+headers. It passes that header through `env:MCP_AUTHORIZATION`, supported by the
+pinned client. Only this token is injected into the tunnel; the whole deployment
+environment file is not loaded into that container. The token is visible in the
+container environment to trusted host/Docker administrators, as accepted by the
+owner. Avoid displaying resolved Compose configuration or container environments.
+
+Keep the OpenAI runtime-key master root:root mode `0600`. The existing no-echo
 `scripts/install_private_chatgpt_credential.py` remains the master input helper;
 its terminal restoration and atomic writes are unchanged. A root-owned tunnel-id
 file is also required. Do not put credentials in YAML, build arguments, images,
@@ -79,8 +113,9 @@ Create root-owned `0700` staging parents. On each necessary parent grant only
 traversal ACLs to the measured runtime UID and, for rootless Docker, the daemon
 owner. Do not grant write access, default/inheritable ACLs or access to master
 credentials. The helper takes `--master-directory` and `--staging-directory`,
-rejects symlinks/unsafe writable parents, and atomically writes the three fixed
-files with mapped ownership and mode `0400`. Each file is mounted read-only at
+rejects symlinks/unsafe writable parents, and atomically writes only
+`control-plane-api-key` and `tunnel-id` with mapped ownership and mode `0400`.
+Each file is mounted read-only at
 `/run/secrets/`. The root provisioning helper is not a root tunnel daemon.
 Root and the Docker controller remain trusted administrators.
 
@@ -93,13 +128,17 @@ Root and the Docker controller remain trusted administrators.
 3. Confirm the existing MCP deployment is READ_ONLY. Record the existing Compose
    project, image identities and volume names; do not create a replacement project.
 4. Provision the mapped files and validate access with the actual image/UID.
-5. Record selection using `scripts/tunnel_deployment.py select --image <image-id>
+5. Record selection using `scripts/tunnel_deployment.py select --image <ECR-repository@sha256:digest>
    --secret-directory <protected-directory> --project <existing-project>`.
    `.chatgpt-deploy.json` contains only non-secret selection metadata and survives
    deployment checkout/rollback. It is not a credential file.
-6. After preparation and review, recreate MCP with the selected
-   overlay to apply the Host opt-in; preserve its volumes. Start only the tunnel
-   service after MCP is reachable. A selected overlay refuses SIMULATE/REAL mode.
+6. Run the ordinary `scripts/deploy.sh <published-main-commit>` command. It pulls
+   the matching application and tunnel images and recreates the selected stack,
+   retaining the existing project and volumes. MCP recreation applies the Host
+   opt-in; the tunnel manager waits for authenticated MCP readiness before
+   forwarding. A selected overlay refuses SIMULATE/REAL mode. For subsequent
+   updates, use the same deploy command; credential provisioning is not repeated
+   unless credentials or the Docker identity mapping change.
 
 The startup manager retries transient MCP failures for at most 90 seconds. It
 requires authenticated initialize, tools/list and READ_ONLY health before launching
@@ -126,13 +165,21 @@ restart a healthy process. SIGTERM/SIGINT are forwarded, with a ten-second grace
 before forced termination; Compose allows twenty seconds. MCP availability and
 broker-backed availability are separate conditions.
 
-Rotate runtime key and MCP bearer separately. Stop the tunnel, atomically update
-the root master with the no-echo helper, stage the new mapped copy, then **force
-recreate** the sidecar with the same image/project. Restarting a process or container
-can retain a bind mount of the old inode. Verify new authenticated traffic and
-old-value rejection without printing either value. For MCP bearer rotation,
-coordinate the MCP recreation and existing local clients (including ZeroClaw)
-before recreating the tunnel. Rotation is incomplete without this behavioral proof.
+Rotate runtime key and MCP bearer separately. For the OpenAI runtime key, stop
+the tunnel, atomically update the root master with the no-echo helper, stage the
+new mapped copy, then **force recreate** the sidecar with the same image/project.
+Restarting can retain the old mounted inode. For the MCP bearer, stop the tunnel,
+update the single `MCP_AUTH_TOKEN` through the existing deployment secret procedure,
+update authorized local clients (including ZeroClaw), and force-recreate MCP.
+Verify local authentication, then force-recreate the tunnel using the saved
+wrapper selection. A restart retains the old container environment; no bearer-file
+staging is needed. Verify new authenticated traffic and old-value rejection without
+printing either value. Rotation is incomplete without this behavioral proof.
+
+Normal restarts and image deployments reuse the existing credentials. Rotation is
+an explicit credential replacement, not a requirement after each restart. These
+keys belong to the server-side tunnel client; the user's ChatGPT app does not
+need a credential update when the container restarts.
 
 ## Disable and rollback
 

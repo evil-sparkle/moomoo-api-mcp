@@ -59,6 +59,29 @@ execution-journal volume, or existing local-client path.
 
 ## ADDED Requirements
 
+### Requirement: CI-published tunnel deployment
+
+The existing GitHub Actions image pipeline SHALL build the tunnel from enumerated public inputs and publish it to the existing ECR repository only on main pushes, using distinct `tunnel-<commit>` tags. PR builds SHALL NOT publish. Every main commit SHALL have a matching tunnel tag through rebuilding or retagging a verified baseline image, with a build fallback if that image is absent. Operators SHALL NOT need to build an image on the production host.
+
+#### Scenario: Enabled deployment consumes CI images
+
+- **WHEN** an operator deploys a commit with the tunnel selected
+- **THEN** deployment SHALL confirm both application and tunnel commit tags before checkout or service changes
+- **AND** it SHALL save the tunnel's resolved immutable ECR digest and pull both images through the existing deployment workflow
+- **AND** subsequent restart or recreation SHALL reuse that saved digest
+
+#### Scenario: Tunnel image is unavailable
+
+- **WHEN** the matching tunnel commit tag is missing or its ECR lookup fails
+- **THEN** enabled deployment SHALL abort before changing the checkout, selection or running services
+- **AND** default tunnel-free deployment SHALL require only the application image
+
+#### Scenario: Deployment fails after selecting a new image
+
+- **WHEN** an enabled deployment fails after updating its tunnel image selection
+- **THEN** rollback SHALL restore the previous tunnel selection and immutable image alongside the application deployment state
+- **AND** application image cleanup SHALL preserve tunnel tags and persistent volumes
+
 ### Requirement: Reproducible hardened tunnel image
 
 The tunnel SHALL use a dedicated small image containing the official reviewed release and minimal startup/diagnostic support, with immutable image inputs and archive integrity verification before binary execution. The reviewed release manifest SHALL remain the release source of truth. Runtime startup SHALL NOT download latest or upgrade the client. The container SHALL run as a numeric non-root UID/GID with a read-only root filesystem, dropped capabilities, no-new-privileges, and narrowly scoped writable runtime storage. It SHALL preserve signal handling, bounded shutdown and independent restart behavior.
@@ -98,7 +121,7 @@ CI SHALL exercise the actual tunnel image, entrypoint, runtime permissions and p
 
 #### Scenario: Fixtures remain separate from live deployment
 
-- **WHEN** container implementation or direct-client characterization is exercised
+- **WHEN** current container integration is exercised
 - **THEN** tests SHALL use synthetic credential sources and disposable resources with enforced fixture-only destinations and no real OpenAI traffic
-- **AND** managed image, secret permissions, Compose and lifecycle results SHALL be reported separately from direct-client characterization
+- **AND** managed image, secret permissions, Compose and lifecycle results SHALL be reported independently of preserved historical upstream findings
 - **AND** successful synthetic tests SHALL NOT be reported as live OpenAI or ChatGPT acceptance

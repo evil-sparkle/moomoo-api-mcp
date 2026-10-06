@@ -1,13 +1,13 @@
 # Tasks
 
-Current revision — 2026-10-07: the owner authorizes requirements and implementation changes for the managed official-client approach. Historical direct-client FAILs remain recorded; their repair and fork maintenance are outside scope. All 38 revised tasks are complete, with hosted evidence for implementation commit `c41345b`. Dated checkpoints below record earlier scope/progress; live milestones remain pending.
+Current revision — 2026-10-07: the owner requests CI/ECR publication instead of manual production builds and cleanup of recurring diagnostics from the retired release gate. The original 38 implementation tasks are complete; CI-distribution and cleanup follow-up tasks are tracked below. Historical findings remain documented, with upstream repair and fork maintenance outside scope. Live milestones remain pending.
 
 Use synthetic credentials and disposable fixtures. Preserve the official pin and historical result files. This work does not deploy, read real credentials, contact live OpenAI, enable trading, merge or promote the draft PR. Design G1–G4 define current acceptance and evidence handoff.
 
 | Task(s) | Prerequisites | Work classification and completion boundary |
 | --- | --- | --- |
 | 1.1 | None | COMPLETE: existing pin integrity/source audit only |
-| 1.2 | 1.1, 4.5, 6.2 | Managed official-client normal/negative/auth/rotation compatibility; direct-client limitations remain characterization |
+| 1.2 | 1.1, 4.5, 6.2 | Managed official-client normal/negative/auth/rotation compatibility; prior upstream limitations remain documented history |
 | 1.3 | 1.1 | Independent image-input/writable-path experiment; no security approval or production pin change |
 | 2.1, 2.2 | None beyond new apply authorization | Independent exact Host setting and URL/preflight implementation |
 | 2.3 | 2.1, 2.2 | Independent bearer/Host/Origin/session component tests; cannot satisfy official-client gate by themselves |
@@ -32,7 +32,7 @@ Use synthetic credentials and disposable fixtures. Preserve the official pin and
 | 6.4 | 6.2, 6.3, 5.5 | Independent lifecycle/DNS recovery checks |
 | 6.5 | 6.2, 3.4, 3.5 | Independent hardened-runtime delayed-start/failure/recovery checks |
 | 6.6 | 6.3, 5.4 | Independent migration/rollback simulations with disposable state |
-| 7.1 | 6.1; 1.2 fixture interface | Independent CI integration; managed checks remain blocking; characterization retains genuine verdicts |
+| 7.1 | 6.1; 1.2 fixture interface | Required current managed integration in rootful/rootless Docker |
 | 7.2 | 6.1 | Independent existing smoke isolation improvements |
 | 7.3, 7.4, 7.5 | Revised design; reconcile with 3–6 before completion | Independent documentation; document accepted trust assumptions and operator enablement; keep live milestones pending |
 | 8.1 | Independent code/tests in 1.3 and groups 2–7 available | Independent broad quality verification; report gate failures separately even if other checks pass |
@@ -61,7 +61,7 @@ Current verification: [managed-verification-20261007.md](managed-verification-20
 ## 3. Build the independent container runtime
 
 - [x] 3.1 Add the dedicated Dockerfile and allowlisted build-context preparation, reusing release manifest/integrity installer; verify checksum failure precedes extraction/execution and inspect final image contents for absence of broker components and synthetic secret canaries.
-- [x] 3.2 Add container-only configuration using exact Docker DNS URL, file-backed runtime/discovery headers and loopback health/admin binding; verify parsing and safe doctor diagnostics with the pinned binary and synthetic files.
+- [x] 3.2 Add container-only configuration using exact Docker DNS URL, supported runtime/discovery header references and loopback health/admin binding; verify parsing and safe doctor diagnostics with the pinned binary and synthetic inputs.
 - [x] 3.3 Add minimal PID 1 startup gating with a 90-second deadline, bounded transient retries and immediate fatal-error refusal; test delayed MCP, exhausted deadline, invalid auth/mode/results, and that no client polling starts before READ_ONLY is proven.
 - [x] 3.4 Implement child reaping, signal forwarding, bounded shutdown and liveness-triggered nonzero exit; test real child exit, SIGTERM/SIGINT, SIGSTOP/hang, and independent recovery without treating remote readiness failure alone as process death.
 - [x] 3.5 Implement separate safe diagnostics for liveness, readiness and authenticated MCP availability, with a minimal scrubbed child environment; test proxy/config override removal and no credentials, Authorization headers, account results or raw bodies in output.
@@ -70,9 +70,9 @@ Current verification: [managed-verification-20261007.md](managed-verification-20
 
 - [x] 4.1 Add a no-secret identity-mapping probe and validation for the selected rootful/rootless Docker context; verify observed marker ownership against effective UID/GID maps and reject ambiguous, root or conflicting host identities.
 - [x] 4.2 Narrowly extend the credential helper with atomic staging to fixed names, mapped owner 0400 and root-owned protected parents with minimal traversal ACLs; test symlink/unsafe-parent rejection, fsync/replace behavior and cleanup on failure while preserving root-only 0600 masters.
-- [x] 4.3 Preserve no-echo terminal behavior and restoration on success, exceptions and interruption using PTY tests; verify provisioning never puts secret values in arguments, Compose interpolation, tracked files or diagnostic output.
+- [x] 4.3 Preserve no-echo terminal behavior and restoration on success, exceptions and interruption using PTY tests; verify file-secret provisioning never puts values in arguments, Compose interpolation, tracked files or diagnostic output. The ordinary MCP token follows the explicitly accepted environment path in section 12.
 - [x] 4.4 Run actual-image mounted-file permission tests under rootful and rootless Docker: UID 10002 reads config/staged secrets, unrelated and brokerage identities cannot read sources, and runtime cannot read masters or write mounts; fail tests rather than adding world-readability or a root runtime.
-- [x] 4.5 Add end-to-end atomic rotation tests for both runtime key and ordinary bearer, including stale bind behavior on restart and forced recreation; simulated control plane and MCP must accept only new values, and evidence must show successful new authenticated traffic plus old-value rejection without printing either value.
+- [x] 4.5 Add end-to-end rotation tests for runtime key and ordinary bearer, including stale mounted files or container environment on restart and forced recreation; simulated control plane and MCP must accept only new values, and evidence must show successful new authenticated traffic plus old-value rejection without printing either value.
 
 ## 5. Integrate explicit Compose selection and deployment
 
@@ -93,7 +93,7 @@ Current verification: [managed-verification-20261007.md](managed-verification-20
 
 ## 7. Integrate CI and operator documentation
 
-- [x] 7.1 Require real managed image integration in rootful/rootless CI and retain sanitized direct-client characterization reports. Verify upstream FAILs stay visible while malformed/missing/duplicate cases, unexpected exits and fixture errors fail reporting; retain summaries/artifacts.
+- [x] 7.1 Require actual-image managed integration in rootful/rootless CI; historical upstream findings are documentation rather than a recurring diagnostic job.
 - [x] 7.2 Remove fixed project/host-port assumptions from reused smoke harness paths and their CI image references as needed; verify existing brokerage/paper tests still run without taking port 8000 from a developer stack.
 - [x] 7.3 Update the Compose-first runbook for managed official-client scope, conditional upstream limitations and operational startup checks; retain secret mapping/rotation, auth/READ_ONLY, migration and scoped rollback, with external acceptance pending.
 - [x] 7.4 Reconcile README, deployment/rootless/restart docs and OpenSpec context with accepted official-client requirements, preserving topology, authentication, mode controls and historical evidence.
@@ -101,8 +101,8 @@ Current verification: [managed-verification-20261007.md](managed-verification-20
 
 ## 8. Managed verification and draft handoff
 
-- [x] 8.1 Run Ruff lint/format, basedpyright, full pytest, revised reporting/deployment regressions, final-image rootful/rootless tunnel checks and strict OpenSpec validation. Record exact outcomes/limits; hosted/live runs retain separate status.
-- [x] 8.2 Record revision, exact tested official binary/image identities, managed checks and characterization results. Preserve historical files unchanged; keep VPS/OpenAI/ChatGPT/iPad milestones pending.
+- [x] 8.1 Run Ruff lint/format, basedpyright, full pytest, deployment/build regressions, final-image rootful/rootless tunnel checks and strict OpenSpec validation. Record exact outcomes/limits; hosted/live runs retain separate status.
+- [x] 8.2 Record revision, exact tested official binary/image identities and managed checks; preserve prior upstream findings as historical documentation. Keep VPS/OpenAI/ChatGPT/iPad milestones pending.
 - [x] 8.3 Update existing draft PR #38 with official-client scope and actual verification evidence, link it to the thread and report hosted CI separately. Leave merge/promotion and production/live acceptance to subsequent work; do not claim upstream flaws repaired.
 
 ## 9. Apply the accepted scope revision
@@ -110,28 +110,19 @@ Current verification: [managed-verification-20261007.md](managed-verification-20
 - [x] 9.1 Replace unconditional deployment refusal with valid selection and legacy-service checks; retain bearer/READ_ONLY validation and authenticated container startup. Verify allowed READ_ONLY and refusal of invalid selection, missing auth, SIMULATE/REAL and active/enabled/unknown legacy states using disposable command fixtures.
 - [x] 9.2 Replace blocked image labels with managed official-client profile metadata; build the final image from unchanged verified official/public inputs and verify provenance/runtime behavior.
 
-## Independent implementation checkpoint — 2026-09-30
+## 10. Use the existing CI/ECR deployment workflow
 
-34/36 tasks are complete. Only **1.2** and **8.3** remain incomplete. Rootful and
-rootless hosted integration passed at `89cac04`, including freshly built brokerage
-images, real mapped permissions, both rotations, journal/OpenD volume identity
-preservation, actual scoped disablement, local MCP independence and credential-free
-outbound DNS/TLS probes. Mode refusal before a future approved direct wrapper start
-has additional synthetic regression coverage. Expanded compatibility fixtures keep
-all failures visible; successful independent jobs do not close task 1.2.
+- [x] 10.1 Extend existing image change detection and build/publish/retag jobs to the allowlisted tunnel image, using distinct tags in the existing ECR repository, independent caches, main-only publication and build fallback for a missing baseline.
+- [x] 10.2 Resolve the enabled tunnel's matching commit image to an immutable ECR digest before deployment, pull both selected images, restore selection on failure/rollback and preserve tunnel tags during application cleanup. Cover enabled/default paths, missing/denied lookup, recreation and rollback using disposable fixtures.
+- [x] 10.3 Replace production build instructions with CI publication and pull/deploy instructions; retain one-time protected credential provisioning and identify the local builder as a development/test helper.
+- [ ] 10.4 Run focused deployment/build tests, repository quality checks, workflow validation and strict OpenSpec validation; record actual outcomes and update PR #38 while retaining live deployment/acceptance as pending.
 
-The GitHub workflow permission was refreshed and publication is working. Main's
-original proposal was integrated without reverting this approved dependency graph
-or changing historical evidence. See `independent-verification.md` and
-`continuation-verification.md` for exact hosted run links, per-case observations,
-remaining compatibility coverage and the next head's verification status.
+## 11. Retire the old release-gate diagnostics
 
-## Synthetic matrix follow-up — 2026-10-02
+- [x] 11.1 Remove the recurring direct-client diagnostic job, reproduction runner, matrix fixture, report generator and report-only tests; retain required actual-image rootful/rootless integration. Limit automatic integration runs to code/workflow changes; documentation-only changes still receive OpenSpec validation.
+- [x] 11.2 Remove dated compatibility reports/result snapshots from the current tree, retaining earlier results in Git history; reconcile active requirements, design, tasks, runbooks and repository context with current acceptance and record the cleanup inventory.
 
-The owner authorized completion of the remaining synthetic cases and preparation
-of a private upstream report. The expanded fixture explicitly enumerates 515
-cases, including same-origin/loop redirects, actual endpoint methods and bodies,
-individual proxy variables, missing keys and authentication/retry ambiguities.
-See [current evidence](synthetic-compatibility-20261002.md) for exact runs and
-fixture corrections. No checkbox changes: 34/36 complete, 1.2 BLOCKED and 8.3
-incomplete. The private report is outside tracked files and has not been sent.
+## 12. Reuse the deployment MCP token
+
+- [x] 12.1 Inject only the existing `MCP_AUTH_TOKEN` into the tunnel through Compose, validate and derive the bearer header for the official client, remove the separate mounted MCP bearer/staging requirement, and retain the protected OpenAI key and scrubbed child environment. Update coordinated rotation instructions and tests.
+- [ ] 12.2 Verify missing/invalid authentication, actual-image normal forwarding and token rotation, required quality checks and the PR handoff without exposing real credentials or deploying services.

@@ -331,7 +331,7 @@ The explicit `docker-compose.chatgpt.yml` overlay adds a separate optional tunne
 container; normal deployments need no tunnel settings. It uses the verified
 official client with fixed endpoints, proxy-filtered startup, authentication and
 server-enforced READ_ONLY. Direct-client redirect/proxy/doctor limitations remain
-documented characterization; managed integration checks define acceptance. See [the tunnel migration runbook](private-chatgpt-mcp.md)
+documented historical findings; current managed integration checks define acceptance. See [the tunnel migration runbook](private-chatgpt-mcp.md)
 for measured rootful/rootless secret mapping, forced-recreation rotation, legacy
 systemd migration, and tunnel-only disable/rollback. Preserve the existing project,
 OpenD/journal volumes and `127.0.0.1:8000:8000`; never publish OpenD or share its

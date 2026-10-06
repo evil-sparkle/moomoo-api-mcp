@@ -34,6 +34,15 @@ def test_atomic_selection_preserves_identity(tmp_path):
     "field,value",
     [
         ("image", "latest"),
+        (
+            "image",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/moomoo-api-mcp:tunnel-latest",
+        ),
+        ("image", "untrusted.example/moomoo-api-mcp@sha256:" + "a" * 64),
+        (
+            "image",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/other@sha256:" + "a" * 64,
+        ),
         ("project", "bad project"),
         ("secret_directory", "/tmp/../credentials"),
         ("secret_directory", "/tmp/path\nextra"),
@@ -75,7 +84,10 @@ def wrapper_fixture(
     }
     docker = fake_bin / "docker"
     docker.write_text(
-        "#!/usr/bin/env python3\nimport pathlib,sys\n"
+        "#!/usr/bin/env python3\nimport pathlib,sys,os,json\n"
+        + "image=os.environ.get('CHATGPT_TUNNEL_IMAGE')\n"
+        + "pathlib.Path('docker-call.json').write_text("
+        + "json.dumps([sys.argv[1:], image]))\n"
         + "if 'config' in sys.argv: print("
         + repr(json.dumps(model))
         + ")\n"
@@ -83,6 +95,55 @@ def wrapper_fixture(
     )
     docker.chmod(0o755)
     return scripts, {"PATH": str(fake_bin) + ":" + os.environ["PATH"]}
+
+
+def test_ecr_image_update_preserves_project_and_secret_directory(tmp_path, monkeypatch):
+    import sys
+
+    selected = tmp_path / "selection.json"
+    before = fixture_selection()
+    selection.save(before, selected)
+    monkeypatch.setattr(selection, "SELECTION", selected)
+    # save/load defaults bind the repository path; redirect them for this fixture.
+    original_save, original_load = selection.save, selection.load
+    monkeypatch.setattr(selection, "save", lambda data: original_save(data, selected))
+    monkeypatch.setattr(selection, "load", lambda: original_load(selected))
+    image = (
+        "123456789012.dkr.ecr.us-east-1.amazonaws.com/moomoo-api-mcp@sha256:" + "b" * 64
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["tunnel_deployment.py", "set-image", "--image", image]
+    )
+    assert selection.main() == 0
+    assert selection.load() == {**before, "image": image}
+
+
+@pytest.mark.parametrize("registry_image", [False, True])
+def test_wrapper_pulls_selected_images_and_reuses_digest(tmp_path, registry_image):
+    scripts, environment = wrapper_fixture(tmp_path)
+    selected = fixture_selection()
+    if registry_image:
+        selected["image"] = (
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/moomoo-api-mcp@"
+            + selected["image"]
+        )
+    selection.save(selected, tmp_path / ".chatgpt-deploy.json")
+    for operation in ("pull", "restart"):
+        result = subprocess.run(
+            [str(scripts / "compose-prod.sh"), operation],
+            cwd=tmp_path,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        args, image = json.loads((tmp_path / "docker-call.json").read_text())
+        assert image == selected["image"]
+        if operation == "pull":
+            assert args[args.index("pull") + 1 :] == ["moomoo-mcp"] + (
+                ["chatgpt-tunnel"] if registry_image else []
+            )
 
 
 @pytest.mark.parametrize("operation", ["up", "start", "restart", "run", "create"])

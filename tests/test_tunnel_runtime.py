@@ -23,10 +23,13 @@ spec.loader.exec_module(runtime)
 
 
 @pytest.fixture
-def authorization(tmp_path, monkeypatch):
-    path = tmp_path / "synthetic-authorization"
-    path.write_text("Bearer synthetic-mcp")
-    monkeypatch.setattr(runtime, "AUTHORIZATION", path)
+def authorization(monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "synthetic-mcp")
+
+
+def test_shared_token_normalization_matches_mcp_settings(monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "  synthetic-mcp  ")
+    assert runtime.authorization_header() == "Bearer synthetic-mcp"
 
 
 @pytest.mark.usefixtures("authorization")
@@ -50,6 +53,12 @@ def test_degraded_read_only_is_valid(monkeypatch):
     client.initialize.assert_called_once()
     client.list_tools.assert_called_once()
     client.call_tool.assert_called_once_with("check_health", {})
+    runtime.McpClient.assert_called_once_with(
+        preflight.COMPOSE_URL,
+        "Bearer synthetic-mcp",
+        timeout=10,
+        allow_compose_mcp=True,
+    )
 
 
 @pytest.mark.usefixtures("authorization")
@@ -85,6 +94,7 @@ def test_signal_forwarding_and_reaping():
     assert child.returncode == -signal.SIGTERM
 
 
+@pytest.mark.usefixtures("authorization")
 def test_child_environment_discards_proxy_and_credential_overrides(
     tmp_path, monkeypatch
 ):
@@ -101,11 +111,37 @@ def test_child_environment_discards_proxy_and_credential_overrides(
         "MCP_EXTRA_HEADERS",
         "MOOMOO_LOGIN_ACCOUNT",
         "MCP_OPERATOR_TOKEN",
+        "MCP_AUTHORIZATION",
     ):
         monkeypatch.setenv(key, "synthetic-must-not-inherit")
     environment = runtime.child_environment()
-    assert set(environment) == {"HOME", "PATH", "CONTROL_PLANE_TUNNEL_ID"}
+    assert set(environment) == {
+        "HOME",
+        "PATH",
+        "CONTROL_PLANE_TUNNEL_ID",
+        "MCP_AUTHORIZATION",
+    }
+    assert environment["MCP_AUTHORIZATION"] == "Bearer synthetic-mcp"
     assert "synthetic-must-not-inherit" not in environment.values()
+
+
+@pytest.mark.parametrize(
+    "token", [None, "", " ", "synthetic\r\ninjection", "bad\ttoken", "bad\u00e9token"]
+)
+def test_invalid_deployment_token_never_connects_or_spawns(monkeypatch, capsys, token):
+    if token is None:
+        monkeypatch.delenv("MCP_AUTH_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("MCP_AUTH_TOKEN", token)
+    connect, spawn = Mock(), Mock()
+    monkeypatch.setattr(runtime, "McpClient", connect)
+    monkeypatch.setattr(runtime.subprocess, "Popen", spawn)
+    assert not runtime.gate(threading.Event())
+    with pytest.raises(preflight.PreflightError, match="MCP_AUTH_TOKEN"):
+        runtime.authorization_header()
+    connect.assert_not_called()
+    spawn.assert_not_called()
+    assert "synthetic" not in capsys.readouterr().out
 
 
 def test_unapproved_config_is_rejected_before_credentials(tmp_path, monkeypatch):

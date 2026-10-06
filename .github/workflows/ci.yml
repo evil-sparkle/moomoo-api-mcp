@@ -29,6 +29,7 @@ jobs:
     outputs:
       docs_only: ${{ steps.filter.outputs.docs_only }}
       moomoo-api-mcp: ${{ steps.filter.outputs.moomoo-api-mcp }}
+      moomoo-chatgpt-tunnel: ${{ steps.filter.outputs.moomoo-chatgpt-tunnel }}
       baseline: ${{ steps.filter.outputs.baseline }}
     steps:
       - uses: actions/checkout@v7
@@ -63,6 +64,7 @@ jobs:
             echo "No valid baseline commit available; triggering a full build."
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
+            echo "moomoo-chatgpt-tunnel=true" >> "$GITHUB_OUTPUT"
             echo "baseline=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -72,6 +74,7 @@ jobs:
             echo "git diff failed between ${prev} and ${current}; triggering a full build."
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             echo "moomoo-api-mcp=true" >> "$GITHUB_OUTPUT"
+            echo "moomoo-chatgpt-tunnel=true" >> "$GITHUB_OUTPUT"
             echo "baseline=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -115,7 +118,12 @@ jobs:
           )
 
           mcp=false
+          tunnel=false
           for path in "${changed[@]}"; do
+            case "${path}" in
+              deploy/tunnel-client/container/*|deploy/tunnel-client/install.py|deploy/tunnel-client/release.json|scripts/private_chatgpt_preflight.py|scripts/build-tunnel-image.sh|scripts/prepare-tunnel-build-context.sh|docker-compose.chatgpt.yml|.github/workflows/ci.yml|.github/workflows/tunnel-compatibility.yml)
+                tunnel=true ;;
+            esac
             # Workflow + overlay changes always force a build — never quietly
             # skip what the deploy path depends on.
             if [ "${path}" = ".github/workflows/ci.yml" ] \
@@ -152,10 +160,12 @@ jobs:
             && { [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
               || [ "${GITHUB_REF}" != "refs/heads/main" ]; }; then
             mcp=true
+            tunnel=true
           fi
 
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
           echo "moomoo-api-mcp=${mcp}" >> "$GITHUB_OUTPUT"
+          echo "moomoo-chatgpt-tunnel=${tunnel}" >> "$GITHUB_OUTPUT"
 
   # Specs are prose, so docs_only does not skip this job: an openspec/ edit is
   # exactly the change it exists to check. The CLI version is pinned so CI and
@@ -236,12 +246,13 @@ jobs:
             docker build -t moomoo-paper-recreated -
           ./scripts/test-paper-container.sh moomoo-smoke-moomoo-mcp moomoo-paper-recreated
 
-  # One image, because the gateway and the server now ship together. The
-  # moomoo-opend ECR repository is no longer written to; leave it in place until
+  # The gateway and server share one image; the optional tunnel has its own.
+  # Both publish into the existing ECR repository with disjoint tag namespaces.
+  # The moomoo-opend ECR repository is no longer written to; leave it until
   # the last two-container deploy is past being a rollback target, then delete
   # it (see docs/deploy-vps.md).
   docker-build:
-    name: Build moomoo-api-mcp
+    name: Build ${{ matrix.image }}
     runs-on: ubuntu-latest
     needs: [test, changes]
     # A skipped `test` would skip this job with it, so state the dependency as a
@@ -256,7 +267,16 @@ jobs:
       && (
         (github.event_name == 'push' && github.ref == 'refs/heads/main')
         || needs.changes.outputs.moomoo-api-mcp == 'true'
+        || needs.changes.outputs.moomoo-chatgpt-tunnel == 'true'
       )
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: moomoo-api-mcp
+            tag_prefix: ""
+          - image: moomoo-chatgpt-tunnel
+            tag_prefix: "tunnel-"
     permissions:
       contents: read
       id-token: write   # required to mint the OIDC token for AWS
@@ -265,7 +285,9 @@ jobs:
       # image and throw it away, which is also all the gha-ecr-push trust
       # policy permits them to do.
       PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
-      IMAGE: moomoo-api-mcp
+      IMAGE: ${{ matrix.image }}
+      TAG_PREFIX: ${{ matrix.tag_prefix }}
+      ECR_REPOSITORY: moomoo-api-mcp
     steps:
       - uses: actions/checkout@v7
 
@@ -292,11 +314,11 @@ jobs:
       # tags so the deploy wrapper always finds both images at the exact same commit SHA.
       - name: Retag unchanged image in ECR
         id: retag
-        if: env.PUSH == 'true' && needs.changes.outputs.moomoo-api-mcp != 'true'
+        if: env.PUSH == 'true' && needs.changes.outputs[matrix.image] != 'true'
         run: |
-          deploy_tag="${GITHUB_SHA::7}"
-          audit_tag="commit-${GITHUB_SHA}"
-          repo="${{ env.IMAGE }}"
+          deploy_tag="${TAG_PREFIX}${GITHUB_SHA::7}"
+          audit_tag="${TAG_PREFIX}commit-${GITHUB_SHA}"
+          repo="${ECR_REPOSITORY}"
           region="${{ vars.AWS_REGION }}"
           baseline="${{ needs.changes.outputs.baseline }}"
 
@@ -313,7 +335,7 @@ jobs:
 
           target_manifest=""
           target_digest=""
-          for candidate_tag in "${baseline_short}" "${baseline_sha}" "commit-${baseline_sha}"; do
+          for candidate_tag in "${TAG_PREFIX}${baseline_short}" "${TAG_PREFIX}${baseline_sha}" "${TAG_PREFIX}commit-${baseline_sha}"; do
             d=$(aws ecr batch-get-image \
               --region "${region}" \
               --repository-name "${repo}" \
@@ -349,7 +371,7 @@ jobs:
 
           while IFS= read -r tag; do
             if [ "${tag}" != "${tag#v}" ]; then
-              tags_to_apply+=("${tag}")
+              tags_to_apply+=("${TAG_PREFIX}${tag}")
             fi
           done < <(git tag --points-at HEAD)
 
@@ -382,21 +404,21 @@ jobs:
 
       - name: Resolve image tags
         id: tags
-        if: needs.changes.outputs.moomoo-api-mcp == 'true' || steps.retag.outputs.rebuild_needed == 'true'
+        if: needs.changes.outputs[matrix.image] == 'true' || steps.retag.outputs.rebuild_needed == 'true'
         run: |
-          deploy_tag="${GITHUB_SHA::7}"
-          audit_tag="commit-${GITHUB_SHA}"
+          deploy_tag="${TAG_PREFIX}${GITHUB_SHA::7}"
+          audit_tag="${TAG_PREFIX}commit-${GITHUB_SHA}"
 
           if [ "${PUSH}" = "true" ]; then
-            image="${{ steps.ecr.outputs.registry }}/${{ env.IMAGE }}"
+            image="${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY}"
             release_tags=""
             while IFS= read -r tag; do
               if [ "${tag}" != "${tag#v}" ]; then
-                release_tags="${release_tags:+${release_tags},}${image}:${tag}"
+                release_tags="${release_tags:+${release_tags},}${image}:${TAG_PREFIX}${tag}"
               fi
             done < <(git tag --points-at HEAD)
 
-            tags="${image}:${GITHUB_SHA},${image}:latest,${image}:${deploy_tag},${image}:${audit_tag}"
+            tags="${image}:${TAG_PREFIX}${GITHUB_SHA},${image}:${TAG_PREFIX}latest,${image}:${deploy_tag},${image}:${audit_tag}"
             if [ -n "${release_tags}" ]; then
               tags="${tags},${release_tags}"
             fi
@@ -405,14 +427,35 @@ jobs:
             echo "tags=${{ env.IMAGE }}:test" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Prepare public build context
+        id: context
+        if: needs.changes.outputs[matrix.image] == 'true' || steps.retag.outputs.rebuild_needed == 'true'
+        run: |
+          echo "org.opencontainers.image.revision=${GITHUB_SHA}" > "$RUNNER_TEMP/image-labels"
+          if [ "${IMAGE}" = moomoo-chatgpt-tunnel ]; then
+            context="$RUNNER_TEMP/tunnel-build-context"
+            digest=$(./scripts/prepare-tunnel-build-context.sh "$context")
+            echo "org.moomoo.tunnel.inputs-sha256=$digest" >> "$RUNNER_TEMP/image-labels"
+            echo 'org.moomoo.tunnel.acceptance-profile=managed-official-client' >> "$RUNNER_TEMP/image-labels"
+            echo "context=$context" >> "$GITHUB_OUTPUT"
+            echo "file=$context/Dockerfile" >> "$GITHUB_OUTPUT"
+          else
+            echo 'context=.' >> "$GITHUB_OUTPUT"
+            echo 'file=./Dockerfile' >> "$GITHUB_OUTPUT"
+          fi
+          echo 'labels<<IMAGE_LABELS' >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/image-labels" >> "$GITHUB_OUTPUT"
+          echo 'IMAGE_LABELS' >> "$GITHUB_OUTPUT"
+
       - name: Build and push
-        if: needs.changes.outputs.moomoo-api-mcp == 'true' || steps.retag.outputs.rebuild_needed == 'true'
+        if: needs.changes.outputs[matrix.image] == 'true' || steps.retag.outputs.rebuild_needed == 'true'
         uses: docker/build-push-action@v7
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ steps.context.outputs.context }}
+          file: ${{ steps.context.outputs.file }}
           platforms: linux/amd64
           push: ${{ env.PUSH == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.context.outputs.labels }}
           cache-from: type=gha,scope=${{ env.IMAGE }}
           cache-to: type=gha,mode=max,scope=${{ env.IMAGE }}

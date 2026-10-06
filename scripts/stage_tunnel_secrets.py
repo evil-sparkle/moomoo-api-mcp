@@ -19,7 +19,7 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 
-NAMES = ("control-plane-api-key", "mcp-authorization", "tunnel-id")
+NAMES = ("control-plane-api-key", "tunnel-id")
 
 
 class StagingError(Exception):

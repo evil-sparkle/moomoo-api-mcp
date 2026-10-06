@@ -1,67 +1,21 @@
-name: Tunnel managed integration and characterization
+name: Tunnel managed integration
 on:
   pull_request:
     branches: [main]
+    paths:
+      - .github/workflows/tunnel-compatibility.yml
+      - Dockerfile
+      - pyproject.toml
+      - uv.lock
+      - src/**
+      - docker-compose*.yml
+      - deploy/tunnel-client/**
+      - scripts/**
+      - tests/**
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  official-client-characterization:
-    name: Official-client diagnostic report
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - name: Verify the unchanged official release
-        run: python3 deploy/tunnel-client/install.py --destination "$RUNNER_TEMP/tunnel-client"
-      - name: Record original redirect reproduction without changing its verdict
-        run: |
-          mkdir -p "$RUNNER_TEMP/tunnel-characterization"
-          set +e
-          docker run --rm --network none --read-only --user 10002:10002 \
-            --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /tmp:uid=10002,gid=10002,mode=0700,size=16m \
-            --mount "type=bind,src=$RUNNER_TEMP/tunnel-client,dst=/verified/tunnel-client,readonly" \
-            --mount "type=bind,src=$PWD/scripts/check_tunnel_client_compatibility.py,dst=/check.py,readonly" \
-            python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
-            python /check.py --binary /verified/tunnel-client \
-            > "$RUNNER_TEMP/tunnel-characterization/redirect.jsonl"
-          fixture_exit=$?
-          set -e
-          printf '%s\n' "$fixture_exit" > "$RUNNER_TEMP/tunnel-characterization/redirect.exit"
-      - name: Record the complete direct-client matrix with original verdicts
-        run: |
-          set +e
-          docker run --rm --network none --read-only --user 10002:10002 \
-            --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /tmp:uid=10002,gid=10002,mode=0700,size=32m \
-            --add-host control.fixture.test:127.0.0.1 \
-            --add-host sink.control.fixture.test:127.0.0.2 \
-            --add-host mcp.fixture.test:127.0.0.1 \
-            --mount "type=bind,src=$RUNNER_TEMP/tunnel-client,dst=/verified/tunnel-client,readonly" \
-            --mount "type=bind,src=$PWD/tests/fixtures/tunnel_compatibility_matrix.py,dst=/matrix.py,readonly" \
-            python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
-            python /matrix.py --binary /verified/tunnel-client --workers 6 \
-            > "$RUNNER_TEMP/tunnel-characterization/matrix.jsonl"
-          fixture_exit=$?
-          set -e
-          printf '%s\n' "$fixture_exit" > "$RUNNER_TEMP/tunnel-characterization/matrix.exit"
-      - name: Validate inventory, execution and reported verdicts
-        run: |
-          python3 scripts/report_tunnel_characterization.py \
-            --redirect-results "$RUNNER_TEMP/tunnel-characterization/redirect.jsonl" \
-            --redirect-exit "$(cat "$RUNNER_TEMP/tunnel-characterization/redirect.exit")" \
-            --matrix-results "$RUNNER_TEMP/tunnel-characterization/matrix.jsonl" \
-            --matrix-exit "$(cat "$RUNNER_TEMP/tunnel-characterization/matrix.exit")" \
-            > "$RUNNER_TEMP/tunnel-characterization/summary.md"
-          cat "$RUNNER_TEMP/tunnel-characterization/summary.md" >> "$GITHUB_STEP_SUMMARY"
-      - name: Preserve sanitized diagnostic evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: official-client-characterization
-          path: ${{ runner.temp }}/tunnel-characterization/
-          if-no-files-found: error
   disposable-container-integration:
     name: Synthetic container integration (${{ matrix.context }})
     runs-on: ubuntu-latest

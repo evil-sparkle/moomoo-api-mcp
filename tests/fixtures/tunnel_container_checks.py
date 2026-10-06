@@ -1,7 +1,7 @@
 """Actual pinned-client checks with synthetic credentials and disposable resources.
 
 The control-plane simulation is isolated from internet egress. This is not live
-OpenAI acceptance. Direct-client characterization is reported separately.
+OpenAI acceptance. Historical upstream findings remain in earlier Git commits.
 """
 
 import argparse
@@ -265,7 +265,8 @@ fixture = {
                     "no_proxy",
                 ),
                 "http://tunnel-control-plane:8082",
-            ),
+            )
+            | {"MCP_AUTH_TOKEN": "synthetic-mcp-token"},
             "networks": ["fixture-only"],
             "volumes": [
                 str(workspace / "client.yaml") + ":/etc/tunnel-client.yaml:ro",
@@ -313,6 +314,7 @@ env = {
     "HOME": os.environ["HOME"],
     "CHATGPT_TUNNEL_IMAGE": image,
     "CHATGPT_TUNNEL_SECRET_DIR": str(secret_root / "staged"),
+    "MCP_AUTH_TOKEN": "synthetic-mcp-token",
 }
 compose = docker + [
     "compose",
@@ -399,9 +401,8 @@ try:
             route + " unexpectedly succeeded"
         )
         print("PASS: official forwarding rejects " + route, flush=True)
-    http_negative_probe = """import http.client,json
-from pathlib import Path
-auth=Path('/run/secrets/mcp-authorization').read_text().strip()
+    http_negative_probe = """import http.client,json,os
+auth='Bearer '+os.environ['MCP_AUTH_TOKEN']
 wrong=('Authorization','Bearer synthetic-wrong')
 body=json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/list','params':{}})
 cases=[('approved',[('Authorization',auth)],'moomoo-mcp:8000',None,200),
@@ -525,7 +526,9 @@ print('MCP reachable; OpenD bridge access refused')"""
     permissions = """import os
 from pathlib import Path
 assert os.getuid()==10002 and os.getgid()==10002
-for name in ('control-plane-api-key','mcp-authorization','tunnel-id'):
+assert os.environ['MCP_AUTH_TOKEN']=='synthetic-mcp-token'
+assert not Path('/run/secrets/mcp-authorization').exists()
+for name in ('control-plane-api-key','tunnel-id'):
     path=Path('/run/secrets')/name
     assert path.read_bytes()
     try: path.write_text('must-not-write')
@@ -668,21 +671,13 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
     isolated = next(name for name in networks if name.endswith("_fixture-only"))
     old_ip = networks[isolated]["IPAddress"]
     run(compose + ["stop", "chatgpt-tunnel"], env=env)
-    run(
-        [
-            "sudo",
-            "-n",
-            "python3",
-            secret_fixture,
-            "rotate-mcp",
-            "--directory",
-            str(secret_root),
-        ]
-    )
-    run(staging_command)
     fixture["services"]["moomoo-mcp"]["environment"]["MCP_AUTH_TOKEN"] = (
         "synthetic-mcp-token-rotated"
     )
+    fixture["services"]["chatgpt-tunnel"]["environment"]["MCP_AUTH_TOKEN"] = (
+        "synthetic-mcp-token-rotated"
+    )
+    env["MCP_AUTH_TOKEN"] = "synthetic-mcp-token-rotated"
     updated = (
         yaml.safe_dump(fixture)
         .replace(
@@ -769,6 +764,27 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
         } == persistent_names
         print(
             "PASS: actual journal row, OpenD marker and volume identities preserved",
+            flush=True,
+        )
+        # Restart retains the old container environment even after Compose changes.
+        before_restart = control_stats()["authenticated"]
+        stale_tunnel_id = run(compose + ["ps", "-a", "-q", "chatgpt-tunnel"], env=env)
+        run(compose + ["restart", "chatgpt-tunnel"], env=env)
+        wait_for(
+            lambda: run(
+                docker + ["inspect", "--format", "{{.State.Status}}", stale_tunnel_id]
+            )
+            == "exited"
+        )
+        assert (
+            run(
+                docker + ["inspect", "--format", "{{.State.ExitCode}}", stale_tunnel_id]
+            )
+            == "1"
+        )
+        assert control_stats()["authenticated"] == before_restart
+        print(
+            "PASS: restart keeps old MCP environment; gate refuses before polling",
             flush=True,
         )
         before = control_stats()

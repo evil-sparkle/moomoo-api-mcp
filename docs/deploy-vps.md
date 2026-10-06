@@ -331,7 +331,17 @@ takes effect immediately.
 
 How far back you can roll back is bounded by the ECR lifecycle policy, which
 keeps every `v*`-tagged image and the 30 most recent commit builds per
-repository.
+repository. Optional tunnel images share this repository under `tunnel-*` tags,
+so they share its retention policy; do not assume a separate 30-image window or
+that `tunnel-v*` tags receive the application's `v*` exemption.
+
+When the private ChatGPT tunnel is explicitly selected, CI also publishes its
+image as `moomoo-api-mcp:tunnel-<commit>`. The deploy script confirms that tag
+before checkout, saves its immutable ECR digest in `.chatgpt-deploy.json`, and
+pulls both selected images. The VPS needs no separate image build. Default
+deployment still checks and pulls only the application image. Follow the
+[private ChatGPT runbook](private-chatgpt-mcp.md) for one-time credential
+provisioning and selection; subsequent updates use the same deploy command.
 
 After start, it verifies the endpoint as a client would: an authenticated MCP
 `initialize` using the `MCP_AUTH_TOKEN` Compose resolves for the service,
@@ -345,7 +355,7 @@ immediately. The token reaches curl on
 stdin, never a command line or file; the resolved configuration is never
 printed or written anywhere. On failure, or if the configuration cannot be
 resolved, or `pull` or `up` fails, it restores the previous `.deploy.env` and
-commit (restarting the previous deployment if something had been started) and
+commit and any previous tunnel image selection (restarting the previous deployment if something had been started) and
 exits non-zero. If the rollback's own restart fails, the script says so and the
 stack needs a manual `scripts/compose-prod.sh up -d`. Verification does not
 prove OpenD login.
@@ -357,7 +367,7 @@ forced deletion or a global prune. Cleanup is skipped for `--prepare`, failed
 deployments, an unidentified previous container (including the first deploy),
 and redeploys using the same image, which preserve the earlier rollback image.
 Cleanup errors warn without failing a verified deployment. Other repositories,
-untagged images, and volumes are untouched.
+untagged images, tunnel-prefixed tags, and volumes are untouched.
 
 Confirm login and MCP availability after each deployment; container startup
 alone is not a successful authenticated session.
@@ -474,7 +484,7 @@ The explicit `docker-compose.chatgpt.yml` overlay adds a separate optional tunne
 container; normal deployments need no tunnel settings. It uses the verified
 official client with fixed endpoints, proxy-filtered startup, authentication and
 server-enforced READ_ONLY. Direct-client redirect/proxy/doctor limitations remain
-documented characterization; managed integration checks define acceptance. See [the tunnel migration runbook](private-chatgpt-mcp.md)
+documented historical findings; current managed integration checks define acceptance. See [the tunnel migration runbook](private-chatgpt-mcp.md)
 for measured rootful/rootless secret mapping, forced-recreation rotation, legacy
 systemd migration, and tunnel-only disable/rollback. Preserve the existing project,
 OpenD/journal volumes and `127.0.0.1:8000:8000`; never publish OpenD or share its

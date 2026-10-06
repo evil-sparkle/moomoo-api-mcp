@@ -58,7 +58,7 @@ git fetch --quiet origin main
 commit="$(git rev-parse --verify --end-of-options "${1:-origin/main}^{commit}")"
 short="${commit:0:7}"
 if [ -f .chatgpt-deploy.json ]; then
-  if ! git show "${commit}:scripts/compose-prod.sh" | grep -q chatgpt-selection-schema-v1; then
+  if ! git show "${commit}:scripts/compose-prod.sh" | grep -q chatgpt-selection-ecr-v1; then
     echo 'Disable the tunnel before selecting an older unsupported deployment.' >&2
     exit 1
   fi
@@ -96,8 +96,7 @@ ecr_has_tag() {
   [ -n "$got" ] && [ "$got" != None ]
 }
 
-# One image now carries both the gateway and the server, so there is one tag to
-# confirm rather than two that had to agree.
+# The application image contains both the gateway and the server.
 if ecr_has_tag moomoo-api-mcp "${short}"; then
   image_tag="${short}"
 else
@@ -105,6 +104,17 @@ else
   # its AWS error is printed above. Saying "missing" would hide that.
   echo "Aborting deploy of ${short}: could not confirm moomoo-api-mcp:${short} (missing, or the AWS check failed — see any error above). Check that CI's main push landed." >&2
   exit 1
+fi
+tunnel_image=""
+if [ -f .chatgpt-deploy.json ]; then
+  if ! tunnel_digest="$(aws ecr batch-get-image --region "$region" --registry-id "$account" \
+    --repository-name moomoo-api-mcp --image-ids "imageTag=tunnel-${short}" \
+    --query 'images[0].imageId.imageDigest' --output text)" \
+    || [[ ! "$tunnel_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "Aborting deploy of ${short}: could not confirm moomoo-api-mcp:tunnel-${short}. Check CI publication and any AWS error above." >&2
+    exit 1
+  fi
+  tunnel_image="$registry/moomoo-api-mcp@$tunnel_digest"
 fi
 echo "Deploying ${short} as ${image_tag}" >&2
 
@@ -114,6 +124,10 @@ finish_deploy() {
   local previous_env=""
   local has_previous_env=false
   local previous_image=""
+  local previous_selection=""
+  if [ -f .chatgpt-deploy.json ]; then
+    previous_selection="$(cat .chatgpt-deploy.json)"
+  fi
 
   cleanup_images() {
     local current_image images repository image_repository tag image_id
@@ -141,6 +155,8 @@ finish_deploy() {
     while read -r image_repository tag image_id; do
       [ "$image_repository" = "$repository" ] || continue
       [ "$tag" != '<none>' ] && [ -n "$tag" ] || continue
+      # Tunnel images share the ECR repository, but have their own lifecycle.
+      [[ "$tag" == tunnel-* ]] && continue
       [ "$image_id" != "$current_image" ] || continue
       [ "$image_id" != "$previous_image" ] || continue
       # Remove repository tags, never force image-ID deletion: shared tags
@@ -153,6 +169,9 @@ finish_deploy() {
 
   rollback() {
     local started_services="${1:-true}"
+    if [ -n "$previous_selection" ]; then
+      printf '%s\n' "$previous_selection" > .chatgpt-deploy.json
+    fi
     if [ "$has_previous_env" = true ]; then
       printf '%s\n' "$previous_env" > .deploy.env
       git checkout --quiet --detach "$previous_commit"
@@ -170,14 +189,14 @@ finish_deploy() {
     exit 1
   }
 
+  previous_commit="$(git rev-parse HEAD)"
+  if [ -f .deploy.env ]; then
+    previous_env="$(cat .deploy.env)"
+    has_previous_env=true
+  fi
   if [ "$prepare" = false ]; then
     previous_image="$(docker --context rootless container inspect \
       --format '{{.Image}}' moomoo-api-mcp 2>/dev/null)" || previous_image=""
-    previous_commit="$(git rev-parse HEAD)"
-    if [ -f .deploy.env ]; then
-      previous_env="$(cat .deploy.env)"
-      has_previous_env=true
-    fi
   fi
 
   git checkout --quiet --detach "$commit"
@@ -187,6 +206,9 @@ finish_deploy() {
     return 1
   fi
   printf 'ECR_REGISTRY=%s\nIMAGE_TAG=%s\n' "$registry" "${image_tag}" > .deploy.env
+  if [ -n "$tunnel_image" ]; then
+    python3 scripts/tunnel_deployment.py set-image --image "$tunnel_image" || rollback false
+  fi
 
   # Compose resolves the configuration; the helper only reads the result. It
   # runs from the checkout just made, never from wherever this script was
@@ -219,8 +241,8 @@ finish_deploy() {
       rollback true
     fi
   else
-    python3 "$verify_helper" check-config
-    ./scripts/compose-prod.sh pull
+    python3 "$verify_helper" check-config || rollback false
+    ./scripts/compose-prod.sh pull || rollback false
   fi
 }
 finish_deploy

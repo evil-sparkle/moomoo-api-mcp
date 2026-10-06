@@ -19,8 +19,8 @@ mcp:
     - channel: main
       url: http://moomoo-mcp:8000/mcp
   extra_headers:
-    Authorization: file:/run/secrets/mcp-authorization
+    Authorization: env:MCP_AUTHORIZATION
   discovery_extra_headers:
-    Authorization: file:/run/secrets/mcp-authorization
+    Authorization: env:MCP_AUTHORIZATION
   startup_wait_timeout: 30s
   connection_max_ttl: 30s

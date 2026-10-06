@@ -46,8 +46,9 @@ The tunnel daemon SHALL run as a dedicated numeric non-root container UID/GID (o
 brokerage, trade-unlock, operator-recovery, container-control, or OpenAI
 administration credential. It SHALL receive only a tunnel runtime credential,
 the selected tunnel identifier, and an ordinary MCP bearer credential. Secret
-values SHALL be supplied through restrictive secret references, SHALL NOT be
-stored in tracked configuration or process arguments, and SHALL NOT be included
+values SHALL be supplied through a restrictive file for the OpenAI runtime key
+and explicit Compose injection of the existing `MCP_AUTH_TOKEN` for MCP access,
+SHALL NOT be stored in tracked configuration or process arguments, and SHALL NOT be included
 in diagnostics or support output. The intended tunnel principals SHALL be
 limited to the owner-selected Platform organization and ChatGPT workspace.
 
@@ -65,6 +66,14 @@ limited to the owner-selected Platform organization and ChatGPT workspace.
   explicitly approved MCP origin
 - **AND** it SHALL never supply `MCP_OPERATOR_TOKEN`, a brokerage credential, or
   a trade-unlock credential
+
+#### Scenario: Reuse the existing deployment token
+
+- **WHEN** the Compose tunnel is enabled
+- **THEN** it SHALL receive the same `MCP_AUTH_TOKEN` as the MCP service without requiring a separately provisioned bearer file
+- **AND** the launcher SHALL reject missing, blank or invalid header values before starting the official client
+- **AND** it SHALL derive `Bearer <token>` for both ordinary and discovery headers through the client's supported environment references
+- **AND** the ordinary bearer MAY be visible in the container environment to trusted Docker/host administrators; other brokerage settings and credentials SHALL NOT be injected
 
 #### Scenario: Missing or wrong MCP credential
 
@@ -161,8 +170,7 @@ it SHALL NOT delete or replace OpenD or execution-journal state.
 #### Scenario: Secrets are rotated
 
 - **WHEN** the tunnel runtime key or ordinary MCP bearer credential is rotated
-- **THEN** the Compose tunnel SHALL be force-recreated after atomic replacement of its
-  restrictive staged secret files, or the legacy service restarted when that path is selected
+- **THEN** the Compose tunnel SHALL be force-recreated after updating the mapped runtime-key file or shared deployment token, or the legacy service restarted when that path is selected
 - **AND** actual authenticated traffic SHALL prove the new credentials are used and old
   credentials rejected without printing either value
 
@@ -182,7 +190,8 @@ it SHALL NOT delete or replace OpenD or execution-journal state.
 #### Scenario: Coordinated ordinary bearer rotation
 
 - **WHEN** the ordinary MCP bearer is rotated
-- **THEN** the tunnel SHALL be stopped while the server, authorized local clients and staged tunnel header are updated
+- **THEN** the tunnel SHALL be stopped while the shared deployment token and authorized local clients are updated
+- **AND** both MCP and tunnel containers SHALL be recreated to receive the new environment value; a restart alone SHALL NOT count as rotation
 - **AND** local authentication SHALL be verified before tunnel recreation and forwarded authentication verified afterward
 
 #### Scenario: Tunnel-only disablement
@@ -226,7 +235,7 @@ The container SHALL validate authenticated initialize, discovery and check_healt
 - **AND** requests lost during the outage SHALL NOT be replayed as recovery
 
 
-### Requirement: Managed official-client acceptance and characterization
+### Requirement: Managed official-client acceptance
 
 The integration SHALL use an unmodified official release with reviewed source,
 version and archive integrity. Its managed runtime SHALL use the fixed
@@ -236,25 +245,24 @@ Acceptance SHALL require passing actual-image tests of normal authenticated
 polling, discovery and forwarding, negative authentication, rotation, permissions,
 isolation and recovery. A client fork SHALL NOT be required or shipped.
 
-Direct-client redirect, inherited-proxy and doctor behavior SHALL remain
-separately characterized with accurate PASS, FAIL and INCONCLUSIVE results.
-Those results SHALL NOT be relabeled as passing managed-runtime tests. The owner
-accepts the documented conditional upstream limitations within this fixed
-deployment; all direct-client adversarial scenarios passing SHALL NOT be a
-prerequisite for the integration. Automation SHALL retain complete sanitized
-reports and fail on malformed output, missing cases or fixture execution errors.
-Tests SHALL use synthetic credentials and disposable resources. Live product
-acceptance SHALL remain separate from implementation and CI completion.
+Prior direct-client redirect, inherited-proxy and doctor findings SHALL remain
+in clearly labeled historical documentation with their original results. They
+SHALL NOT be relabeled as passing managed-runtime tests or retained as recurring
+CI requirements. The owner accepts the documented conditional upstream
+limitations within this fixed deployment. The retired diagnostic runners and
+their unused fixtures/reporting code SHALL be removed. Current tests SHALL use
+synthetic credentials and disposable resources. Live product acceptance SHALL
+remain separate from implementation and CI completion.
 
 #### Scenario: Managed runtime passes with an upstream limitation
 
-- **WHEN** the verified official image passes the required managed-runtime checks while a direct-client redirect or proxy case fails
+- **WHEN** the verified official image passes the required managed-runtime checks with a documented historical redirect or proxy limitation
 - **THEN** managed acceptance MAY pass with the upstream failure and its conditions explicitly recorded
 - **AND** default deployment SHALL remain tunnel-free and explicit selection SHALL still enforce all authentication, mode and isolation checks
 
 #### Scenario: Distinct credentials have distinct coverage
 
-- **WHEN** a control-plane redirect exposes a synthetic OpenAI runtime key in a fixture
+- **WHEN** historical evidence records a control-plane redirect exposing a synthetic OpenAI runtime key in a fixture
 - **THEN** that failure SHALL be recorded against the control-plane path
 - **AND** MCP bearer discovery and forwarding cases SHALL retain their independently observed status, including UNTESTED where no runtime evidence exists
 
@@ -269,11 +277,11 @@ acceptance SHALL remain separate from implementation and CI completion.
 - **WHEN** managed implementation is considered complete
 - **THEN** source/release integrity and exact binary/image provenance SHALL be reviewed
 - **AND** the managed normal-operation, negative-authentication, proxy-filtering, rotation and container checks SHALL pass on the final official image
-- **AND** direct-client characterization SHALL retain its independently observed results and documented limitations
+- **AND** historical upstream findings SHALL retain their original results and documented limitations without a recurring report job
 - **AND** VPS, real OpenAI, ChatGPT web and native iPad milestones SHALL remain pending until each is actually tested
 
-#### Scenario: Characterization cannot produce trustworthy evidence
+#### Scenario: Retired release-gate tooling is not current CI
 
-- **WHEN** a characterization runner exits unexpectedly, produces malformed output, omits or duplicates an expected case, or records a fixture error
-- **THEN** CI SHALL fail the characterization reporting job
-- **AND** an upstream behavioral FAIL SHALL be reported distinctly from that execution error
+- **WHEN** the managed integration workflow runs
+- **THEN** it SHALL exercise the current rootful/rootless deployment checks
+- **AND** it SHALL NOT run the retired direct-client matrix or generate its diagnostic report
