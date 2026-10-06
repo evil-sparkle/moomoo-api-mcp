@@ -23,8 +23,8 @@ The current plan reflects the owner's final deployment requirements. Original di
 
 ## 4. Validate and hand off
 
-- [ ] 4.1 Update actual-client rootful/rootless fixtures for environment credentials and both rotations; verify normal/negative forwarding, restart retaining old environment, recreation adopting new values, isolation and recovery.
-- [ ] 4.2 Run required unit/deployment, lint/format/types, workflow and strict OpenSpec checks; push/update PR #38 with actual results and any remaining live-acceptance limits.
+- [x] 4.1 Update actual-client rootful/rootless fixtures for environment credentials and both rotations; verify normal/negative forwarding, restart retaining old environment, recreation adopting new values, isolation and recovery.
+- [x] 4.2 Run required unit/deployment, lint/format/types, workflow and strict OpenSpec checks; push/update PR #38 with actual results and any remaining live-acceptance limits.
 - [x] 4.3 Verify existing server container/project/state access read-only and deliver the migration Markdown in chat plus a file outside the repository; retain the existing container until post-merge deployment.
 
 After final PR approval in chat, archive/sync this OpenSpec change. After merge and CI image publication, perform the external migration guide with existing permissions/credentials, escalating only missing credentials or permissions. These post-approval actions are not claimed complete by repository implementation or synthetic CI.
