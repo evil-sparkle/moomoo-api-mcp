@@ -9,6 +9,9 @@ findings remain valid; this revision does not repair upstream behavior.
 
 - Branch: `feat/containerize-private-chatgpt-tunnel`; draft PR #38.
 - Base before this revision: `d16ca4e9a0a0de6f472e46e0335108fed70f1bb8`.
+- Tested implementation commit: `c41345b3cdf9697c94463d6e63c2ecdef4bcc9cf`.
+- Hosted PR checkout/image revision:
+  `2748baddd6746bae575fb2169b7d4cf4a86ad948` (merge ref for that head).
 - Official release: v0.0.14, source/tag commit
   `0f870e50a973fa820d4c409000059e181e8d242b`.
 - Official archive SHA-256:
@@ -31,6 +34,12 @@ findings remain valid; this revision does not repair upstream behavior.
 - Local Docker context: rootless. No rootful daemon is available on this VPS;
   rootful verification remains a required hosted job.
 - Local Docker Engine 29.8.1; Compose 5.5.1.
+- Fresh hosted rootful tunnel image:
+  `sha256:2d02171aa93832e8b84a94c6eacfbb80b04c273149c7a313292888a6fc5ec48a`.
+- Fresh hosted rootless tunnel image:
+  `sha256:21e9a50b94c55c70d48adaca6a4e43e19e53fb48dce9d689c987d83deb1c208d`.
+  Hosted IDs are taken from the actual build logs for the tested PR head;
+  each job built both images fresh rather than reusing the local broker image.
 
 The existing manifest, installer, official configuration/runtime, original
 redirect reproduction, 515-case matrix fixture and historical evidence files
@@ -69,8 +78,10 @@ integration in rootful/rootless contexts remains required.
 | Workflow YAML and shell syntax | PASS |
 | Rootless actual-image integration | PASS; completed with exit 0, including cleanup |
 | Staged gitleaks hook | PASS |
-| Fresh hosted rootful/rootless integration | PENDING publication |
-| Hosted direct-client characterization | PENDING publication |
+| Hosted full quality job | PASS; 1354 tests passed, 1 skipped, 30 warnings; lint/100-file formatting/types passed |
+| Hosted general CI | PASS; quality, strict OpenSpec, broker image build and container smoke |
+| Fresh hosted rootful/rootless integration | PASS in both contexts |
+| Hosted direct-client characterization | Valid report; 361 PASS / 154 FAIL / 0 INCONCLUSIVE across 515 cases; original redirects 0 PASS / 2 FAIL |
 
 Local actual-image command:
 
@@ -109,6 +120,22 @@ Their source/timeouts are unchanged. All revised tunnel/reporting tests passed
 in the full run. Hosted full-suite verification remains required; local timeout
 failures are not represented as a passing full suite.
 
+The [hosted quality job](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/37496378611/job/112381927434)
+on the tested implementation commit passed all 1354 tests in 62.25 seconds, with
+1 skipped and 30 warnings. Its Ruff lint/100-file formatting and full types also
+passed. This independently covers both locally timed-out tests without modifying
+their existing deadlines or omitting them.
+
+[General CI](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/37496378611)
+completed successfully. The [managed tunnel workflow](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/37496378697)
+also completed successfully: both fresh actual-image jobs
+([rootful](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/37496378697/job/112381866630),
+[rootless](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/37496378697/job/112381866154))
+passed their full harness, including bounded startup deadline exhaustion and
+cleanup. All hosted results above refer to implementation head `c41345b`.
+Subsequent evidence/spec wording/task-status edits change no runtime, client,
+workflow or test inputs; newly triggered runs must retain their own status.
+
 ## Preserved diagnostic findings
 
 Historical direct-client matrix: **361 PASS / 154 FAIL / 0 INCONCLUSIVE**, all
@@ -116,8 +143,13 @@ Historical direct-client matrix: **361 PASS / 154 FAIL / 0 INCONCLUSIVE**, all
 See `synthetic-compatibility-20261002.md` and
 `synthetic-matrix-results-20261002.json` for those exact runs and per-case results.
 Local reporter validation against those recorded matrix rows preserved their
-verdicts; that validation is not a fresh execution of the full official binary
-matrix. Newly published CI executes the unchanged original runners again.
+verdicts; that validation was not a fresh execution of the full official binary
+matrix. The [fresh hosted diagnostic job](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/37496378697/job/112381865901)
+on the tested implementation commit executed both unchanged original runners.
+Its downloaded sanitized artifact confirms the same 361 PASS / 154 FAIL /
+0 INCONCLUSIVE across all 515 cases and two original redirect FAILs. Both runner
+exit codes remain 1. Complete inventory, zero fixture errors and consistent
+summaries passed report validation; no security verdict was relabeled.
 
 Conditional upstream redirect, inherited-proxy and doctor-authentication findings
 are accepted for the fixed managed scope. Manager proxy filtering does not repair

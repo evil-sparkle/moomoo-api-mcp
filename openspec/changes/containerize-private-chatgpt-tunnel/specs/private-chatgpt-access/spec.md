@@ -59,8 +59,8 @@ limited to the owner-selected Platform organization and ChatGPT workspace.
 
 #### Scenario: Local MCP credential scope
 
-- **WHEN** the tunnel client performs discovery, its startup initialize probe,
-  or a forwarded MCP request
+- **WHEN** the managed client performs normal discovery, its startup initialize
+  probe, or a forwarded MCP request against the fixed private MCP deployment
 - **THEN** it SHALL supply the ordinary MCP bearer credential only to the
   explicitly approved MCP origin
 - **AND** it SHALL never supply `MCP_OPERATOR_TOKEN`, a brokerage credential, or

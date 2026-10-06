@@ -1,6 +1,6 @@
 # Tasks
 
-Current revision — 2026-10-07: the owner authorizes requirements and implementation changes for the managed official-client approach. Historical direct-client FAILs remain recorded; their repair and fork maintenance are outside scope. Changed tasks are reopened until verified. Dated checkpoints below record earlier scope/progress.
+Current revision — 2026-10-07: the owner authorizes requirements and implementation changes for the managed official-client approach. Historical direct-client FAILs remain recorded; their repair and fork maintenance are outside scope. All 38 revised tasks are complete, with hosted evidence for implementation commit `c41345b`. Dated checkpoints below record earlier scope/progress; live milestones remain pending.
 
 Use synthetic credentials and disposable fixtures. Preserve the official pin and historical result files. This work does not deploy, read real credentials, contact live OpenAI, enable trading, merge or promote the draft PR. Design G1–G4 define current acceptance and evidence handoff.
 
@@ -38,6 +38,8 @@ Use synthetic credentials and disposable fixtures. Preserve the official pin and
 | 8.1 | Independent code/tests in 1.3 and groups 2–7 available | Independent broad quality verification; report gate failures separately even if other checks pass |
 | 8.2 | Observations from 1.2 and 8.1 | Independent evidence report; may accurately be complete with failures/pending rows, but never clears them |
 | 8.3 | 1.2; revised implementation tasks; G1–G4 | Update existing draft PR with actual evidence; hosted/live milestones remain independent |
+| 9.1 | 5.3, 5.4; revised managed scope | Operational selection/legacy/auth/mode checks and disposable wrapper regressions |
+| 9.2 | 3.1, 6.2; revised managed scope | Managed-profile image metadata and unchanged official-runtime verification |
 
 Managed acceptance and direct-client diagnostic findings have distinct status. Preserve historical failures; this revision does not claim an upstream repair. Future upgrades remain separately reviewed.
 
@@ -99,9 +101,9 @@ Current verification: [managed-verification-20261007.md](managed-verification-20
 
 ## 8. Managed verification and draft handoff
 
-- [ ] 8.1 Run Ruff lint/format, basedpyright, full pytest, revised reporting/deployment regressions, final-image rootful/rootless tunnel checks and strict OpenSpec validation. Record exact outcomes/limits; hosted/live runs retain separate status.
+- [x] 8.1 Run Ruff lint/format, basedpyright, full pytest, revised reporting/deployment regressions, final-image rootful/rootless tunnel checks and strict OpenSpec validation. Record exact outcomes/limits; hosted/live runs retain separate status.
 - [x] 8.2 Record revision, exact tested official binary/image identities, managed checks and characterization results. Preserve historical files unchanged; keep VPS/OpenAI/ChatGPT/iPad milestones pending.
-- [ ] 8.3 Update existing draft PR #38 with official-client scope and actual verification evidence, link it to the thread and report hosted CI separately. Leave merge/promotion and production/live acceptance to subsequent work; do not claim upstream flaws repaired.
+- [x] 8.3 Update existing draft PR #38 with official-client scope and actual verification evidence, link it to the thread and report hosted CI separately. Leave merge/promotion and production/live acceptance to subsequent work; do not claim upstream flaws repaired.
 
 ## 9. Apply the accepted scope revision
 

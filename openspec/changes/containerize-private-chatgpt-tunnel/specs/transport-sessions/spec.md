@@ -4,8 +4,8 @@
 
 ### Requirement: Tunnel Forwarding Preserves HTTP Security
 
-Requests forwarded by the optional tunnel client SHALL use the existing
-stateless Streamable HTTP endpoint and SHALL pass the same bearer-authentication,
+In the fixed managed deployment, requests forwarded by the optional tunnel client
+SHALL use the existing stateless Streamable HTTP endpoint and SHALL pass the same bearer-authentication,
 Host, and Origin checks as direct clients. The final HTTP Host SHALL be derived
 from the approved MCP URL: the existing loopback URL for legacy use, or exactly
 `http://moomoo-mcp:8000/mcp` for explicitly enabled Compose integration. An Origin, when present, SHALL be accepted
