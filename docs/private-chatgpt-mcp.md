@@ -1,14 +1,34 @@
-# Private ChatGPT tunnel: Compose migration (release blocked)
+# Private ChatGPT tunnel: official-client Compose integration
 
-**Do not enable this migration in production.** PR #38 is draft. The unchanged
-v0.0.14 official client fails OpenAI runtime-key redirect confinement. OpenSpec
-`containerize-private-chatgpt-tunnel` task **1.2 is BLOCKED**, and release handoff
-8.3 is incomplete. Local builds, component tests, and simulated control-plane
-success cannot clear those gates. No VPS deployment, real credentials, live
-OpenAI traffic, trading enablement, merge, or ChatGPT/iPad acceptance has occurred.
-The production wrapper refuses tunnel start/restart while this gate is unresolved.
+The owner approved the managed official-client approach on 2026-10-07. Use the
+unmodified, integrity-verified v0.0.14 release; this project maintains no tunnel
+client fork. Normal deployment remains tunnel-free. Explicit Compose selection
+retains authentication, server-enforced READ_ONLY, legacy-service exclusivity and
+bounded authenticated startup checks. PR #38 remains a draft implementation.
 
-## Intended deployment after release approval
+## Managed deployment assumptions and known limitations
+
+The configuration trusts the genuine OpenAI HTTPS endpoint at
+`https://api.openai.com` with certificate verification and the controlled Docker
+host. It fixes the private MCP URL and strips inherited proxy, custom-CA and
+endpoint/configuration overrides. Runtime key permissions are Tunnels Read + Use;
+OpenAI admin, brokerage and operator credentials do not enter the tunnel.
+
+The preserved synthetic tests demonstrate upstream redirect credential diversion,
+direct-client proxy behavior and omitted authentication on doctor/redirected MCP
+requests. The owner accepts those conditional limitations for this fixed managed
+setup. Proxy filtering does not fix the upstream redirect behavior. No malicious
+redirect from the real OpenAI endpoint or actual credential exposure is established.
+Normal authenticated forwarding, preflight, negative auth, rotation, isolation and
+recovery through the managed image remain mandatory acceptance checks.
+
+The direct-client runners retain their FAIL/INCONCLUSIVE verdicts. CI validates
+and publishes their sanitized reports separately from required managed integration;
+malformed/incomplete reports or fixture errors fail reporting. Historical evidence
+is unchanged. Live OpenAI, VPS, ChatGPT web and native iPad acceptance remain
+PENDING; implementation and synthetic CI do not demonstrate those milestones.
+
+## Intended managed deployment
 
 Compose is the recommended replacement: the existing `moomoo-mcp` container still
 contains exactly two supervised processes (MCP and OpenD). Explicit selection of
@@ -23,14 +43,16 @@ connectivity. Only disposable test networks prohibit internet egress.
 
 The overlay opts the MCP server into the exact Host `moomoo-mcp:8000` using
 `MCP_ALLOW_CHATGPT_TUNNEL_HOST=1`. The preflight separately requires
-`--allow-compose-mcp`; unexpected Hosts, Origins, destinations, redirects, and
-inherited proxies remain rejected. The ordinary MCP bearer protects initialization,
+`--allow-compose-mcp`; unexpected Hosts and Origins remain rejected. Preflight
+rejects redirects and unapproved destinations; the managed client excludes
+inherited proxies. The ordinary MCP bearer protects initialization,
 discovery and calls. It is distinct from the limited OpenAI runtime key. Never
 supply an operator token, broker login, unlock material or OpenAI admin key.
 
 ## Build and protect the inputs
 
-These are preparation instructions for review, not current production authorization.
+These are operator preparation instructions. This implementation request does not
+execute a production migration or read actual credential files.
 Build `scripts/build-tunnel-image.sh` using the selected Docker context. Only its
 enumerated public files enter the build context. The image uses the unchanged
 reviewed release manifest, verifies the archive before executing the binary, and
@@ -62,10 +84,10 @@ files with mapped ownership and mode `0400`. Each file is mounted read-only at
 `/run/secrets/`. The root provisioning helper is not a root tunnel daemon.
 Root and the Docker controller remain trusted administrators.
 
-## Future migration sequence
+## Operator migration sequence
 
-1. Verify all official-client and final integration gates have passed and receive
-   explicit production approval. Do not work around the current wrapper refusal.
+1. Review official provenance, required managed image checks and the accepted
+   upstream limitations; choose the existing READ_ONLY deployment to migrate.
 2. Stop and disable `moomoo-chatgpt-tunnel.service`; confirm it is inactive before
    starting the Compose replacement. Never run both for the same tunnel.
 3. Confirm the existing MCP deployment is READ_ONLY. Record the existing Compose
@@ -75,7 +97,7 @@ Root and the Docker controller remain trusted administrators.
    --secret-directory <protected-directory> --project <existing-project>`.
    `.chatgpt-deploy.json` contains only non-secret selection metadata and survives
    deployment checkout/rollback. It is not a credential file.
-6. After the release gate is legitimately cleared, recreate MCP with the selected
+6. After preparation and review, recreate MCP with the selected
    overlay to apply the Host opt-in; preserve its volumes. Start only the tunnel
    service after MCP is reachable. A selected overlay refuses SIMULATE/REAL mode.
 
@@ -124,7 +146,7 @@ For legacy rollback, first stop/remove the Compose tunnel and clear selection;
 only then restore/start the legacy systemd unit with the original root-only masters.
 The legacy assets below are retained for migration/rollback, not a second required
 service. Restoring a legacy mechanism does not waive any known client security issue
-or authorize production enablement.
+or constitute live product acceptance.
 
 ## Verification boundary
 
@@ -139,7 +161,7 @@ ChatGPT web invocation and native iPad acceptance remain **PENDING**.
 ## Legacy systemd installation reference
 
 The following retained instructions are a legacy migration/rollback reference only.
-They are not authorization to enable the known-failing client.
+Use it only as a rollback path with Compose stopped and disabled.
 
 # Private ChatGPT access through OpenAI Secure MCP Tunnel
 

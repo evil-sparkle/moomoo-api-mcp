@@ -46,24 +46,28 @@ DNS-rebinding protection SHALL NOT be used as a compatibility workaround.
 - **THEN** preflight SHALL continue to accept only existing loopback HTTP MCP URLs
 - **AND** explicit Compose selection SHALL add only the exact URL `http://moomoo-mcp:8000/mcp`, not arbitrary private-network URLs
 
-#### Scenario: Redirect or proxy attempts credential diversion
+#### Scenario: Preflight refuses redirect or proxy diversion
 
-- **WHEN** preflight or official-client discovery/startup/forwarding encounters a redirect to an unapproved destination or inherited proxy configuration
+- **WHEN** preflight encounters a redirect to an unapproved destination or inherited proxy configuration
 - **THEN** protected Authorization headers SHALL NOT reach that destination or proxy
 - **AND** preflight SHALL refuse redirects and ignore inherited proxy configuration
-- **AND** container forwarding SHALL be configured and behaviorally verified to preserve approved-origin credential confinement
 
+#### Scenario: Managed client excludes inherited proxies
 
-#### Scenario: Control-plane runtime key remains destination confined
+- **WHEN** the managed container launches the official forwarding client
+- **THEN** its child environment SHALL exclude inherited proxy, CA-bundle and endpoint/configuration overrides
+- **AND** actual-entrypoint tests SHALL demonstrate that poisoned parent settings do not route credential-bearing requests to a fixture proxy
 
-- **WHEN** the official client handles a control-plane request or any redirect hop
-- **THEN** the OpenAI runtime credential SHALL NOT be injected into or retained on a request to an unapproved destination
-- **AND** redirect checks SHALL prevent protected headers or bodies from reaching an unapproved destination
-- **AND** this requirement SHALL be tested separately from ordinary MCP bearer confinement
+#### Scenario: Trusted control-plane configuration
 
-#### Scenario: Normal operation and confinement are both required
+- **WHEN** the managed runtime starts the official client
+- **THEN** its approved configuration SHALL use `https://api.openai.com` with normal certificate verification and the pinned private MCP URL
+- **AND** unexpected configuration changes SHALL fail startup
+- **AND** upstream redirect behavior SHALL remain documented as a conditional limitation rather than an integration-enforced redirect policy
 
-- **WHEN** compatibility is verified for the final official binary
+#### Scenario: Normal operation and managed controls are required
+
+- **WHEN** compatibility is verified through the final managed image and official binary
 - **THEN** normal authenticated control-plane polling/response delivery and MCP discovery/startup/forwarding SHALL succeed against isolated fixtures
-- **AND** redirect/proxy confinement and missing/wrong/conflicting credential refusal SHALL also pass for their respective paths
+- **AND** preflight redirect refusal, managed proxy filtering and missing/wrong/conflicting credential refusal SHALL pass
 - **AND** preventing all traffic or replacing the official binary with a stub SHALL NOT count as successful compatibility

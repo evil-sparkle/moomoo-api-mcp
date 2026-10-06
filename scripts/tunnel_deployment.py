@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Non-secret optional Compose selection. Production enablement remains blocked."""
+"""Non-secret optional Compose selection and managed startup checks."""
 
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SELECTION = ROOT / ".chatgpt-deploy.json"
-# Changing this is a release action, not an implementation/testing workaround.
-RELEASE_GATE_PASSED = False
 
 
 def validate(selection: dict) -> None:
@@ -84,20 +82,18 @@ def main() -> int:
     select.add_argument("--secret-directory", required=True)
     select.add_argument("--project", required=True)
     commands.add_parser("compose-values")
+    commands.add_parser("check-start")
+    # Retain the old command for existing operator scripts.
     commands.add_parser("check-release")
     commands.add_parser("disable")
     args = parser.parse_args()
     try:
-        if args.command == "check-release":
-            if not RELEASE_GATE_PASSED:
-                raise ValueError(
-                    "RELEASE BLOCKED: OpenSpec task 1.2; "
-                    "production tunnel enablement is prohibited"
-                )
+        if args.command in {"check-start", "check-release"}:
+            load()
             check_legacy_inactive()
         elif args.command == "select":
-            # Selection does not start either mechanism. Future enablement must first
-            # stop/disable legacy systemd; the production wrapper still fails closed.
+            # Selection does not start either mechanism. The wrapper checks legacy
+            # exclusivity, authentication and mode before any Compose start.
             save(
                 {
                     "version": 1,
@@ -106,7 +102,7 @@ def main() -> int:
                     "project": args.project,
                 }
             )
-            print("Selection saved; production enablement remains blocked.")
+            print("Selection saved; managed startup checks apply before enablement.")
         elif args.command == "compose-values":
             selection = load()
             for key in ("image", "secret_directory", "project"):

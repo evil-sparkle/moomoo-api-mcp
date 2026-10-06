@@ -1,4 +1,4 @@
-"""Non-secret selection and release refusal, with no deployment daemon access."""
+"""Non-secret selection and managed startup, with no deployment daemon access."""
 
 import json
 import os
@@ -46,23 +46,105 @@ def test_selection_rejects_ambiguous_inputs(field, value):
         selection.validate(data)
 
 
-@pytest.mark.parametrize("operation", ["up", "start", "restart", "run", "create"])
-def test_production_wrapper_refuses_known_failing_pin(tmp_path, operation):
+def wrapper_fixture(
+    tmp_path, *, mode="READ_ONLY", token="synthetic-only", active=False
+):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    for name in ("compose-prod.sh", "tunnel_deployment.py"):
+    for name in ("compose-prod.sh", "tunnel_deployment.py", "deploy_verify.py"):
         shutil.copy2(ROOT / "scripts" / name, scripts / name)
-    (tmp_path / ".chatgpt-deploy.json").write_text(json.dumps(fixture_selection()))
+    selection.save(fixture_selection(), tmp_path / ".chatgpt-deploy.json")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    systemctl = fake_bin / "systemctl"
+    systemctl.write_text(
+        "#!/bin/sh\n"
+        + ("exit 0\n" if active else '[ "$1" = is-active ] && exit 3\nexit 1\n')
+    )
+    systemctl.chmod(0o755)
+    model = {
+        "services": {
+            "moomoo-mcp": {
+                "environment": {
+                    "MCP_AUTH_TOKEN": token,
+                    "MOOMOO_TRADING_MODE": mode,
+                }
+            },
+            "chatgpt-tunnel": {},
+        }
+    }
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env python3\nimport pathlib,sys\n"
+        + "if 'config' in sys.argv: print("
+        + repr(json.dumps(model))
+        + ")\n"
+        + "else: pathlib.Path('started').touch()\n"
+    )
+    docker.chmod(0o755)
+    return scripts, {"PATH": str(fake_bin) + ":" + os.environ["PATH"]}
+
+
+@pytest.mark.parametrize("operation", ["up", "start", "restart", "run", "create"])
+def test_wrapper_allows_explicit_authenticated_read_only_start(tmp_path, operation):
+    scripts, environment = wrapper_fixture(tmp_path)
     result = subprocess.run(
         [str(scripts / "compose-prod.sh"), operation],
-        env={"PATH": os.environ["PATH"]},
+        cwd=tmp_path,
+        env=environment,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "started").exists()
+    assert "synthetic-only" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "options,diagnostic",
+    [
+        ({"mode": "SIMULATE"}, "READ_ONLY"),
+        ({"mode": "REAL"}, "READ_ONLY"),
+        ({"token": ""}, "MCP_AUTH_TOKEN"),
+        ({"token": "   "}, "MCP_AUTH_TOKEN"),
+        ({"active": True}, "legacy"),
+    ],
+)
+def test_wrapper_rejects_unsafe_start_before_daemon_action(
+    tmp_path, options, diagnostic
+):
+    scripts, environment = wrapper_fixture(tmp_path, **options)
+    result = subprocess.run(
+        [str(scripts / "compose-prod.sh"), "up", "-d"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode != 0
-    assert "RELEASE BLOCKED" in result.stdout
-    assert "synthetic/protected" not in result.stdout
+    assert diagnostic in result.stdout + result.stderr
+    assert not (tmp_path / "started").exists()
+    assert "synthetic-only" not in result.stdout + result.stderr
+
+
+def test_wrapper_rejects_invalid_selection_before_daemon_action(tmp_path):
+    scripts, environment = wrapper_fixture(tmp_path)
+    selected = fixture_selection()
+    selected["image"] = "latest"
+    (tmp_path / ".chatgpt-deploy.json").write_text(json.dumps(selected))
+    result = subprocess.run(
+        [str(scripts / "compose-prod.sh"), "up"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode != 0
+    assert "Invalid tunnel selection" in result.stdout + result.stderr
+    assert not (tmp_path / "started").exists()
 
 
 @pytest.mark.parametrize("codes", [(0, 1), (3, 0), (1, 1), (3, 2)])
@@ -147,56 +229,3 @@ def test_disable_only_stops_and_removes_tunnel_then_clears_selection(
     ]
     assert not selected.exists()
     assert marker.read_text() == "preserve"
-
-
-@pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])
-def test_future_approved_wrapper_checks_mode_before_start(tmp_path, mode):
-    # Only disposable script copies simulate a cleared gate. Production stays false.
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    for name in ("compose-prod.sh", "tunnel_deployment.py", "deploy_verify.py"):
-        shutil.copy2(ROOT / "scripts" / name, scripts / name)
-    helper = scripts / "tunnel_deployment.py"
-    helper.write_text(
-        helper.read_text().replace(
-            "RELEASE_GATE_PASSED = False", "RELEASE_GATE_PASSED = True"
-        )
-    )
-    selection.save(fixture_selection(), tmp_path / ".chatgpt-deploy.json")
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    systemctl = fake_bin / "systemctl"
-    systemctl.write_text('#!/bin/sh\n[ "$1" = is-active ] && exit 3\nexit 1\n')
-    systemctl.chmod(0o755)
-    model = {
-        "services": {
-            "moomoo-mcp": {
-                "environment": {
-                    "MCP_AUTH_TOKEN": "synthetic-only",
-                    "MOOMOO_TRADING_MODE": mode,
-                }
-            },
-            "chatgpt-tunnel": {},
-        }
-    }
-    docker = fake_bin / "docker"
-    docker.write_text(
-        "#!/usr/bin/env python3\nimport pathlib,sys\n"
-        + "if 'config' in sys.argv: print("
-        + repr(json.dumps(model))
-        + ")\n"
-        + "else: pathlib.Path('unexpected-start').touch()\n"
-    )
-    docker.chmod(0o755)
-    result = subprocess.run(
-        [str(scripts / "compose-prod.sh"), "up", "-d"],
-        cwd=tmp_path,
-        env={"PATH": str(fake_bin) + ":" + os.environ["PATH"]},
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode != 0
-    assert "READ_ONLY" in result.stdout + result.stderr
-    assert not (tmp_path / "unexpected-start").exists()
-    assert "synthetic-only" not in result.stdout + result.stderr

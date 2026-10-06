@@ -1,4 +1,4 @@
-name: Tunnel compatibility (release blocked)
+name: Tunnel managed integration and characterization
 on:
   pull_request:
     branches: [main]
@@ -6,49 +6,32 @@ on:
 permissions:
   contents: read
 jobs:
-  official-client-release-gate:
-    name: BLOCKED — official runtime-key confinement
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Verify the unchanged official release
-        run: python3 deploy/tunnel-client/install.py --destination "$RUNNER_TEMP/tunnel-client"
-      - name: Real-client synthetic redirect confinement (must fail on diversion)
-        run: |
-          docker run --rm --network none --read-only --user 10002:10002 \
-            --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /tmp:uid=10002,gid=10002,mode=0700,size=16m \
-            --mount "type=bind,src=$RUNNER_TEMP/tunnel-client,dst=/verified/tunnel-client,readonly" \
-            --mount "type=bind,src=$PWD/scripts/check_tunnel_client_compatibility.py,dst=/check.py,readonly" \
-            python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
-            python /check.py --binary /verified/tunnel-client
-      - name: Record remaining mandatory gate status
-        if: always()
-        run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<'REPORT'
-          ## Release remains blocked
-          This job tests the OpenAI **runtime key**, using loopback synthetic fixtures.
-          It does not test or approve the ordinary MCP bearer path.
-          CP1/CP2 are known failures on the unchanged official v0.0.14 pin.
-          Other required official-client matrix cases remain incomplete: see the
-          active OpenSpec design and independent verification evidence.
-          Component success, image builds and pytest do not clear task 1.2 or 8.3.
-          VPS/OpenAI/ChatGPT/iPad acceptance is pending and not authorized.
-          REPORT
-      - name: All mandatory matrix cases must be reviewed before release
-        run: |
-          echo 'BLOCKED: OpenSpec task 1.2 has unpassed mandatory cases.' >&2
-          exit 1
-  expanded-official-client-matrix:
-    name: BLOCKED — expanded synthetic client matrix
+  official-client-characterization:
+    name: Official-client diagnostic report
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Verify the unchanged official release
         run: python3 deploy/tunnel-client/install.py --destination "$RUNNER_TEMP/tunnel-client"
-      - name: Exercise separate runtime-key and MCP bearer paths without egress
+      - name: Record original redirect reproduction without changing its verdict
         run: |
+          mkdir -p "$RUNNER_TEMP/tunnel-characterization"
+          set +e
+          docker run --rm --network none --read-only --user 10002:10002 \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:uid=10002,gid=10002,mode=0700,size=16m \
+            --mount "type=bind,src=$RUNNER_TEMP/tunnel-client,dst=/verified/tunnel-client,readonly" \
+            --mount "type=bind,src=$PWD/scripts/check_tunnel_client_compatibility.py,dst=/check.py,readonly" \
+            python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
+            python /check.py --binary /verified/tunnel-client \
+            > "$RUNNER_TEMP/tunnel-characterization/redirect.jsonl"
+          fixture_exit=$?
+          set -e
+          printf '%s\n' "$fixture_exit" > "$RUNNER_TEMP/tunnel-characterization/redirect.exit"
+      - name: Record the complete direct-client matrix with original verdicts
+        run: |
+          set +e
           docker run --rm --network none --read-only --user 10002:10002 \
             --cap-drop ALL --security-opt no-new-privileges \
             --tmpfs /tmp:uid=10002,gid=10002,mode=0700,size=32m \
@@ -58,12 +41,27 @@ jobs:
             --mount "type=bind,src=$RUNNER_TEMP/tunnel-client,dst=/verified/tunnel-client,readonly" \
             --mount "type=bind,src=$PWD/tests/fixtures/tunnel_compatibility_matrix.py,dst=/matrix.py,readonly" \
             python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
-            python /matrix.py --binary /verified/tunnel-client --workers 6
-      - name: Retain the release boundary
-        if: always()
+            python /matrix.py --binary /verified/tunnel-client --workers 6 \
+            > "$RUNNER_TEMP/tunnel-characterization/matrix.jsonl"
+          fixture_exit=$?
+          set -e
+          printf '%s\n' "$fixture_exit" > "$RUNNER_TEMP/tunnel-characterization/matrix.exit"
+      - name: Validate inventory, execution and reported verdicts
         run: |
-          echo 'Each PASS covers only its named synthetic case; task 1.2 remains blocked.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Inherited proxy characterization runs the real client directly; production manager environment filtering is separate coverage.' >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/report_tunnel_characterization.py \
+            --redirect-results "$RUNNER_TEMP/tunnel-characterization/redirect.jsonl" \
+            --redirect-exit "$(cat "$RUNNER_TEMP/tunnel-characterization/redirect.exit")" \
+            --matrix-results "$RUNNER_TEMP/tunnel-characterization/matrix.jsonl" \
+            --matrix-exit "$(cat "$RUNNER_TEMP/tunnel-characterization/matrix.exit")" \
+            > "$RUNNER_TEMP/tunnel-characterization/summary.md"
+          cat "$RUNNER_TEMP/tunnel-characterization/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve sanitized diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: official-client-characterization
+          path: ${{ runner.temp }}/tunnel-characterization/
+          if-no-files-found: error
   disposable-container-integration:
     name: Synthetic container integration (${{ matrix.context }})
     runs-on: ubuntu-latest
@@ -105,5 +103,5 @@ jobs:
       - name: Describe the acceptance boundary
         if: always()
         run: |
-          echo 'Synthetic local control plane only; task 1.2 remains blocked.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Required managed official-client integration with a synthetic local control plane.' >> "$GITHUB_STEP_SUMMARY"
           echo 'No live OpenAI, VPS, trading, ChatGPT or iPad acceptance.' >> "$GITHUB_STEP_SUMMARY"

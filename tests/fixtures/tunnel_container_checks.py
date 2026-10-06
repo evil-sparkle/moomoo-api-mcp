@@ -1,7 +1,7 @@
 """Actual pinned-client checks with synthetic credentials and disposable resources.
 
 The control-plane simulation is isolated from internet egress. This is not live
-OpenAI acceptance, and it never clears the separate credential-confinement gate.
+OpenAI acceptance. Direct-client characterization is reported separately.
 """
 
 import argparse
@@ -54,6 +54,10 @@ for path in (workspace / "src").rglob("*"):
 (workspace / "src").chmod(0o755)
 shutil.copyfile(root / "tests/fixtures/opend_stub.py", workspace / "opend_stub.py")
 (workspace / "opend_stub.py").chmod(0o755)
+shutil.copyfile(
+    root / "tests/fixtures/tunnel_control_plane.py", workspace / "control-plane.py"
+)
+(workspace / "control-plane.py").chmod(0o644)
 docker = ["docker", "--context", args.docker_context]
 project = "tunnel-fixture-" + uuid.uuid4().hex[:12]
 
@@ -275,8 +279,7 @@ fixture = {
             "read_only": True,
             "networks": ["fixture-only"],
             "volumes": [
-                str(root / "tests/fixtures/tunnel_control_plane.py")
-                + ":/fixture.py:ro",
+                str(workspace / "control-plane.py") + ":/fixture.py:ro",
                 str(secret_root / "staged") + ":/expected:ro",
             ],
         },

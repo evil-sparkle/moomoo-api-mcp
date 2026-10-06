@@ -324,13 +324,14 @@ not rediscovered from scratch.
   before its own SIGKILL escalation runs.
 
 
-### Optional Compose tunnel migration — release blocked
+### Optional Compose tunnel — official client
 
 The brokerage container remains one supervisor with two children (MCP and OpenD).
 The explicit `docker-compose.chatgpt.yml` overlay adds a separate optional tunnel
-container; normal deployments need no tunnel settings. The official client still
-fails the mandatory runtime-key confinement gate, so PR #38 remains draft and
-production enablement is prohibited. See [the tunnel migration runbook](private-chatgpt-mcp.md)
+container; normal deployments need no tunnel settings. It uses the verified
+official client with fixed endpoints, proxy-filtered startup, authentication and
+server-enforced READ_ONLY. Direct-client redirect/proxy/doctor limitations remain
+documented characterization; managed integration checks define acceptance. See [the tunnel migration runbook](private-chatgpt-mcp.md)
 for measured rootful/rootless secret mapping, forced-recreation rotation, legacy
 systemd migration, and tunnel-only disable/rollback. Preserve the existing project,
 OpenD/journal volumes and `127.0.0.1:8000:8000`; never publish OpenD or share its

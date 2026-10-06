@@ -21,5 +21,5 @@ HASH
 docker --context "${DOCKER_CONTEXT:-rootless}" build --platform linux/amd64 \
   --label "org.opencontainers.image.revision=$(git -C "$root" rev-parse HEAD)" \
   --label "org.moomoo.tunnel.inputs-sha256=$input_digest" \
-  --label "org.moomoo.tunnel.release-gate=blocked" \
+  --label "org.moomoo.tunnel.acceptance-profile=managed-official-client" \
   --tag "${TUNNEL_IMAGE_TAG:-moomoo-chatgpt-tunnel:development}" "$staging"

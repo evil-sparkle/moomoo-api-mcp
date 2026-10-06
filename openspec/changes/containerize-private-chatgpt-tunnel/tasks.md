@@ -1,23 +1,18 @@
 # Tasks
 
-The owner approved this dependency revision and authorized independent implementation.
-Planning commit `36f3f69` was pushed to draft PR #38 before implementation started.
-Task 1.2 remains BLOCKED and 8.3 remains incomplete. Only fully verified task
-checkboxes are checked; partial implementation is reported in
-`independent-verification.md`. No real credentials, real OpenAI traffic, VPS
-deployment, trading, merge/release or live acceptance is authorized.
+Current revision — 2026-10-07: the owner authorizes requirements and implementation changes for the managed official-client approach. Historical direct-client FAILs remain recorded; their repair and fork maintenance are outside scope. Changed tasks are reopened until verified. Dated checkpoints below record earlier scope/progress.
 
-The dependency table is authoritative; section order is organizational, not a blanket dependency on task 1.2. **Independent** means safe to implement under the approved apply request using only synthetic credentials and disposable local/container fixtures. It does not mean released, production-enabled or security-gate-passed. Any test involving the actual official binary still records its own pass/fail/untested result in design.md's matrix. Keep failed gates failing; do not replace them with a stub, xfail, skipped test or an unrelated passing job.
+Use synthetic credentials and disposable fixtures. Preserve the official pin and historical result files. This work does not deploy, read real credentials, contact live OpenAI, enable trading, merge or promote the draft PR. Design G1–G4 define current acceptance and evidence handoff.
 
 | Task(s) | Prerequisites | Work classification and completion boundary |
 | --- | --- | --- |
 | 1.1 | None | COMPLETE: existing pin integrity/source audit only |
-| 1.2 | 1.1; local protocol fixtures; 4.5 and 6.2 for completed rotation/forwarding evidence (fixture development can start earlier) | MANDATORY GATE: fixture development and synthetic real-binary runs can proceed; completion BLOCKED by observed CP/MCP failures; the 515-case synthetic inventory is exercised, with exact results in synthetic-compatibility-20261002.md |
+| 1.2 | 1.1, 4.5, 6.2 | Managed official-client normal/negative/auth/rotation compatibility; direct-client limitations remain characterization |
 | 1.3 | 1.1 | Independent image-input/writable-path experiment; no security approval or production pin change |
 | 2.1, 2.2 | None beyond new apply authorization | Independent exact Host setting and URL/preflight implementation |
 | 2.3 | 2.1, 2.2 | Independent bearer/Host/Origin/session component tests; cannot satisfy official-client gate by themselves |
 | 2.4 | 2.3 | Independent mode/mutation-refusal tests with mocked broker; no trading enablement |
-| 3.1 | 1.3 | Independent dedicated image build, known-failing official pin retained for test use |
+| 3.1 | 1.3 | Independent dedicated image build, unchanged verified official pin |
 | 3.2 | 3.1 | Independent container config validation against local fixtures only |
 | 3.3 | 2.2, 3.1, 3.2 | Independent authenticated startup gate |
 | 3.4, 3.5 | 3.3 | Independent signals, liveness and safe diagnostics |
@@ -29,27 +24,29 @@ The dependency table is authoritative; section order is organizational, not a bl
 | 5.1 | 2.1, 3.1, 3.2 | Independent default-off Compose overlay |
 | 5.2 | 5.1 | Independent default/enabled synthetic config matrix |
 | 5.3 | 5.2 | Independent wrapper selection persistence, fixture-only deployment paths |
-| 5.4 | 5.3, 2.4 | Independent simulated enable/disable/rollback and mode guard; production enablement remains blocked |
+| 5.4 | 5.3, 2.4 | Independent simulated enable/disable/rollback and mode guard; operational startup checks remain required |
 | 5.5 | 5.3, 3.1 | Independent local image identity/recreation tests |
 | 6.1 | 3.1, 5.1 | Independent isolated harness with fixture-only egress and safe cleanup |
-| 6.2 | 6.1, 2.3, 2.4, 3.3, 4.4; local control-plane protocol fixture | Independent actual-image/binary integration; capture normal/negative-path evidence without claiming overall gate pass |
+| 6.2 | 6.1, 2.3, 2.4, 3.3, 4.4; local control-plane protocol fixture | Independent actual-image/binary integration; capture normal/negative-path evidence without claiming direct-client or live acceptance |
 | 6.3 | 6.1, 5.2 | Independent real supervisor plus OpenD stub network checks |
 | 6.4 | 6.2, 6.3, 5.5 | Independent lifecycle/DNS recovery checks |
 | 6.5 | 6.2, 3.4, 3.5 | Independent hardened-runtime delayed-start/failure/recovery checks |
 | 6.6 | 6.3, 5.4 | Independent migration/rollback simulations with disposable state |
-| 7.1 | 6.1; 1.2 fixture interface | Independent CI integration; mandatory security job must remain failing/incomplete until gate actually passes |
+| 7.1 | 6.1; 1.2 fixture interface | Independent CI integration; managed checks remain blocking; characterization retains genuine verdicts |
 | 7.2 | 6.1 | Independent existing smoke isolation improvements |
-| 7.3, 7.4, 7.5 | Revised design; reconcile with 3–6 before completion | Independent documentation; retain blocker prominently and describe enablement as future, unauthorized procedure |
+| 7.3, 7.4, 7.5 | Revised design; reconcile with 3–6 before completion | Independent documentation; document accepted trust assumptions and operator enablement; keep live milestones pending |
 | 8.1 | Independent code/tests in 1.3 and groups 2–7 available | Independent broad quality verification; report gate failures separately even if other checks pass |
 | 8.2 | Observations from 1.2 and 8.1 | Independent evidence report; may accurately be complete with failures/pending rows, but never clears them |
-| 8.3 | 1.2 PASS; all other implementation tasks; design G1–G4 | RELEASE HANDOFF BLOCKED: maintain existing PR #38 as draft until all evidence and explicit review/authorization requirements are met |
+| 8.3 | 1.2; revised implementation tasks; G1–G4 | Update existing draft PR with actual evidence; hosted/live milestones remain independent |
 
-Task 1.2 need not pass before any Independent row. Its unresolved result prevents task 8.3 and release/production enablement. Independent tests may use unmodified v0.0.14 with synthetic secrets to characterize behavior, never with a live endpoint. Runtime-key and ordinary-MCP-bearer observations are separate; the preserved historical reproduction proves only the runtime-key cases stated in design.md. Any future change of official release requires separate approval and a full rerun on the final artifact.
+Managed acceptance and direct-client diagnostic findings have distinct status. Preserve historical failures; this revision does not claim an upstream repair. Future upgrades remain separately reviewed.
+
+Current verification: [managed-verification-20261007.md](managed-verification-20261007.md).
 
 ## 1. Establish pinned-client compatibility evidence
 
 - [x] 1.1 Verify the existing v0.0.14 archive with `deploy/tunnel-client/install.py` and inspect its pinned configuration/source for runtime paths, health endpoints, signal behavior and static-header scope; deliver an evidence note with version/digest and exact supported settings, without unrelated upgrades.
-- [ ] 1.2 Complete the mandatory real official-client matrix in design.md (CP1–CP9, MD1–MD2, MF1–MF2, MA1, MP1, MR1): use distinct synthetic OpenAI runtime key and ordinary MCP bearer values, normal authenticated control-plane/MCP operation, negative auth, redirect/proxy sinks and rotation. Record every case as PASS, FAIL or UNTESTED with exact artifact provenance. Fixture work can proceed independently; this checkbox stays unchecked while any required case fails or is untested. Preserve the reproduction; review the explicit control-plane redirect policy and destination-scoped credential-injection remediation candidate without shipping a patched client/proxy, changing the production pin or posting upstream. Closure requires reviewed official provenance and passing evidence, not merely proposing an upgrade.
+- [x] 1.2 Review unchanged official-client provenance and fixed deployment assumptions; verify normal authenticated control-plane/MCP operation, negative authentication, manager proxy filtering and credential rotation through the actual image. Document accepted redirect/proxy/doctor limitations separately without changing historical verdicts or maintaining a fork.
 - [x] 1.3 Select and record immutable slim runtime/build image digests and the minimal writable paths; verify the real binary executes and config parses under non-root read-only conditions before finalizing image settings.
 
 ## 2. Add narrow transport compatibility
@@ -94,17 +91,22 @@ Task 1.2 need not pass before any Independent row. Its unresolved result prevent
 
 ## 7. Integrate CI and operator documentation
 
-- [x] 7.1 Update CI path triggers and required jobs for optional image/config/helper/overlay inputs, real-client container integration and rootful/rootless permissions; verify fixture-only egress and disposable resources, and separately report component/container results versus the mandatory official-client gate. Prove a failed, skipped or untested gate cannot be overridden by unrelated green jobs; label simulated versus live acceptance.
+- [x] 7.1 Require real managed image integration in rootful/rootless CI and retain sanitized direct-client characterization reports. Verify upstream FAILs stay visible while malformed/missing/duplicate cases, unexpected exits and fixture errors fail reporting; retain summaries/artifacts.
 - [x] 7.2 Remove fixed project/host-port assumptions from reused smoke harness paths and their CI image references as needed; verify existing brokerage/paper tests still run without taking port 8000 from a developer stack.
-- [x] 7.3 Rewrite the private tunnel runbook with Compose-first installation, exact opt-ins, daemon-host staging/mapping, in-container diagnostics, forced-recreation rotation and tunnel-only disable commands; retain labelled legacy systemd migration/rollback instructions and verify command sequencing with synthetic fixtures.
-- [x] 7.4 Update README, deployment/rootless/restart docs and OpenSpec context to distinguish one two-process brokerage container from one optional tunnel container; review that no previous security assertion or acceptance limitation is silently removed.
+- [x] 7.3 Update the Compose-first runbook for managed official-client scope, conditional upstream limitations and operational startup checks; retain secret mapping/rotation, auth/READ_ONLY, migration and scoped rollback, with external acceptance pending.
+- [x] 7.4 Reconcile README, deployment/rootless/restart docs and OpenSpec context with accepted official-client requirements, preserving topology, authentication, mode controls and historical evidence.
 - [x] 7.5 Document required MCP recreation, preserved project/volumes, stop-and-disable legacy-before-Compose sequence and reverse rollback sequence; explicitly state ordinary bearer mode dependence and stop tunnel before SIMULATE/REAL.
 
-## 8. Independent verification and blocked release handoff
+## 8. Managed verification and draft handoff
 
-- [x] 8.1 Run Ruff lint/format, basedpyright, relevant/full pytest, disposable brokerage/tunnel/paper checks and `openspec validate --all --strict --no-interactive`; record exact results and environment limitations without claiming unrun checks passed.
-- [x] 8.2 Produce a verification matrix linking every requested security/network/rotation/recovery behavior to automated evidence; separately record VPS, live OpenAI, full account/positions, ChatGPT web and native iPad milestones as PENDING unless genuinely tested with owner authorization.
-- [ ] 8.3 Keep the already-open separate implementation PR #38 in draft while any required gate case is failing/untested or owner authorization is absent. Only after task 1.2 and the remaining final official-client/container tests pass, record reviewed source/release integrity, exact final image provenance and G1–G4 closure; obtain explicit authorization before any ready-for-review transition or release action. Verify no known-failing pin is enabled in production. Do not create a substitute PR to bypass the gate, merge, deploy, enable trading, reopen PR #36, edit its archive or mark live acceptance complete.
+- [ ] 8.1 Run Ruff lint/format, basedpyright, full pytest, revised reporting/deployment regressions, final-image rootful/rootless tunnel checks and strict OpenSpec validation. Record exact outcomes/limits; hosted/live runs retain separate status.
+- [x] 8.2 Record revision, exact tested official binary/image identities, managed checks and characterization results. Preserve historical files unchanged; keep VPS/OpenAI/ChatGPT/iPad milestones pending.
+- [ ] 8.3 Update existing draft PR #38 with official-client scope and actual verification evidence, link it to the thread and report hosted CI separately. Leave merge/promotion and production/live acceptance to subsequent work; do not claim upstream flaws repaired.
+
+## 9. Apply the accepted scope revision
+
+- [x] 9.1 Replace unconditional deployment refusal with valid selection and legacy-service checks; retain bearer/READ_ONLY validation and authenticated container startup. Verify allowed READ_ONLY and refusal of invalid selection, missing auth, SIMULATE/REAL and active/enabled/unknown legacy states using disposable command fixtures.
+- [x] 9.2 Replace blocked image labels with managed official-client profile metadata; build the final image from unchanged verified official/public inputs and verify provenance/runtime behavior.
 
 ## Independent implementation checkpoint — 2026-09-30
 

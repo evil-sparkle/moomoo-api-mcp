@@ -7,7 +7,10 @@ unset ECR_REGISTRY IMAGE_TAG
 # chatgpt-selection-schema-v1: kept across checkouts; no credential values here.
 optional=()
 if [ -f .chatgpt-deploy.json ]; then
-  values="$(python3 scripts/tunnel_deployment.py compose-values)"
+  if ! values="$(python3 scripts/tunnel_deployment.py compose-values)"; then
+    printf '%s\n' 'Invalid tunnel selection; review saved metadata.' >&2
+    exit 1
+  fi
   mapfile -t selected <<< "$values"
   export CHATGPT_TUNNEL_IMAGE="${selected[0]}"
   export CHATGPT_TUNNEL_SECRET_DIR="${selected[1]}"
@@ -15,7 +18,7 @@ if [ -f .chatgpt-deploy.json ]; then
   for argument in "$@"; do
   case "$argument" in
     up|start|restart|run|create)
-      python3 scripts/tunnel_deployment.py check-release
+      python3 scripts/tunnel_deployment.py check-start
       python3 scripts/deploy_verify.py check-config
       ;;
   esac

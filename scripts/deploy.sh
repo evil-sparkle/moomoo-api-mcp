@@ -62,7 +62,7 @@ if [ -f .chatgpt-deploy.json ]; then
     echo 'Disable the tunnel before selecting an older unsupported deployment.' >&2
     exit 1
   fi
-  python3 scripts/tunnel_deployment.py check-release
+  python3 scripts/tunnel_deployment.py check-start
 fi
 
 if [ "${DEPLOY_REEXEC:-0}" != "1" ]; then

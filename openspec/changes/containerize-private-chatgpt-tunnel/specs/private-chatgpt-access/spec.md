@@ -226,15 +226,31 @@ The container SHALL validate authenticated initialize, discovery and check_healt
 - **AND** requests lost during the outage SHALL NOT be replayed as recovery
 
 
-### Requirement: Independent fixture work does not clear the release gate
+### Requirement: Managed official-client acceptance and characterization
 
-Independent implementation and verification SHALL use only synthetic credentials and disposable local/container resources until separately authorized otherwise. The feature SHALL remain default-off. A failing or untested mandatory official-client compatibility scenario SHALL block release and production enablement regardless of successful local builds, component tests or other CI jobs. The OpenAI runtime-key control-plane path and ordinary MCP bearer discovery/startup/forwarding paths SHALL have separate evidence. No patched client or proxy workaround SHALL substitute for a reviewed official release that satisfies credential confinement.
+The integration SHALL use an unmodified official release with reviewed source,
+version and archive integrity. Its managed runtime SHALL use the fixed
+`https://api.openai.com` control plane with certificate verification, the approved
+private MCP URL, a scrubbed environment and authenticated READ_ONLY startup.
+Acceptance SHALL require passing actual-image tests of normal authenticated
+polling, discovery and forwarding, negative authentication, rotation, permissions,
+isolation and recovery. A client fork SHALL NOT be required or shipped.
 
-#### Scenario: Local image builds while runtime-key confinement fails
+Direct-client redirect, inherited-proxy and doctor behavior SHALL remain
+separately characterized with accurate PASS, FAIL and INCONCLUSIVE results.
+Those results SHALL NOT be relabeled as passing managed-runtime tests. The owner
+accepts the documented conditional upstream limitations within this fixed
+deployment; all direct-client adversarial scenarios passing SHALL NOT be a
+prerequisite for the integration. Automation SHALL retain complete sanitized
+reports and fail on malformed output, missing cases or fixture execution errors.
+Tests SHALL use synthetic credentials and disposable resources. Live product
+acceptance SHALL remain separate from implementation and CI completion.
 
-- **WHEN** an isolated image, Compose, permissions, Host/URL, signals or lifecycle test passes while the official client still fails a required credential-confinement case
-- **THEN** only that independent result SHALL be recorded as passed
-- **AND** release and production enablement SHALL remain blocked with the feature default-off
+#### Scenario: Managed runtime passes with an upstream limitation
+
+- **WHEN** the verified official image passes the required managed-runtime checks while a direct-client redirect or proxy case fails
+- **THEN** managed acceptance MAY pass with the upstream failure and its conditions explicitly recorded
+- **AND** default deployment SHALL remain tunnel-free and explicit selection SHALL still enforce all authentication, mode and isolation checks
 
 #### Scenario: Distinct credentials have distinct coverage
 
@@ -242,16 +258,22 @@ Independent implementation and verification SHALL use only synthetic credentials
 - **THEN** that failure SHALL be recorded against the control-plane path
 - **AND** MCP bearer discovery and forwarding cases SHALL retain their independently observed status, including UNTESTED where no runtime evidence exists
 
-#### Scenario: Incomplete or unrelated evidence cannot satisfy a gate
+#### Scenario: Incomplete managed-runtime evidence cannot satisfy acceptance
 
-- **WHEN** any mandatory official-client case is failed, untested, skipped, inconclusive or marked expected-failure
-- **THEN** unrelated successful tests SHALL NOT make that gate pass
-- **AND** every missing or failing case SHALL remain explicit in the release evidence
+- **WHEN** a required managed-runtime check fails, is skipped, is inconclusive or has not run
+- **THEN** unrelated successful tests SHALL NOT make managed acceptance pass
+- **AND** every missing or failing check SHALL remain explicit in the verification evidence
 
 #### Scenario: Required evidence for technical closure
 
-- **WHEN** closure of the compatibility blocker is considered
+- **WHEN** managed implementation is considered complete
 - **THEN** source/release integrity and exact binary/image provenance SHALL be reviewed
-- **AND** redirect-confinement, proxy-confinement, normal authenticated control-plane and MCP operations, negative authentication, rotation and the remaining approved real-client/container scenarios SHALL all pass on the final reviewed official artifact
-- **AND** a proposed fix or upgrade without that evidence SHALL NOT close the blocker
-- **AND** passing technical gates SHALL NOT itself authorize production enablement, real credentials or live product acceptance
+- **AND** the managed normal-operation, negative-authentication, proxy-filtering, rotation and container checks SHALL pass on the final official image
+- **AND** direct-client characterization SHALL retain its independently observed results and documented limitations
+- **AND** VPS, real OpenAI, ChatGPT web and native iPad milestones SHALL remain pending until each is actually tested
+
+#### Scenario: Characterization cannot produce trustworthy evidence
+
+- **WHEN** a characterization runner exits unexpectedly, produces malformed output, omits or duplicates an expected case, or records a fixture error
+- **THEN** CI SHALL fail the characterization reporting job
+- **AND** an upstream behavioral FAIL SHALL be reported distinctly from that execution error

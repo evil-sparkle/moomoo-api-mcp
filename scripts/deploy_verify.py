@@ -149,6 +149,12 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
         )
     token = decode_compose_dollars(token)
     check_header_safe(token)
+    if (
+        isinstance(services, dict)
+        and "chatgpt-tunnel" in services
+        and not token.strip()
+    ):
+        raise ConfigError("The selected tunnel requires MCP_AUTH_TOKEN.")
     return token
 
 
