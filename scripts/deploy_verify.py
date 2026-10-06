@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -155,6 +156,19 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
         and not token.strip()
     ):
         raise ConfigError("The selected tunnel requires MCP_AUTH_TOKEN.")
+    if isinstance(services, dict) and "chatgpt-tunnel" in services:
+        tunnel_environment = services["chatgpt-tunnel"].get("environment", {})
+        if not isinstance(tunnel_environment, dict):
+            raise ConfigError("The selected tunnel has invalid environment settings.")
+        for variable in ("CHATGPT_TUNNEL_API_KEY", "CHATGPT_TUNNEL_ID"):
+            value = tunnel_environment.get(variable)
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigError(f"The selected tunnel requires {variable}.")
+            if any(character < " " or character > "~" for character in value):
+                raise ConfigError(f"The selected tunnel has invalid {variable}.")
+        identifier = tunnel_environment["CHATGPT_TUNNEL_ID"].strip()
+        if not re.fullmatch(r"tunnel_[a-zA-Z0-9_-]{1,128}", identifier):
+            raise ConfigError("The selected tunnel has invalid CHATGPT_TUNNEL_ID.")
     return token
 
 

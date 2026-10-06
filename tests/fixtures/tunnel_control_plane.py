@@ -1,12 +1,13 @@
 """Disposable synthetic control plane; not OpenAI acceptance or a credential proxy."""
 
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 lock = threading.Lock()
+runtime_key = [os.environ["FIXTURE_RUNTIME_KEY"]]
 stats = {
     "authenticated": 0,
     "rejected": 0,
@@ -48,11 +49,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def authenticated(self):
-        accepted = (
-            self.headers.get("Authorization")
-            == "Bearer " + Path("/expected/control-plane-api-key").read_text().strip()
-        )
         with lock:
+            accepted = self.headers.get("Authorization") == "Bearer " + runtime_key[0]
             stats["authenticated" if accepted else "rejected"] += 1
         if not accepted:
             self.answer(401, {})
@@ -101,6 +99,11 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self):
+        if self.path == "/rotate-runtime":
+            with lock:
+                runtime_key[0] = "synthetic-runtime-key-rotated"
+            self.answer(200, {})
+            return
         if self.path in {"/enqueue", "/enqueue-wrong", "/enqueue-conflict"}:
             with lock:
                 pending.append(

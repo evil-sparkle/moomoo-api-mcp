@@ -324,15 +324,20 @@ not rediscovered from scratch.
   before its own SIGKILL escalation runs.
 
 
-### Optional Compose tunnel — official client
+### Optional official ChatGPT tunnel
 
-The brokerage container remains one supervisor with two children (MCP and OpenD).
-The explicit `docker-compose.chatgpt.yml` overlay adds a separate optional tunnel
-container; normal deployments need no tunnel settings. It uses the verified
-official client with fixed endpoints, proxy-filtered startup, authentication and
-server-enforced READ_ONLY. Direct-client redirect/proxy/doctor limitations remain
-documented historical findings; current managed integration checks define acceptance. See [the tunnel migration runbook](private-chatgpt-mcp.md)
-for measured rootful/rootless secret mapping, forced-recreation rotation, legacy
-systemd migration, and tunnel-only disable/rollback. Preserve the existing project,
-OpenD/journal volumes and `127.0.0.1:8000:8000`; never publish OpenD or share its
-network namespace. Stop the tunnel before changing MCP out of READ_ONLY.
+CI publishes both images to the existing ECR repository. Set
+`CHATGPT_TUNNEL_API_KEY` and `CHATGPT_TUNNEL_ID` in the deployment `.env`, alongside
+its existing `MCP_AUTH_TOKEN` and `MOOMOO_TRADING_MODE=READ_ONLY`, then run
+`./scripts/deploy.sh --chatgpt`. Later deployments retain the selection;
+`./scripts/deploy.sh --no-chatgpt` disables it. The script selects the matching
+immutable image and preserves the existing Compose project and persistent volumes.
+No separate host build or credential-staging command is needed. Normal restarts
+reuse credentials; deliberate rotations recreate affected containers.
+
+The official client uses fixed endpoints and a filtered child environment, with
+accepted upstream redirect limitations under trust in OpenAI and the Docker host.
+ChatGPT access is read-only; disable the tunnel before changing the trading mode.
+The separate container publishes no ports and cannot reach OpenD over the bridge.
+See [the tunnel deployment runbook](private-chatgpt-mcp.md) for configuration, diagnostics and rollback.
+Live OpenAI, ChatGPT web and iPad acceptance are separate checks.

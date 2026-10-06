@@ -7,7 +7,7 @@
 In the fixed managed deployment, requests forwarded by the optional tunnel client
 SHALL use the existing stateless Streamable HTTP endpoint and SHALL pass the same bearer-authentication,
 Host, and Origin checks as direct clients. The final HTTP Host SHALL be derived
-from the approved MCP URL: the existing loopback URL for legacy use, or exactly
+from the approved MCP URL: the existing loopback URL for local clients, or exactly
 `http://moomoo-mcp:8000/mcp` for explicitly enabled Compose integration. An Origin, when present, SHALL be accepted
 only if it exactly matches a reviewed allowed origin; wildcard or disabled
 DNS-rebinding protection SHALL NOT be used as a compatibility workaround.

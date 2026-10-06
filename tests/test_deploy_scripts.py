@@ -136,8 +136,15 @@ if name == "docker":
     if args[2:4] == ["container", "inspect"]:
         if os.environ.get("DOCKER_TEST_FAIL_INSPECT") == "1":
             sys.exit(1)
+        if "com.docker.compose.project" in " ".join(args):
+            print(os.environ.get("DOCKER_TEST_PROJECT", "existing-project"))
+            sys.exit(0)
         calls = pathlib.Path(os.environ["CALL_LOG"]).read_text().splitlines()
-        inspections = sum("container" in json.loads(line)[1] for line in calls)
+        inspections = sum(
+            "container" in json.loads(line)[1]
+            and "com.docker.compose.project" not in " ".join(json.loads(line)[1])
+            for line in calls
+        )
         if (inspections > 1
                 and os.environ.get("DOCKER_TEST_FAIL_CURRENT_INSPECT") == "1"):
             sys.exit(1)
@@ -165,7 +172,11 @@ if name == "docker":
         if pathlib.Path('.chatgpt-deploy.json').exists():
             service['environment']['MOOMOO_TRADING_MODE'] = 'READ_ONLY'
             image = os.environ.get('CHATGPT_TUNNEL_IMAGE')
-            services['chatgpt-tunnel'] = {{'image': image}}
+            services['chatgpt-tunnel'] = {{'image': image, 'environment': {{
+                'CHATGPT_TUNNEL_API_KEY': os.environ.get(
+                    'DOCKER_TEST_TUNNEL_KEY', 'synthetic-key'),
+                'CHATGPT_TUNNEL_ID': 'tunnel_synthetic',
+            }}}}
         print(json.dumps({{"services": services}}))
     if "compose" in args and "config" not in args:
         with open(os.environ["CALL_LOG"], "a") as log:
@@ -196,9 +207,6 @@ if name == "curl":
             path = self.bin / name
             path.write_text(stub)
             path.chmod(0o755)
-        systemctl = self.bin / "systemctl"
-        systemctl.write_text('#!/bin/sh\n[ "$1" = is-active ] && exit 3\nexit 1\n')
-        systemctl.chmod(0o755)
         # Empty, so a file the deploy leaves behind (a secret, say) shows up.
         self.tmpdir = self.root / "tmp"
         self.tmpdir.mkdir()
@@ -238,7 +246,11 @@ if name == "curl":
     def compose_commands(self):
         """The Compose subcommand of each docker call, in order."""
         return [
-            args[args.index("docker-compose.prod.yml") + 1]
+            next(
+                arg
+                for arg in args
+                if arg in {"config", "pull", "up", "logs", "stop", "rm"}
+            )
             for name, args, _ in self.calls()
             if name == "docker" and "compose" in args
         ]
@@ -287,14 +299,113 @@ if name == "curl":
 
     def select_tunnel(self):
         selection = {
-            "version": 1,
+            "version": 2,
             "image": f"{REGISTRY}/moomoo-api-mcp@sha256:" + "a" * 64,
-            "secret_directory": "/synthetic/protected",
             "project": "existing-project",
         }
         path = self.repo / ".chatgpt-deploy.json"
         path.write_text(json.dumps(selection) + "\n")
         return path, selection
+
+    def test_first_enable_selects_matching_image_and_existing_project(self):
+        result = self.deploy("--chatgpt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        selected = json.loads((self.repo / ".chatgpt-deploy.json").read_text())
+        self.assertEqual(
+            selected,
+            {
+                "version": 2,
+                "image": f"{REGISTRY}/moomoo-api-mcp@sha256:" + "b" * 64,
+                "project": "existing-project",
+            },
+        )
+        self.assertIn(
+            "COMPOSE_PROJECT_NAME=existing-project",
+            (self.repo / ".deploy.env").read_text(),
+        )
+        self.assertFalse(
+            any("build" in args for name, args, _ in self.calls() if name == "docker")
+        )
+
+    def test_first_enable_missing_image_leaves_default_off(self):
+        self.env["AWS_TEST_TUNNEL"] = "missing"
+        result = self.deploy("--chatgpt")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        self.assertFalse((self.repo / ".deploy.env").exists())
+        self.assertTrue(all(name == "aws" for name, _, _ in self.calls()))
+
+    def test_first_enable_missing_key_restores_state_before_service_changes(self):
+        previous = self.save_previous_deploy()
+        target = self.add_newer_commit()
+        self.env["DOCKER_TEST_TUNNEL_KEY"] = ""
+        result = self.deploy("--chatgpt", target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CHATGPT_TUNNEL_API_KEY", result.stderr)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        self.assertEqual((self.repo / ".deploy.env").read_text(), previous)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual(self.compose_commands(), ["config"])
+
+    def test_failed_first_enable_removes_tunnel_and_restores_default_off(self):
+        previous = self.save_previous_deploy()
+        target = self.add_newer_commit()
+        self.env["DOCKER_TEST_FAIL_UP"] = "1"
+        result = self.deploy("--chatgpt", target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        self.assertEqual((self.repo / ".deploy.env").read_text(), previous)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        commands = self.compose_commands()
+        self.assertIn("stop", commands)
+        self.assertIn("rm", commands)
+        self.assertEqual(commands[-1], "up")
+        calls = [
+            args for name, args, _ in self.calls() if name == "docker" and "up" in args
+        ]
+        self.assertNotIn("docker-compose.chatgpt.yml", calls[-1])
+        self.assertIn("existing-project", calls[-1])
+
+    def test_disable_preserves_project_without_requiring_openai_key(self):
+        self.select_tunnel()
+        self.env["DOCKER_TEST_TUNNEL_KEY"] = ""
+        result = self.deploy("--no-chatgpt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        self.assertIn(
+            "COMPOSE_PROJECT_NAME=existing-project",
+            (self.repo / ".deploy.env").read_text(),
+        )
+        self.assertEqual(self.compose_commands()[:2], ["stop", "rm"])
+        self.assertEqual(sum(name == "aws" for name, _, _ in self.calls()), 1)
+        commands = [args for name, args, _ in self.calls() if name == "docker"]
+        self.assertFalse(any("down" in args or "volume" in args for args in commands))
+
+    def test_failure_after_disable_restores_tunnel_and_restarts_previous_stack(self):
+        path, selected = self.select_tunnel()
+        previous = self.save_previous_deploy()
+        target = self.add_newer_commit()
+        self.env["DOCKER_TEST_FAIL_PULL"] = "1"
+        result = self.deploy("--no-chatgpt", target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(path.read_text()), selected)
+        self.assertEqual((self.repo / ".deploy.env").read_text(), previous)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual(self.compose_commands()[-1], "up")
+        up = next(
+            args
+            for name, args, _ in reversed(self.calls())
+            if name == "docker" and "up" in args
+        )
+        self.assertIn("docker-compose.chatgpt.yml", up)
+        self.assertIn("existing-project", up)
+
+    def test_conflicting_tunnel_flags_and_prepare_disable_are_rejected(self):
+        for args in (("--chatgpt", "--no-chatgpt"), ("--prepare", "--no-chatgpt")):
+            with self.subTest(args=args):
+                result = self.deploy(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.calls())
 
     def test_selected_tunnel_deploys_matching_ci_digest_without_building(self):
         path, previous = self.select_tunnel()

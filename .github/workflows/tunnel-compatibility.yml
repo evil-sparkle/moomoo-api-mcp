@@ -35,7 +35,7 @@ jobs:
         run: |
           uv sync --frozen --all-extras --dev
           sudo apt-get update
-          sudo apt-get install -y acl uidmap dbus-user-session
+          sudo apt-get install -y uidmap dbus-user-session
       - name: Set up the disposable rootless daemon
         if: matrix.context == 'rootless'
         run: |
@@ -52,7 +52,7 @@ jobs:
         run: |
           docker build -t moomoo-tunnel-broker:ci .
           ./scripts/build-tunnel-image.sh
-      - name: Exercise the pinned client, real entrypoint and secret permissions
+      - name: Exercise the pinned client, real entrypoint and environment credentials
         run: TUNNEL_USE_IMAGE_SOURCE=1 ./scripts/test-tunnel-container.sh moomoo-tunnel-broker:ci
       - name: Describe the acceptance boundary
         if: always()

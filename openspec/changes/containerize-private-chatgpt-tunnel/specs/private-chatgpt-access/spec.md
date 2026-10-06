@@ -7,13 +7,11 @@
 The system SHALL provide an optional official OpenAI Secure MCP Tunnel client as
 a separate optional Compose container selected through an explicit overlay. It
 SHALL connect outbound to the OpenAI tunnel control plane and through Docker DNS
-to exactly `http://moomoo-mcp:8000/mcp` on a user-defined bridge. Legacy systemd
-assets SHALL remain available only for migration or rollback using
-`http://127.0.0.1:8000/mcp`; both mechanisms SHALL NOT run for the same tunnel. Enabling it SHALL NOT publish a new inbound port,
+to exactly `http://moomoo-mcp:8000/mcp` on a user-defined bridge. Enabling it SHALL NOT publish a new inbound port,
 change the MCP host publication from loopback, publish OpenD, add native TLS to the
 Python server, enable Tailscale Funnel, or require a firewall opening. Its health
 and administration endpoints SHALL listen only on its own container loopback
-(or host loopback for the legacy service), with no tunnel ports published.
+, with no tunnel ports published.
 
 #### Scenario: Tunnel is enabled
 
@@ -34,20 +32,13 @@ and administration endpoints SHALL listen only on its own container loopback
 - **WHEN** the explicit tunnel overlay is not selected
 - **THEN** normal deployment SHALL resolve and start without tunnel credentials, tunnel configuration or a host tunnel daemon
 
-#### Scenario: Legacy migration avoids competing consumers
-
-- **WHEN** the Compose tunnel replaces the legacy service
-- **THEN** the legacy unit SHALL be stopped and disabled before Compose starts the tunnel
-- **AND** rollback SHALL stop the Compose tunnel before re-enabling the legacy unit
-
 ### Requirement: Separate least-privilege identities and credentials
 
-The tunnel daemon SHALL run as a dedicated numeric non-root container UID/GID (or dedicated unprivileged host identity for legacy rollback) with no
+The tunnel daemon SHALL run as a dedicated numeric non-root container UID/GID with no
 brokerage, trade-unlock, operator-recovery, container-control, or OpenAI
 administration credential. It SHALL receive only a tunnel runtime credential,
 the selected tunnel identifier, and an ordinary MCP bearer credential. Secret
-values SHALL be supplied through a restrictive file for the OpenAI runtime key
-and explicit Compose injection of the existing `MCP_AUTH_TOKEN` for MCP access,
+values SHALL be supplied through explicit Compose environment injection of the limited OpenAI runtime key, tunnel identifier and existing `MCP_AUTH_TOKEN`,
 SHALL NOT be stored in tracked configuration or process arguments, and SHALL NOT be included
 in diagnostics or support output. The intended tunnel principals SHALL be
 limited to the owner-selected Platform organization and ChatGPT workspace.
@@ -90,26 +81,17 @@ limited to the owner-selected Platform organization and ChatGPT workspace.
 - **AND** the integration SHALL NOT retry without authentication or enable
   unauthenticated HTTP
 
-#### Scenario: Actual runtime identity reads mounted files
+#### Scenario: Trusted environment credentials
 
-- **WHEN** container secrets are provisioned for the selected Docker context
-- **THEN** host ownership SHALL be derived from a verified runtime UID/GID mapping
-- **AND** the actual non-root image process SHALL read the intended config and secret files through read-only mounts
-- **AND** file-backed secret permission overrides SHALL NOT be assumed to change host ownership
-
-#### Scenario: Protected master and staged copies
-
-- **WHEN** an unrelated host identity or the brokerage runtime identity attempts to read tunnel secret sources
-- **THEN** access SHALL be denied
-- **AND** root-only master files SHALL remain root-owned mode 0600 and unavailable to the tunnel runtime
-- **AND** staged copies SHALL be readable only by the intended mapped runtime identity apart from trusted host/Docker administrators
-- **AND** unsafe mappings or ownership SHALL fail closed without world-readable files or a root tunnel daemon
+- **WHEN** the optional service is deployed
+- **THEN** credentials SHALL come from the deployment environment without separate staging, root provisioning or bearer files
+- **AND** visibility to trusted Docker/host administrators through container/process environment SHALL be an explicitly accepted deployment trade-off
+- **AND** only the limited tunnel key, tunnel ID and ordinary MCP token SHALL be injected; brokerage/operator credentials SHALL NOT be copied
 
 #### Scenario: Credentials remain out of public channels
 
-- **WHEN** credentials are provisioned, built, mounted, rotated or diagnosed
+- **WHEN** credentials are provisioned, built, injected, rotated or diagnosed
 - **THEN** values SHALL NOT enter image layers, build arguments, Compose YAML, process arguments, tracked files or diagnostic output
-- **AND** provisioning SHALL preserve no-echo input, terminal restoration, restrictive ownership and atomic-write protections
 - **AND** the tunnel SHALL NOT inherit the brokerage environment
 
 ### Requirement: Server-enforced read-only access
@@ -155,9 +137,8 @@ operations documentation.
 
 The operator documentation SHALL identify the official documentation and stable
 tunnel-client release consulted, require version and integrity verification,
-recommend Compose installation and independent supervision, retain legacy migration/rollback instructions, and define secret rotation, diagnostics, and
-rollback, and preserve the existing local deployment throughout. Rollback SHALL
-disable and remove only the optional tunnel service and its non-shared secrets;
+define single-script deployment, independent supervision, environment configuration, credential rotation, diagnostics and rollback, and preserve the existing local deployment throughout. Rollback SHALL
+disable and remove only the optional tunnel service;
 it SHALL NOT delete or replace OpenD or execution-journal state.
 
 #### Scenario: Tunnel client is installed
@@ -170,7 +151,7 @@ it SHALL NOT delete or replace OpenD or execution-journal state.
 #### Scenario: Secrets are rotated
 
 - **WHEN** the tunnel runtime key or ordinary MCP bearer credential is rotated
-- **THEN** the Compose tunnel SHALL be force-recreated after updating the mapped runtime-key file or shared deployment token, or the legacy service restarted when that path is selected
+- **THEN** the Compose tunnel SHALL be force-recreated after updating its deployment environment credentials
 - **AND** actual authenticated traffic SHALL prove the new credentials are used and old
   credentials rejected without printing either value
 
@@ -181,11 +162,11 @@ it SHALL NOT delete or replace OpenD or execution-journal state.
 - **AND** the MCP container, local-client behavior, Tailscale administration,
   OpenD state volume, and execution-journal volume SHALL remain intact
 
-#### Scenario: Atomic replacement does not rely on stale bind mounts
+#### Scenario: Restart retains the old environment
 
-- **WHEN** a host secret is atomically replaced while its previous inode is mounted
-- **THEN** the rotation procedure SHALL recreate the tunnel container to remount the replacement
-- **AND** a process or container restart alone SHALL NOT be considered rotation evidence
+- **WHEN** a deployment environment credential changes while an existing container still has its previous value
+- **THEN** rotation SHALL recreate the affected containers and verify actual authenticated traffic
+- **AND** process/container restart alone SHALL NOT count as rotation evidence
 
 #### Scenario: Coordinated ordinary bearer rotation
 
@@ -242,11 +223,12 @@ version and archive integrity. Its managed runtime SHALL use the fixed
 `https://api.openai.com` control plane with certificate verification, the approved
 private MCP URL, a scrubbed environment and authenticated READ_ONLY startup.
 Acceptance SHALL require passing actual-image tests of normal authenticated
-polling, discovery and forwarding, negative authentication, rotation, permissions,
+polling, discovery and forwarding, negative authentication, rotation, runtime restrictions,
 isolation and recovery. A client fork SHALL NOT be required or shipped.
 
-Prior direct-client redirect, inherited-proxy and doctor findings SHALL remain
-in clearly labeled historical documentation with their original results. They
+Prior direct-client redirect, inherited-proxy and doctor findings SHALL retain
+their original results in earlier Git commits, without dated reports or a history
+folder in the current tree. They
 SHALL NOT be relabeled as passing managed-runtime tests or retained as recurring
 CI requirements. The owner accepts the documented conditional upstream
 limitations within this fixed deployment. The retired diagnostic runners and

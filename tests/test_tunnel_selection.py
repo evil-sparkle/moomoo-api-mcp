@@ -15,9 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def fixture_selection():
     return {
-        "version": 1,
+        "version": 2,
         "image": "sha256:" + "a" * 64,
-        "secret_directory": "/synthetic/protected",
         "project": "existing-project",
     }
 
@@ -44,8 +43,8 @@ def test_atomic_selection_preserves_identity(tmp_path):
             "123456789012.dkr.ecr.us-east-1.amazonaws.com/other@sha256:" + "a" * 64,
         ),
         ("project", "bad project"),
-        ("secret_directory", "/tmp/../credentials"),
-        ("secret_directory", "/tmp/path\nextra"),
+        ("version", 1),
+        ("unexpected_field", "synthetic"),
     ],
 )
 def test_selection_rejects_ambiguous_inputs(field, value):
@@ -56,7 +55,12 @@ def test_selection_rejects_ambiguous_inputs(field, value):
 
 
 def wrapper_fixture(
-    tmp_path, *, mode="READ_ONLY", token="synthetic-only", active=False
+    tmp_path,
+    *,
+    mode="READ_ONLY",
+    token="synthetic-only",
+    key="synthetic-key",
+    tunnel_id="tunnel_synthetic",
 ):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -65,12 +69,6 @@ def wrapper_fixture(
     selection.save(fixture_selection(), tmp_path / ".chatgpt-deploy.json")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    systemctl = fake_bin / "systemctl"
-    systemctl.write_text(
-        "#!/bin/sh\n"
-        + ("exit 0\n" if active else '[ "$1" = is-active ] && exit 3\nexit 1\n')
-    )
-    systemctl.chmod(0o755)
     model = {
         "services": {
             "moomoo-mcp": {
@@ -79,7 +77,12 @@ def wrapper_fixture(
                     "MOOMOO_TRADING_MODE": mode,
                 }
             },
-            "chatgpt-tunnel": {},
+            "chatgpt-tunnel": {
+                "environment": {
+                    "CHATGPT_TUNNEL_API_KEY": key,
+                    "CHATGPT_TUNNEL_ID": tunnel_id,
+                }
+            },
         }
     }
     docker = fake_bin / "docker"
@@ -97,7 +100,7 @@ def wrapper_fixture(
     return scripts, {"PATH": str(fake_bin) + ":" + os.environ["PATH"]}
 
 
-def test_ecr_image_update_preserves_project_and_secret_directory(tmp_path, monkeypatch):
+def test_ecr_image_update_preserves_project(tmp_path, monkeypatch):
     import sys
 
     selected = tmp_path / "selection.json"
@@ -169,7 +172,8 @@ def test_wrapper_allows_explicit_authenticated_read_only_start(tmp_path, operati
         ({"mode": "REAL"}, "READ_ONLY"),
         ({"token": ""}, "MCP_AUTH_TOKEN"),
         ({"token": "   "}, "MCP_AUTH_TOKEN"),
-        ({"active": True}, "legacy"),
+        ({"key": ""}, "CHATGPT_TUNNEL_API_KEY"),
+        ({"tunnel_id": "invalid"}, "CHATGPT_TUNNEL_ID"),
     ],
 )
 def test_wrapper_rejects_unsafe_start_before_daemon_action(
@@ -206,36 +210,6 @@ def test_wrapper_rejects_invalid_selection_before_daemon_action(tmp_path):
     assert result.returncode != 0
     assert "Invalid tunnel selection" in result.stdout + result.stderr
     assert not (tmp_path / "started").exists()
-
-
-@pytest.mark.parametrize("codes", [(0, 1), (3, 0), (1, 1), (3, 2)])
-def test_legacy_active_enabled_or_unknown_refuses_start(monkeypatch, codes):
-    from unittest.mock import Mock
-
-    monkeypatch.setattr(
-        selection.subprocess,
-        "run",
-        Mock(side_effect=[subprocess.CompletedProcess([], code) for code in codes]),
-    )
-    with pytest.raises(ValueError, match="legacy"):
-        selection.check_legacy_inactive()
-
-
-def test_legacy_inactive_and_disabled_can_be_confirmed_without_starting_it(monkeypatch):
-    from unittest.mock import Mock
-
-    runner = Mock(
-        side_effect=[
-            subprocess.CompletedProcess([], 3),
-            subprocess.CompletedProcess([], 1),
-        ]
-    )
-    monkeypatch.setattr(selection.subprocess, "run", runner)
-    selection.check_legacy_inactive()
-    assert [call.args[0][1] for call in runner.call_args_list] == [
-        "is-active",
-        "is-enabled",
-    ]
 
 
 @pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])

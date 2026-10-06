@@ -109,31 +109,7 @@ print(
     ),
     flush=True,
 )
-docker_host = run(
-    docker
-    + [
-        "context",
-        "inspect",
-        args.docker_context,
-        "--format",
-        "{{.Endpoints.docker.Host}}",
-    ]
-)
-mapping = json.loads(
-    run(
-        [
-            "sudo",
-            "-n",
-            "python3",
-            str(root / "scripts/stage_tunnel_secrets.py"),
-            "--docker-host",
-            docker_host,
-            "--image",
-            image,
-        ]
-    )
-)
-# Public config contains file references; protected fixture masters are root-only.
+# Only public configuration is bind-mounted. Credentials are synthetic env values.
 config = (
     (root / "deploy/tunnel-client/container/tunnel-client.yaml")
     .read_text()
@@ -143,76 +119,6 @@ config = (
 (workspace / "client.yaml").chmod(0o644)
 (workspace / "config.sha256").write_text(hashlib.sha256(config.encode()).hexdigest())
 (workspace / "config.sha256").chmod(0o644)
-secret_fixture = str(root / "tests/fixtures/tunnel_secret_fixture.py")
-secret_root = pathlib.Path(
-    json.loads(
-        run(
-            [
-                "sudo",
-                "-n",
-                "python3",
-                secret_fixture,
-                "create",
-                "--daemon-uid",
-                str(mapping["daemon_uid"]),
-                "--runtime-uid",
-                str(mapping["uid"]),
-            ]
-        )
-    )["directory"]
-)
-
-
-def cleanup_secrets():
-    if secret_root.exists():
-        run(
-            [
-                "sudo",
-                "-n",
-                "python3",
-                secret_fixture,
-                "remove",
-                "--directory",
-                str(secret_root),
-            ]
-        )
-
-
-atexit.register(cleanup_secrets)
-staging_command = [
-    "sudo",
-    "-n",
-    "python3",
-    str(root / "scripts/stage_tunnel_secrets.py"),
-    "--docker-host",
-    docker_host,
-    "--image",
-    image,
-    "--master-directory",
-    str(secret_root / "master"),
-    "--staging-directory",
-    str(secret_root / "staged"),
-]
-run(staging_command)
-print(
-    run(
-        [
-            "sudo",
-            "-n",
-            "python3",
-            secret_fixture,
-            "verify-rejections",
-            "--directory",
-            str(secret_root),
-            "--runtime-uid",
-            str(mapping["uid"]),
-            "--runtime-gid",
-            str(mapping["gid"]),
-        ]
-    ),
-    flush=True,
-)
-run(staging_command)
 # Docker 28 requires an explicitly configured subnet for the old-IP holder.
 # Select a free benchmark-network subnet only for this disposable fixture.
 network_ids = run(docker + ["network", "ls", "-q"]).splitlines()
@@ -266,7 +172,11 @@ fixture = {
                 ),
                 "http://tunnel-control-plane:8082",
             )
-            | {"MCP_AUTH_TOKEN": "synthetic-mcp-token"},
+            | {
+                "MCP_AUTH_TOKEN": "synthetic-mcp-token",
+                "CHATGPT_TUNNEL_API_KEY": "synthetic-runtime-key",
+                "CHATGPT_TUNNEL_ID": "tunnel_0123456789abcdef0123456789abcdef",
+            },
             "networks": ["fixture-only"],
             "volumes": [
                 str(workspace / "client.yaml") + ":/etc/tunnel-client.yaml:ro",
@@ -276,12 +186,12 @@ fixture = {
         "tunnel-control-plane": {
             "image": image,
             "entrypoint": ["python", "/fixture.py"],
+            "environment": {"FIXTURE_RUNTIME_KEY": "synthetic-runtime-key"},
             "user": "10002:10002",
             "read_only": True,
             "networks": ["fixture-only"],
             "volumes": [
                 str(workspace / "control-plane.py") + ":/fixture.py:ro",
-                str(secret_root / "staged") + ":/expected:ro",
             ],
         },
     },
@@ -313,7 +223,8 @@ env = {
     "PATH": os.environ["PATH"],
     "HOME": os.environ["HOME"],
     "CHATGPT_TUNNEL_IMAGE": image,
-    "CHATGPT_TUNNEL_SECRET_DIR": str(secret_root / "staged"),
+    "CHATGPT_TUNNEL_API_KEY": "synthetic-runtime-key",
+    "CHATGPT_TUNNEL_ID": "tunnel_0123456789abcdef0123456789abcdef",
     "MCP_AUTH_TOKEN": "synthetic-mcp-token",
 }
 compose = docker + [
@@ -522,23 +433,21 @@ print('MCP reachable; OpenD bridge access refused')"""
     )
     print(run(compose + ["logs", "--no-color", "chatgpt-tunnel"], env=env), flush=True)
 
-    # Read-only mounts and the real numeric runtime identity, without echoing files.
+    # Explicit environment credentials and numeric identity; no values echoed.
     permissions = """import os
 from pathlib import Path
 assert os.getuid()==10002 and os.getgid()==10002
 assert os.environ['MCP_AUTH_TOKEN']=='synthetic-mcp-token'
 assert not Path('/run/secrets/mcp-authorization').exists()
-for name in ('control-plane-api-key','tunnel-id'):
-    path=Path('/run/secrets')/name
-    assert path.read_bytes()
-    try: path.write_text('must-not-write')
-    except OSError: pass
-    else: raise AssertionError('writable credential mount')
+assert os.environ['CHATGPT_TUNNEL_API_KEY']=='synthetic-runtime-key'
+assert os.environ['CHATGPT_TUNNEL_ID'].startswith('tunnel_')
+assert not Path('/run/secrets/control-plane-api-key').exists()
+assert not Path('/run/secrets/tunnel-id').exists()
 try: Path('/tmp/must-not-write').touch()
 except OSError: pass
 else: raise AssertionError('writable root filesystem')
 assert not Path('/opt/moomooOpenD').exists()
-print('PASS: numeric UID reads intended mounts; writes refused')"""
+print('PASS: non-root environment credentials; root filesystem writes refused')"""
     print(
         run(
             compose + ["exec", "-T", "chatgpt-tunnel", "python", "-c", permissions],
@@ -546,73 +455,43 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
         ),
         flush=True,
     )
-    for uid, gid in (
-        (mapping["daemon_uid"], mapping["daemon_uid"]),
-        (mapping["uid"] - 1, mapping["gid"] - 1),
-        (mapping["uid"], mapping["gid"]),
-    ):
-        if uid:
-            for area in ("master", "staged"):
-                probe_code = (
-                    "import os,sys; assert os.geteuid()==int(sys.argv[1]); "
-                    "assert os.access(sys.argv[2],os.R_OK)==(sys.argv[3]=='1')"
-                )
-                run(
-                    [
-                        "sudo",
-                        "-n",
-                        "setpriv",
-                        f"--reuid={uid}",
-                        f"--regid={gid}",
-                        "--clear-groups",
-                        "python3",
-                        "-c",
-                        probe_code,
-                        str(uid),
-                        str(secret_root / area / "control-plane-api-key"),
-                        "1" if uid == mapping["uid"] and area == "staged" else "0",
-                    ]
-                )
-    print("PASS: unrelated identities cannot read protected host sources", flush=True)
-
-    # Root master -> atomic mapped staging -> actual client authentication.
+    # Explicit runtime-key rotation: restart keeps old env, recreation adopts new.
     before = control_stats()
+    rotate = (
+        "import urllib.request;urllib.request.urlopen(urllib.request.Request("
+        "'http://127.0.0.1:8081/rotate-runtime',data=b''))"
+    )
     run(
-        [
-            "sudo",
-            "-n",
-            "python3",
-            secret_fixture,
-            "rotate-runtime",
-            "--directory",
-            str(secret_root),
-        ]
+        compose + ["exec", "-T", "tunnel-control-plane", "python", "-c", rotate],
+        env=env,
     )
-    run(staging_command)
     wait_for(lambda: control_stats()["rejected"] > before["rejected"], 30)
-    print("PASS: old runtime key rejected after atomic staging", flush=True)
-    old_mount = (
-        "from pathlib import Path;"
-        "assert Path('/run/secrets/control-plane-api-key').read_text()"
-        "=='synthetic-runtime-key'"
+    fixture["services"]["chatgpt-tunnel"]["environment"]["CHATGPT_TUNNEL_API_KEY"] = (
+        "synthetic-runtime-key-rotated"
     )
-    run(compose + ["exec", "-T", "chatgpt-tunnel", "python", "-c", old_mount], env=env)
+    env["CHATGPT_TUNNEL_API_KEY"] = "synthetic-runtime-key-rotated"
+    updated = (
+        yaml.safe_dump(fixture)
+        .replace(
+            "    container_name: null",
+            '    container_name: !reset null\n    ports: !override ["127.0.0.1::8000"]',
+        )
+        .replace("    build: null", "    build: !reset null")
+    )
+    (workspace / "fixture.yml").write_text(updated)
+    accepted_before_restart = control_stats()["authenticated"]
+    run(compose + ["restart", "chatgpt-tunnel"], env=env)
+    time.sleep(15)
+    assert control_stats()["authenticated"] == accepted_before_restart
     print(
-        "PASS: atomic replacement leaves the running file bind on its old inode",
+        "PASS: old runtime key rejected; restart retains old environment",
         flush=True,
     )
-    accepted_after_staging = control_stats()["authenticated"]
-    run(compose + ["restart", "chatgpt-tunnel"], env=env)
-    # Docker versions may remount file sources on restart. Record, do not assume.
-    time.sleep(15)
-    restarted = control_stats()["authenticated"] > accepted_after_staging
-    print(json.dumps({"restart_observed_new_runtime_key": restarted}), flush=True)
-    before_recreate = control_stats()["authenticated"]
     run(
         compose + ["up", "-d", "--no-deps", "--force-recreate", "chatgpt-tunnel"],
         env=env,
     )
-    wait_for(lambda: control_stats()["authenticated"] > before_recreate)
+    wait_for(lambda: control_stats()["authenticated"] > accepted_before_restart)
     print(
         "PASS: recreated real client authenticates with rotated runtime key", flush=True
     )
@@ -966,7 +845,7 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
     )
 
     # Run the real disable helper against this disposable Compose project only.
-    # The temporary wrapper contains paths/selection metadata, never credentials.
+    # The mode-0700 temporary wrapper contains only synthetic fixture credentials.
     from scripts import tunnel_deployment
 
     wrapper = workspace / "scripts" / "compose-prod.sh"
@@ -985,9 +864,8 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
     selection_file = workspace / ".chatgpt-deploy.json"
     tunnel_deployment.save(
         {
-            "version": 1,
+            "version": 2,
             "image": image,
-            "secret_directory": str(secret_root / "staged"),
             "project": project,
         },
         selection_file,
@@ -1116,15 +994,4 @@ print('PASS: numeric UID reads intended mounts; writes refused')"""
 
 finally:
     run(compose + ["down", "-v", "--remove-orphans"], env=env)
-    run(
-        [
-            "sudo",
-            "-n",
-            "python3",
-            secret_fixture,
-            "remove",
-            "--directory",
-            str(secret_root),
-        ]
-    )
     shutil.rmtree(workspace)

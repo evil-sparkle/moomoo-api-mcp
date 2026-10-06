@@ -25,6 +25,8 @@ spec.loader.exec_module(runtime)
 @pytest.fixture
 def authorization(monkeypatch):
     monkeypatch.setenv("MCP_AUTH_TOKEN", "synthetic-mcp")
+    monkeypatch.setenv("CHATGPT_TUNNEL_API_KEY", "synthetic-runtime-key")
+    monkeypatch.setenv("CHATGPT_TUNNEL_ID", "tunnel_synthetic")
 
 
 def test_shared_token_normalization_matches_mcp_settings(monkeypatch):
@@ -95,12 +97,7 @@ def test_signal_forwarding_and_reaping():
 
 
 @pytest.mark.usefixtures("authorization")
-def test_child_environment_discards_proxy_and_credential_overrides(
-    tmp_path, monkeypatch
-):
-    identifier = tmp_path / "synthetic-tunnel-id"
-    identifier.write_text("tunnel_0123456789abcdef0123456789abcdef")
-    monkeypatch.setattr(runtime, "TUNNEL_ID", identifier)
+def test_child_environment_discards_proxy_and_credential_overrides(monkeypatch):
     for key in (
         "HTTP_PROXY",
         "http_proxy",
@@ -119,8 +116,11 @@ def test_child_environment_discards_proxy_and_credential_overrides(
         "HOME",
         "PATH",
         "CONTROL_PLANE_TUNNEL_ID",
+        "CONTROL_PLANE_API_KEY",
         "MCP_AUTHORIZATION",
     }
+    assert environment["CONTROL_PLANE_API_KEY"] == "synthetic-runtime-key"
+    assert environment["CONTROL_PLANE_TUNNEL_ID"] == "tunnel_synthetic"
     assert environment["MCP_AUTHORIZATION"] == "Bearer synthetic-mcp"
     assert "synthetic-must-not-inherit" not in environment.values()
 
@@ -168,3 +168,28 @@ def test_main_never_launches_child_when_authenticated_gate_fails(monkeypatch):
     monkeypatch.setattr(runtime.subprocess, "Popen", spawn)
     assert runtime.main() == 1
     spawn.assert_not_called()
+
+
+@pytest.mark.usefixtures("authorization")
+@pytest.mark.parametrize(
+    "variable,value",
+    [
+        ("CHATGPT_TUNNEL_API_KEY", ""),
+        ("CHATGPT_TUNNEL_API_KEY", "synthetic\r\ninjection"),
+        ("CHATGPT_TUNNEL_ID", ""),
+        ("CHATGPT_TUNNEL_ID", "https://unexpected.invalid"),
+    ],
+)
+def test_invalid_openai_settings_never_connect_or_spawn(
+    monkeypatch, capsys, variable, value
+):
+    monkeypatch.setenv(variable, value)
+    monkeypatch.setattr(runtime, "verify_config", Mock())
+    monkeypatch.setattr(runtime.sys, "argv", ["runtime.py"])
+    connect, spawn = Mock(), Mock()
+    monkeypatch.setattr(runtime, "McpClient", connect)
+    monkeypatch.setattr(runtime.subprocess, "Popen", spawn)
+    assert runtime.main() == 1
+    connect.assert_not_called()
+    spawn.assert_not_called()
+    assert "synthetic" not in capsys.readouterr().out

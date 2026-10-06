@@ -2,34 +2,31 @@
 
 ## Why
 
-PR #36 made private ChatGPT access depend on a host-installed daemon and systemd unit. An explicitly selected Compose overlay will make this optional path reproducible alongside the existing deployment while preserving the brokerage container and its security boundaries.
+Private ChatGPT access should deploy through the existing manual deployment script and CI-published ECR images. Operators should only configure the deployment environment and run one command, without building another image, staging credentials or maintaining a tunnel-client fork.
 
 ## What Changes
 
-- Recommend a separate `chatgpt-tunnel` container using the official pinned client; retain systemd assets only for legacy migration and rollback.
-- Connect through Docker DNS to exactly `http://moomoo-mcp:8000/mcp` on a user-defined bridge, with independent namespaces, outbound access, no tunnel port publication, and container-loopback diagnostics.
-- Add narrow opt-ins for that preflight destination and server Host, preserving bearer authentication, Origin rejection, stateless transport, annotations and READ_ONLY enforcement.
-- Build and publish the small dedicated tunnel image through the existing GitHub Actions/ECR pipeline, using `tunnel-<commit>` tags in the existing `moomoo-api-mcp` repository. Production pulls the matching immutable digest without an operator build. Verify the existing release, run a numeric non-root identity with restrictive filesystem/capability settings, and gate forwarding on bounded authenticated startup checks.
-- Reuse the existing `MCP_AUTH_TOKEN` through explicit Compose environment injection and derive the ordinary bearer header in the launcher. Provision the OpenAI runtime key and tunnel ID through mapped read-only files with root-only masters. Specify coordinated rotation and forced recreation, with behavioral evidence of new credentials being used.
-- Integrate disposable container tests into CI and document installation, diagnostics, migration, rotation, disablement and rollback.
-- Use the unmodified official client in a fixed, managed deployment: authenticated OpenAI HTTPS, an exact private MCP URL, a scrubbed environment and server-enforced READ_ONLY. Validate normal forwarding, negative authentication, rotation, isolation and recovery through the real container entrypoint.
-- Remove prior dated diagnostic reports/results from the current tree, along with the recurring report job and its unused runners/fixtures. Their original results remain in Git history. The owner accepts those conditional limitations for this deployment; maintaining a client fork or an adversarial upstream-client test suite is outside this integration's scope.
+- Add a default-off, separate official-client Compose service with independent recovery and no published ports, brokerage state or shared namespaces.
+- Build both application and tunnel images in existing CI and publish them on main to the existing ECR repository, using distinct tunnel tags and immutable production selection.
+- Make `scripts/deploy.sh` the sole operator deployment entrypoint: `--chatgpt` enables and saves selection, normal deploys retain it, and `--no-chatgpt` disables it. Image selection and the existing Compose project are automatic.
+- Supply `CHATGPT_TUNNEL_API_KEY`, `CHATGPT_TUNNEL_ID` and the existing `MCP_AUTH_TOKEN` through explicit Compose environment injection. Update the public example template. Remove mounted-secret provisioning and legacy host-service assets.
+- Preserve authenticated READ_ONLY startup, exact MCP Host/destination opt-ins, proxy filtering, fixed official HTTPS endpoint, server trading policy and bounded process recovery.
+- Trust the official OpenAI endpoint and Docker host; accept the unchanged upstream redirect limitation. Remove old diagnostic code/jobs and dated reports; original findings remain in Git history.
+- Keep site-specific migration instructions outside the repository, deliver them in chat and on the server, and perform deployment after PR merge using available permissions and credentials.
 
 ## Capabilities
 
 ### New Capabilities
 
-None; extend the existing security and deployment contracts.
+None.
 
 ### Modified Capabilities
 
-- `private-chatgpt-access`: Compose-first optional runtime, restricted container credentials, startup/recovery and rotation procedures.
-- `container-deployment`: distinguish the unchanged two-process brokerage container from the additional optional tunnel container; preserve network and state isolation.
-- `transport-sessions`: explicitly opted-in Docker service Host and approved destination without relaxed authentication or Origin protection.
-- `configuration`: exact, default-off integration setting rather than configurable wildcard/private-network trust.
+- `private-chatgpt-access`: optional Compose runtime, environment credentials, READ_ONLY controls, reproducible operations and current acceptance.
+- `container-deployment`: separate hardened tunnel container and one-script CI-image deployment with persistent project/volume identity and rollback.
+- `transport-sessions`: exact opted-in Docker Host/destination, preserved authentication and proxy filtering.
+- `configuration`: default-off exact Host setting and explicit optional deployment configuration.
 
 ## Impact
 
-Expected implementation touches `deploy/tunnel-client/`, a new `docker-compose.chatgpt.yml`, deployment wrappers, preflight and credential helpers, `server.py`/`settings.py`, CI, focused tests and deployment documentation. The design lists concrete paths and verification gates. No gateway redesign, OAuth, public ingress, trading enablement, tool expansion, release upgrade, or live deployment is included.
-
-Baseline: `origin/main` at `cd6bb2d821550d82b90dfba0214e9891a3c319f5` (merged PR #36). The archived `add-private-chatgpt-mcp-access` remains unchanged. PR #37 approved the proposal; PR #38 is the separate implementation. On 2026-10-07 the owner authorized revising requirements and implementation around the official-client approach, ending fork development. The v0.0.14 integrity pin remains unchanged; original diagnostic evidence stays in earlier Git commits. Default deployment stays tunnel-free. This work updates the managed acceptance gates, CI, deployment tooling and runbooks; it does not execute a production migration, merge, enable trading, or claim live OpenAI/ChatGPT/iPad acceptance. See design.md and tasks.md for the current scope and remaining verification.
+Changes affect Compose, the official image/launcher, deployment helpers, CI, tests and runbooks. The official v0.0.14 release/integrity pin and brokerage trading policy remain unchanged. Runtime credentials are deliberately visible to trusted Docker/host administrators. Production deployment waits for PR merge; OpenAI workspace/product acceptance remains a separate live check. Archive and sync this OpenSpec change only after the owner gives final PR approval in chat.

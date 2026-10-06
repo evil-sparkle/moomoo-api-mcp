@@ -205,39 +205,21 @@ context: |
   - An order whose outcome is unknown must be reconciled by querying orders or
     deals, never by retrying.
 
-  Optional tunnel migration: `containerize-private-chatgpt-tunnel` adds an explicitly
-  selected separate Compose container; the brokerage container still supervises
-  only MCP and OpenD. The 2026-10-07 revision uses the unmodified official client,
-  fixed endpoints, clean environment and authenticated READ_ONLY startup. Managed
-  integration checks are required; prior redirect/proxy/doctor findings are
-  retained in earlier Git commits; dated reports, diagnostic runners and their
-  report job are removed from the current tree. Preserve the official pin. Live OpenAI/ChatGPT/iPad milestones remain separate.
-  CI publishes the optional image to the existing ECR repository using tunnel-prefixed
-  commit tags. Enabled deployments resolve and save its immutable digest and pull
-  both images; production hosts do not build it separately. Default remains off.
-  The tunnel reuses the deployment MCP_AUTH_TOKEN through explicit Compose
-  environment injection; only the OpenAI runtime key and tunnel ID are staged as
-  protected files. Ordinary bearer rotation recreates both containers and updates
-  authorized local clients; restarts retain the old container environment.
-
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
-
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+  Optional official tunnel: containerize-private-chatgpt-tunnel adds an explicitly
+  selected separate Compose container; brokerage still supervises MCP and OpenD.
+  The unmodified official client uses fixed endpoints, a filtered child environment
+  and authenticated READ_ONLY startup. Trust in OpenAI and the Docker host includes
+  accepted upstream redirect limitations. Preserve the official release pin.
+  CI publishes the optional image to the existing ECR repository with tunnel-prefixed
+  commit tags. scripts/deploy.sh is the sole manual deployment entrypoint: --chatgpt
+  selects the matching immutable image and retains the existing project; later
+  deployments keep that selection, and --no-chatgpt disables the optional service.
+  Production hosts do not build the image or stage credential files separately.
+  Compose injects only MCP_AUTH_TOKEN, CHATGPT_TUNNEL_API_KEY and CHATGPT_TUNNEL_ID
+  from the deployment environment. Normal restarts reuse the same values;
+  deliberate rotation recreates affected containers. Managed rootful/rootless
+  integration is required. Retired diagnostic runners and dated reports remain
+  only in earlier Git commits. Site migration instructions stay outside this
+  repository; perform migration after PR merge with available permissions/credentials.
+  Archive/sync this OpenSpec change only after final owner approval in chat.
+  Live OpenAI/ChatGPT/iPad milestones remain separate.

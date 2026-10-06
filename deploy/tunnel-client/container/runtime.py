@@ -26,7 +26,6 @@ RUNTIME = Path("/run/moomoo-chatgpt-tunnel")
 BINARY = "/usr/local/bin/tunnel-client"
 CONFIG = "/etc/tunnel-client.yaml"
 CONFIG_DIGEST = Path("/opt/tunnel/config.sha256")
-TUNNEL_ID = Path("/run/secrets/tunnel-id")
 
 
 def report(message: str) -> None:
@@ -53,13 +52,17 @@ def authorization_header() -> str:
 
 
 def child_environment() -> dict[str, str]:
-    tunnel_id = TUNNEL_ID.read_text().strip()
+    tunnel_id = os.environ.get("CHATGPT_TUNNEL_ID", "").strip()
     if not re.fullmatch(r"tunnel_[a-zA-Z0-9_-]{1,128}", tunnel_id):
         raise ValueError("invalid tunnel identifier")
+    key = os.environ.get("CHATGPT_TUNNEL_API_KEY", "")
+    if not key.strip() or any(character < " " or character > "~" for character in key):
+        raise ValueError("invalid tunnel runtime key")
     return {
         "HOME": str(RUNTIME),
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "CONTROL_PLANE_TUNNEL_ID": tunnel_id,
+        "CONTROL_PLANE_API_KEY": key.strip(),
         "MCP_AUTHORIZATION": authorization_header(),
     }
 
@@ -195,9 +198,7 @@ def main() -> int:
         finally:
             stop_child(child, received[0])
     except (OSError, ValueError, PreflightError, subprocess.SubprocessError):
-        report(
-            "startup failed; inspect credentials, file permissions and configuration"
-        )
+        report("startup failed; inspect environment settings and configuration")
         return 1
 
 

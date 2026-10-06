@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Validate the private loopback MCP endpoint without exposing its credential.
+"""Shared authenticated MCP preflight for local and explicitly selected Docker URLs.
 
-The Authorization header is read from a restricted file (normally a systemd
-credential). It is never accepted on the command line and response bodies are
-never included in diagnostics because account results can contain private data.
+The managed container passes its environment-derived header directly to McpClient.
+The standalone acceptance CLI accepts a protected header file, never a credential
+on the command line. Diagnostics exclude response bodies and account data.
 """
 
 from __future__ import annotations

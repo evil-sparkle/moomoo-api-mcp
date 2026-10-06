@@ -415,7 +415,4 @@ if ! session_still_lists_tools "${session}"; then
   exit 1
 fi
 
-echo "==> the optional tunnel host keeps credential sources root-only"
-./scripts/test-tunnel-host-permissions.sh "$SMOKE_IMAGE"
-
 echo "PASSED: the gateway restarts alone, the server takes the container with it."

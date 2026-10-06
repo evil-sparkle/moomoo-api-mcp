@@ -3,9 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # The saved deployment is authoritative, including after a new deployment.
-unset ECR_REGISTRY IMAGE_TAG
-# chatgpt-selection-schema-v1: kept across checkouts; no credential values here.
-# chatgpt-selection-ecr-v1: immutable ECR references and CI-managed updates.
+unset ECR_REGISTRY IMAGE_TAG COMPOSE_PROJECT_NAME
+# chatgpt-selection-env-v2: CI-managed immutable images; credentials stay in .env.
 optional=()
 if [ -f .chatgpt-deploy.json ]; then
   if ! values="$(python3 scripts/tunnel_deployment.py compose-values)"; then
@@ -14,8 +13,7 @@ if [ -f .chatgpt-deploy.json ]; then
   fi
   mapfile -t selected <<< "$values"
   export CHATGPT_TUNNEL_IMAGE="${selected[0]}"
-  export CHATGPT_TUNNEL_SECRET_DIR="${selected[1]}"
-  optional=(-p "${selected[2]}" -f docker-compose.chatgpt.yml)
+  optional=(-p "${selected[1]}" -f docker-compose.chatgpt.yml)
   for argument in "$@"; do
   case "$argument" in
     up|start|restart|run|create)

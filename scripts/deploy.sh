@@ -1,17 +1,34 @@
 #!/usr/bin/env bash
-# Usage: deploy.sh [--prepare] [commit]
+# Manual deployment entrypoint: CI supplies both images; settings live in .env.
+# Usage: deploy.sh [--prepare] [--chatgpt|--no-chatgpt] [commit]
 set -euo pipefail
 ORIGINAL_ARGS=("$@")
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO_ROOT"
 prepare=false
-if [ "${1:-}" = "--prepare" ]; then
-  prepare=true
+tunnel_mode=retain
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prepare) prepare=true ;;
+    --chatgpt|--no-chatgpt)
+      if [ "$tunnel_mode" != retain ]; then
+        echo 'Choose only one of --chatgpt and --no-chatgpt.' >&2
+        exit 1
+      fi
+      if [ "$1" = --chatgpt ]; then tunnel_mode=enable; else tunnel_mode=disable; fi
+      ;;
+    --*) echo 'Unknown deployment option.' >&2; exit 1 ;;
+    *) break ;;
+  esac
   shift
-fi
+done
 if [ "$#" -gt 1 ]; then
-  echo 'Usage: scripts/deploy.sh [--prepare] [commit]' >&2
+  echo 'Usage: scripts/deploy.sh [--prepare] [--chatgpt|--no-chatgpt] [commit]' >&2
+  exit 1
+fi
+if [ "$prepare" = true ] && [ "$tunnel_mode" = disable ]; then
+  echo '--no-chatgpt stops the tunnel; omit --prepare.' >&2
   exit 1
 fi
 registry="${ECR_REGISTRY:-}"
@@ -57,12 +74,14 @@ fi
 git fetch --quiet origin main
 commit="$(git rev-parse --verify --end-of-options "${1:-origin/main}^{commit}")"
 short="${commit:0:7}"
-if [ -f .chatgpt-deploy.json ]; then
-  if ! git show "${commit}:scripts/compose-prod.sh" | grep -q chatgpt-selection-ecr-v1; then
+tunnel_selected=false
+if [ "$tunnel_mode" = enable ] || { [ -f .chatgpt-deploy.json ] && [ "$tunnel_mode" != disable ]; }; then
+  tunnel_selected=true
+  if ! git show "${commit}:scripts/compose-prod.sh" | grep -q chatgpt-selection-env-v2; then
     echo 'Disable the tunnel before selecting an older unsupported deployment.' >&2
     exit 1
   fi
-  python3 scripts/tunnel_deployment.py check-start
+  if [ -f .chatgpt-deploy.json ]; then python3 scripts/tunnel_deployment.py check-start; fi
 fi
 
 if [ "${DEPLOY_REEXEC:-0}" != "1" ]; then
@@ -106,7 +125,7 @@ else
   exit 1
 fi
 tunnel_image=""
-if [ -f .chatgpt-deploy.json ]; then
+if [ "$tunnel_selected" = true ]; then
   if ! tunnel_digest="$(aws ecr batch-get-image --region "$region" --registry-id "$account" \
     --repository-name moomoo-api-mcp --image-ids "imageTag=tunnel-${short}" \
     --query 'images[0].imageId.imageDigest' --output text)" \
@@ -125,6 +144,8 @@ finish_deploy() {
   local has_previous_env=false
   local previous_image=""
   local previous_selection=""
+  local tunnel_stopped=false
+  local deployment_project=""
   if [ -f .chatgpt-deploy.json ]; then
     previous_selection="$(cat .chatgpt-deploy.json)"
   fi
@@ -169,22 +190,37 @@ finish_deploy() {
 
   rollback() {
     local started_services="${1:-true}"
+    if [ "$tunnel_stopped" = true ]; then started_services=true; fi
     if [ -n "$previous_selection" ]; then
       printf '%s\n' "$previous_selection" > .chatgpt-deploy.json
+    else
+      if [ "$started_services" = true ] && [ -f .chatgpt-deploy.json ]; then
+        ./scripts/compose-prod.sh stop chatgpt-tunnel >/dev/null 2>&1 \
+          || echo 'Could not stop the newly enabled tunnel; rollback will retry cleanup.' >&2
+        ./scripts/compose-prod.sh rm -f chatgpt-tunnel >/dev/null 2>&1 \
+          || echo 'Could not remove the newly enabled tunnel; verify rollback cleanup.' >&2
+      fi
+      rm -f .chatgpt-deploy.json
     fi
     if [ "$has_previous_env" = true ]; then
       printf '%s\n' "$previous_env" > .deploy.env
       git checkout --quiet --detach "$previous_commit"
       local prev_short="${previous_commit:0:7}"
       if [ "$started_services" = true ]; then
-        if ! ./scripts/compose-prod.sh up -d --remove-orphans; then
-          echo "Rolled back .deploy.env and the checkout to ${prev_short} but restarting the previous images FAILED. Stack needs manual attention: scripts/compose-prod.sh up -d" >&2
+        local rollback_project=()
+        if [ -z "$previous_selection" ] && [ -n "$deployment_project" ]; then
+          rollback_project=(-p "$deployment_project")
+        fi
+        if ! ./scripts/compose-prod.sh "${rollback_project[@]}" up -d --remove-orphans; then
+          echo "Rolled back configuration and checkout to ${prev_short}, but restarting prior images failed. Stack needs manual attention: retry scripts/deploy.sh for that commit." >&2
           exit 1
         fi
       fi
       echo "Rolled back to ${prev_short}" >&2
     else
-      echo "No previous deploy state to roll back to." >&2
+      rm -f .deploy.env
+      git checkout --quiet --detach "$previous_commit"
+      echo "No previous deploy state to roll back to; checkout restored." >&2
     fi
     exit 1
   }
@@ -199,15 +235,60 @@ finish_deploy() {
       --format '{{.Image}}' moomoo-api-mcp 2>/dev/null)" || previous_image=""
   fi
 
-  git checkout --quiet --detach "$commit"
+  if [ -f .chatgpt-deploy.json ]; then
+    local values
+    values="$(python3 scripts/tunnel_deployment.py compose-values)" || rollback false
+    deployment_project="${values##*$'\n'}"
+  elif [ -f .deploy.env ]; then
+    local line
+    while IFS= read -r line; do
+      if [ "${line%%=*}" = COMPOSE_PROJECT_NAME ]; then
+        deployment_project="${line#*=}"
+      fi
+    done < .deploy.env
+  fi
+  if [ "$tunnel_mode" = disable ] && [ -f .chatgpt-deploy.json ]; then
+    tunnel_stopped=true
+    python3 scripts/tunnel_deployment.py disable || rollback true
+  fi
+
+  if [ "$tunnel_selected" = true ] && [ -z "$deployment_project" ]; then
+    deployment_project="$(docker --context rootless container inspect \
+      --format '{{index .Config.Labels "com.docker.compose.project"}}' moomoo-api-mcp 2>/dev/null)" || deployment_project=""
+    # The default Compose project name is the checkout directory on a new host.
+    if [ -z "$deployment_project" ]; then
+      local existing
+      existing="$(docker --context rootless container ls -aq \
+        --filter 'name=^/moomoo-api-mcp$')" || rollback false
+      if [ -n "$existing" ]; then
+        echo 'Could not identify the existing Compose project; deployment stopped.' >&2
+        rollback false
+      fi
+      deployment_project="$(basename "$REPO_ROOT")"
+    fi
+  fi
+
+  git checkout --quiet --detach "$commit" || rollback false
   if [ ! -f docker-compose.prod.yml ] || [ ! -x scripts/compose-prod.sh ] \
     || [ ! -f scripts/deploy_verify.py ]; then
     echo 'Target commit lacks production deployment files; choose a newer commit.' >&2
-    return 1
+    rollback false
   fi
   printf 'ECR_REGISTRY=%s\nIMAGE_TAG=%s\n' "$registry" "${image_tag}" > .deploy.env
+  if [ -n "$deployment_project" ]; then
+    if [[ ! "$deployment_project" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+      echo 'Invalid saved Compose project; deployment stopped.' >&2
+      rollback false
+    fi
+    printf 'COMPOSE_PROJECT_NAME=%s\n' "$deployment_project" >> .deploy.env
+  fi
   if [ -n "$tunnel_image" ]; then
-    python3 scripts/tunnel_deployment.py set-image --image "$tunnel_image" || rollback false
+    if [ -f .chatgpt-deploy.json ]; then
+      python3 scripts/tunnel_deployment.py set-image --image "$tunnel_image" || rollback false
+    else
+      python3 scripts/tunnel_deployment.py select --image "$tunnel_image" \
+        --project "$deployment_project" || rollback false
+    fi
   fi
 
   # Compose resolves the configuration; the helper only reads the result. It

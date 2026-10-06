@@ -5,8 +5,7 @@
 ### Requirement: Optional Tunnel Service Isolation
 
 An optional private ChatGPT tunnel SHALL run as a separate optional Compose container outside the
-single supervised OpenD + MCP brokerage container; legacy host service assets
-SHALL remain a documented rollback path. Adding, restarting, failing, disabling,
+single supervised OpenD + MCP brokerage container. Adding, restarting, failing, disabling,
 or removing the tunnel service SHALL NOT change the container's process
 supervision, published ports, restart policy, OpenD state volume, optional
 execution-journal volume, or existing local-client path.
@@ -94,7 +93,7 @@ The tunnel SHALL use a dedicated small image containing the official reviewed re
 #### Scenario: Hardened runtime works with real release
 
 - **WHEN** the pinned image runs as its declared identity
-- **THEN** the verified client, entrypoint, configuration and mounted secrets SHALL work under the declared filesystem and capability restrictions
+- **THEN** the verified client, entrypoint, configuration and injected credentials SHALL work under the declared filesystem and capability restrictions
 - **AND** the image SHALL contain no brokerage SDK, OpenD binary or deployment secrets
 
 #### Scenario: Runtime exits or receives termination
@@ -123,5 +122,25 @@ CI SHALL exercise the actual tunnel image, entrypoint, runtime permissions and p
 
 - **WHEN** current container integration is exercised
 - **THEN** tests SHALL use synthetic credential sources and disposable resources with enforced fixture-only destinations and no real OpenAI traffic
-- **AND** managed image, secret permissions, Compose and lifecycle results SHALL be reported independently of preserved historical upstream findings
+- **AND** managed image, explicit credential environment, Compose and lifecycle results SHALL be reported independently of preserved historical upstream findings
 - **AND** successful synthetic tests SHALL NOT be reported as live OpenAI or ChatGPT acceptance
+
+### Requirement: Single manual deployment entrypoint
+
+Operators SHALL enable, update and disable the optional tunnel through the existing manual deployment script, using CI-published images and deployment environment configuration. First enablement SHALL NOT require a separate image-build, credential-staging or image-selection command. Existing Compose project and persistent volume identities SHALL be preserved automatically. Site-specific migration instructions SHALL be delivered outside the repository.
+
+#### Scenario: First enablement
+
+- **WHEN** the operator enables the tunnel with valid deployment settings
+- **THEN** the deploy script SHALL resolve its CI image and preserve the existing Compose project without an additional setup script
+- **AND** missing required credentials or images SHALL fail before service changes
+
+#### Scenario: Disable through the deployment script
+
+- **WHEN** the operator requests tunnel disablement
+- **THEN** the deploy script SHALL remove only the optional service and save the disabled selection without deleting brokerage state
+
+#### Scenario: Newly enabled deployment fails
+
+- **WHEN** deployment fails after adding the optional selection
+- **THEN** rollback SHALL restore the previous default-off selection as well as prior checkout/images without leaving a newly enabled tunnel running

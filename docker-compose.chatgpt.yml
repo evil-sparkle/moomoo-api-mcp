@@ -15,20 +15,12 @@ services:
     restart: unless-stopped
     stop_grace_period: 20s
     environment:
-      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?set the existing MCP bearer token}
+      # Startup validation requires these; empty values still permit disablement.
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      CHATGPT_TUNNEL_API_KEY: ${CHATGPT_TUNNEL_API_KEY:-}
+      CHATGPT_TUNNEL_ID: ${CHATGPT_TUNNEL_ID:-}
     tmpfs:
       - /run/moomoo-chatgpt-tunnel:uid=10002,gid=10002,mode=0700,size=16m,noexec,nosuid,nodev
-    volumes:
-      - type: bind
-        source: ${CHATGPT_TUNNEL_SECRET_DIR:?provision mapped secret files first}/control-plane-api-key
-        target: /run/secrets/control-plane-api-key
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: ${CHATGPT_TUNNEL_SECRET_DIR:?provision mapped secret files first}/tunnel-id
-        target: /run/secrets/tunnel-id
-        read_only: true
-        bind: {create_host_path: false}
 # Compose creates a project-scoped user-defined bridge with Docker DNS and egress.
 networks:
   default:
