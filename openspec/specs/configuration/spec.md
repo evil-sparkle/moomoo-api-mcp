@@ -32,10 +32,10 @@ The system SHALL support the following security configuration environment variab
 - **WHEN** the service loads security configuration
 - **THEN** the following detailed obligations SHALL hold:
 
-- `MCP_TRANSPORT`: MCP transport mode (`streamable-http`, `sse`, or `stdio`).
-- `MCP_AUTH_TOKEN`: shared-secret bearer token for the HTTP and SSE transports.
-  Required when either of them is selected.
-- `MCP_ALLOW_UNAUTHENTICATED_HTTP`: when `1`, permits an HTTP or SSE transport
+- `MCP_TRANSPORT`: optional transport setting; only `streamable-http` is accepted,
+  and it is the default for both local and container startup.
+- `MCP_AUTH_TOKEN`: required shared-secret bearer token for the HTTP endpoint.
+- `MCP_ALLOW_UNAUTHENTICATED_HTTP`: when `1`, permits an HTTP transport
   without a token. Honoured only when `MOOMOO_TRADING_MODE` is `READ_ONLY`.
 - `MOOMOO_MAX_ORDER_QTY`: optional finite, positive maximum quantity for a single
   order, or for a combo's largest leg.
@@ -60,19 +60,19 @@ names the variable. The server SHALL NOT fall back to a default in its place.
 #### Scenario: FastMCP bearer token authentication
 
 - **GIVEN** `MCP_AUTH_TOKEN` is configured
-- **WHEN** an incoming HTTP or SSE request supplies a valid `Bearer <token>`
+- **WHEN** an incoming HTTP request supplies a valid `Bearer <token>`
   Authorization header
 - **THEN** FastMCP SHALL accept and process the connection
 
 #### Scenario: Reject unauthorized request when token is required
 
 - **GIVEN** `MCP_AUTH_TOKEN` is configured
-- **WHEN** an incoming HTTP or SSE request supplies an invalid or missing token
+- **WHEN** an incoming HTTP request supplies an invalid or missing token
 - **THEN** FastMCP SHALL reject the request with an authorization error
 
 #### Scenario: HTTP transport without a token refuses to start
 
-- **GIVEN** `MCP_TRANSPORT` is `streamable-http` or `sse`
+- **GIVEN** `MCP_TRANSPORT` is `streamable-http` or unset
 - **AND** `MCP_AUTH_TOKEN` is unset or blank
 - **AND** `MCP_ALLOW_UNAUTHENTICATED_HTTP` is not `1`, or `MOOMOO_TRADING_MODE` is
   not `READ_ONLY`
@@ -87,11 +87,12 @@ names the variable. The server SHALL NOT fall back to a default in its place.
 - **WHEN** the server starts
 - **THEN** it SHALL serve without authentication and log a warning saying so
 
-#### Scenario: stdio needs no token
+#### Scenario: Removed transports fail startup
 
-- **GIVEN** `MCP_TRANSPORT` is `stdio`
-- **WHEN** the server starts without `MCP_AUTH_TOKEN`
-- **THEN** it SHALL start normally
+- **GIVEN** `MCP_TRANSPORT` is `sse`, `stdio`, or another unsupported value
+- **WHEN** the server starts
+- **THEN** it SHALL exit with a configuration error naming `MCP_TRANSPORT`
+- **AND** SHALL NOT start a listener or fall back to another transport
 
 #### Scenario: One environment file serves old and new images
 

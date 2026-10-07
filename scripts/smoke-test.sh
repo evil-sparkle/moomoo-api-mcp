@@ -8,7 +8,7 @@
 #   * the MCP server reaches the gateway over container loopback, and nothing
 #     outside the container can reach the gateway at all;
 #   * killing the gateway process restarts *the gateway*, leaving the container,
-#     the MCP endpoint and a live client session untouched;
+#     the MCP endpoint available for stateless requests;
 #   * killing the MCP server takes the whole container down, and Docker's
 #     restart policy brings it back.
 #
@@ -23,9 +23,9 @@
 # are the deployed file's.
 #
 # Note the order of the checks below. Under streamable HTTP the MCP lifespan
-# runs per session, inside Server.run() — not once at process start. A freshly
+# runs per request, inside Server.run() — not once at process start. A freshly
 # started container has therefore not dialled the gateway, and never will until
-# a client sends its first request. This opens a real MCP session to provoke
+# a client sends its first request. An initialize request provokes
 # that connection, which also means the restart assertions are made against a
 # live client rather than an idle server.
 set -euo pipefail
@@ -101,59 +101,42 @@ endpoint_status() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@" "$ENDPOINT" || true
 }
 
-# An MCP client, reduced to the three calls this needs. initialize is what makes
-# the server enter its lifespan and connect to the gateway; the session id it
-# returns is what a real client would hold, and what must still work afterwards.
+# Every request is independent; initialize triggers the first gateway connection.
 mcp_request() {
-  local session="$1" body="$2" show_headers="${3:-}"
+  local body="$1" show_headers="${2:-}"
   local -a args=(
     -s --max-time 30
     -H "Authorization: Bearer ${TOKEN}"
     -H "Content-Type: application/json"
-    -H "Accept: application/json, text/event-stream"
+    -H "Accept: application/json"
   )
-  [ -n "${session}" ] && args+=(-H "mcp-session-id: ${session}")
   [ -n "${show_headers}" ] && args+=(-i)
   curl "${args[@]}" -d "${body}" "$ENDPOINT" || true
 }
 
-open_mcp_session() {
-  mcp_request "" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0"}}}' headers
+initialize_mcp() {
+  mcp_request '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0"}}}' headers
 }
 
-# The id a stateful server would hand out. This one is stateless and issues
-# none, which is the whole point: a client holding nothing has nothing a
-# restart can invalidate. Captured anyway, so the calls below carry a real
-# session id if the server is ever switched back, and so this script keeps
-# testing whatever the server actually does rather than what it did once.
-session_id_from() {
-  # `|| true` because no match is the expected case, not a failure: a stateless
-  # server sends no such header, and under `set -o pipefail` an unmatched grep
-  # would take the whole script down without printing a thing.
-  printf '%s' "$1" | grep -i '^mcp-session-id:' | tr -d '\r' | awk '{print $2}' ||
-    true
-}
-
-# Proof the session still works: a tool this server defines comes back in the
-# listing, and the response is not a JSON-RPC error. A dead or forgotten session
-# answers with an error instead.
-#
-# Three things, because this assertion has already earned its keep: the reply is
-# a tool listing, it is not a JSON-RPC error, and this server's own tool is in
-# it. The last one is what caught the supervisor launching the server as
-# `python -m`, which served an empty tool list behind a perfectly healthy
-# endpoint -- HTTP 200, sessions opening, and `{"tools":[]}` inside.
-#
-# The tool name is matched on its own rather than as `"name":"check_health"`:
-# the response arrives as an SSE data line and the SDK's spacing is not this
-# repository's to pin. The `"tools"` and `"error"` checks are what keep that
-# from being a weaker test than the one it replaces.
+# Validate the JSON contract as well as actual tool dispatch after each restart.
 LAST_TOOLS_BODY=""
-session_still_lists_tools() {
-  LAST_TOOLS_BODY="$(mcp_request "$1" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')"
-  printf '%s' "${LAST_TOOLS_BODY}" | grep -q '"error"' && return 1
-  printf '%s' "${LAST_TOOLS_BODY}" | grep -q '"tools"' || return 1
-  printf '%s' "${LAST_TOOLS_BODY}" | grep -q 'check_health'
+stateless_request_lists_tools() {
+  LAST_TOOLS_BODY="$(mcp_request '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')"
+  printf '%s' "${LAST_TOOLS_BODY}" | python3 -c '
+import json
+import sys
+try:
+    message = json.load(sys.stdin)
+    valid = (
+        message.get("jsonrpc") == "2.0"
+        and message.get("id") == 2
+        and "error" not in message
+        and any(tool.get("name") == "check_health" for tool in message["result"]["tools"])
+    )
+except (ValueError, KeyError, TypeError, AttributeError):
+    valid = False
+sys.exit(0 if valid else 1)
+'
 }
 
 # What the server actually said, so a failure here is diagnosable from the log
@@ -280,16 +263,26 @@ if [ "${authorized}" = "401" ]; then
   exit 1
 fi
 
-echo "==> a client can open an MCP session"
-handshake="$(open_mcp_session)"
+echo "==> initialize returns JSON without a session ID"
+handshake="$(initialize_mcp)"
 if ! printf '%s' "${handshake}" | grep -q '"serverInfo"'; then
   echo "FAILED: initialize did not return a server result, so no client can" \
     "use this server at all." >&2
   exit 1
 fi
-session="$(session_id_from "${handshake}")"
-mcp_request "${session}" '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  > /dev/null
+if printf '%s' "${handshake}" | grep -i -F -q 'mcp-session-id:'; then
+  echo "FAILED: the stateless endpoint issued a session ID." >&2
+  exit 1
+fi
+if ! printf '%s' "${handshake}" | grep -i -F -q 'content-type: application/json'; then
+  echo "FAILED: initialize did not return application/json." >&2
+  exit 1
+fi
+if ! stateless_request_lists_tools; then
+  echo "FAILED: a stateless tools/list request failed." >&2
+  show_last_tools_response
+  exit 1
+fi
 
 # The supervisor's gateway command carries the login account identifier.
 # docker-compose.smoke.yml supplies a synthetic identifier for this assertion:
@@ -378,9 +371,9 @@ echo "==> the MCP endpoint still answers"
 wait_for 30 "the MCP endpoint to survive the gateway restart" \
   endpoint_rejects_anonymous
 
-echo "==> the client's session survived the gateway restart"
-if ! session_still_lists_tools "${session}"; then
-  echo "FAILED: the MCP session opened before the gateway died no longer works," \
+echo "==> stateless requests work after the gateway restart"
+if ! stateless_request_lists_tools; then
+  echo "FAILED: a stateless request failed after the gateway restarted," \
     "so a gateway restart forces every client to reconnect." >&2
   show_last_tools_response
   exit 1
@@ -407,7 +400,7 @@ wait_for 120 "the container to be restarted" \
 wait_for 120 "the MCP endpoint to come back" endpoint_rejects_anonymous
 
 echo "==> the client keeps calling without re-initializing"
-if ! session_still_lists_tools "${session}"; then
+if ! stateless_request_lists_tools; then
   echo "FAILED: a call that worked before the server died no longer does, so" \
     "every client has to reconnect when the container is replaced." >&2
   show_last_tools_response

@@ -79,14 +79,6 @@ def json_reply(message, status=200):
     return (status, "application/json", json.dumps(message).encode())
 
 
-def sse_reply(*messages, line_end="\n"):
-    body = ""
-    for message in messages:
-        body += f"event: message{line_end}data: {json.dumps(message)}{line_end}"
-        body += line_end
-    return (200, "text/event-stream", body.encode())
-
-
 class ScriptedServer:
     """Answers each POST with the next scripted reply, repeating the last."""
 
@@ -270,7 +262,7 @@ class ProbeTest(unittest.TestCase):
         request = server.requests[0]
         self.assertEqual(request["headers"]["Authorization"], f"Bearer {TOKEN}")
         self.assertEqual(request["headers"]["Content-Type"], "application/json")
-        self.assertIn("text/event-stream", request["headers"]["Accept"])
+        self.assertEqual(request["headers"]["Accept"], "application/json")
         self.assertEqual(json.loads(request["body"])["method"], "initialize")
         self.assertNotIn(TOKEN, output)
 
@@ -280,18 +272,6 @@ class ProbeTest(unittest.TestCase):
         self.assertTrue(verified, output)
         self.assertNotIn("Authorization", server.requests[0]["headers"])
         self.assertIn("without a token", output)
-
-    def test_valid_sse_result_verifies(self):
-        notification = {"jsonrpc": "2.0", "method": "notifications/message"}
-        for line_end in ("\n", "\r\n", "\r"):
-            with (
-                self.subTest(line_end=line_end),
-                ScriptedServer(
-                    [sse_reply(notification, VALID_RESULT, line_end=line_end)]
-                ) as server,
-            ):
-                verified, output = run_verify(server.url)
-                self.assertTrue(verified, output)
 
     def test_200_without_a_valid_initialize_result_fails_at_once(self):
         """HTTP 200 alone is never success, and never worth retrying."""
@@ -339,14 +319,10 @@ class ProbeTest(unittest.TestCase):
             ),
             "html": (200, "text/html", b"<html>result serverInfo</html>"),
             "no content type": (200, "", json.dumps(VALID_RESULT).encode()),
-            "sse without the response": sse_reply({"jsonrpc": "2.0", "method": "x"}),
-            "sse with bad json": (200, "text/event-stream", b"data: {nope\n\n"),
-            "sse error": sse_reply(error),
-            # An event with no blank line after it was never dispatched.
-            "sse unterminated": (
+            "event streams are unsupported even with a valid result": (
                 200,
                 "text/event-stream",
-                f"data: {json.dumps(VALID_RESULT)}".encode(),
+                f"data: {json.dumps(VALID_RESULT)}\n\n".encode(),
             ),
         }
         for name, reply in cases.items():
@@ -383,12 +359,6 @@ class ProbeTest(unittest.TestCase):
                 "application/json",
                 truncated,
                 len(complete) - len(truncated),
-            ),
-            "complete sse event, transfer incomplete": (
-                200,
-                "text/event-stream",
-                f"event: message\ndata: {json.dumps(VALID_RESULT)}\n\n".encode(),
-                7,
             ),
         }
         for name, (status, content_type, body, extra) in cases.items():
@@ -525,66 +495,57 @@ class GatewayReadinessTest(unittest.TestCase):
         import uvicorn
         from mcp.server.fastmcp import FastMCP
 
-        for json_response in (True, False):
-            with self.subTest(json_response=json_response):
-                app = FastMCP(
-                    "readiness-fixture",
-                    stateless_http=True,
-                    json_response=json_response,
-                )
+        app = FastMCP(
+            "readiness-fixture",
+            stateless_http=True,
+            json_response=True,
+        )
 
-                @app.tool()
-                def check_health() -> dict[str, Any]:
-                    return VALID_HEALTH_RESULT["result"]["structuredContent"]
+        @app.tool()
+        def check_health() -> dict[str, Any]:
+            return VALID_HEALTH_RESULT["result"]["structuredContent"]
 
-                listener = socket.socket()
-                listener.bind(("127.0.0.1", 0))
-                listener.listen()
-                port = listener.getsockname()[1]
-                server = uvicorn.Server(
-                    uvicorn.Config(app.streamable_http_app(), log_level="critical")
-                )
-                thread = threading.Thread(
-                    target=server.run, kwargs={"sockets": [listener]}, daemon=True
-                )
-                thread.start()
-                try:
-                    deadline = time.monotonic() + 10
-                    while not server.started and time.monotonic() < deadline:
-                        time.sleep(0.01)
-                    self.assertTrue(server.started, "the fixture did not start")
-                    ready, output = run_gateway_readiness(
-                        f"http://127.0.0.1:{port}/mcp"
-                    )
-                    self.assertTrue(ready, output)
-                finally:
-                    server.should_exit = True
-                    thread.join(timeout=10)
-                    listener.close()
-                self.assertFalse(thread.is_alive(), "the fixture did not stop")
-
-    def test_json_and_sse_health_confirm_login_with_read_only_calls(self):
-        notification = {"jsonrpc": "2.0", "method": "notifications/message"}
-        for reply in (
-            json_reply(VALID_HEALTH_RESULT),
-            sse_reply(notification, VALID_HEALTH_RESULT),
-        ):
-            with self.subTest(reply=reply), ScriptedServer([reply]) as server:
-                ready, output = run_gateway_readiness(server.url)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(
+            uvicorn.Config(app.streamable_http_app(), log_level="critical")
+        )
+        thread = threading.Thread(
+            target=server.run, kwargs={"sockets": [listener]}, daemon=True
+        )
+        thread.start()
+        try:
+            deadline = time.monotonic() + 10
+            while not server.started and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(server.started, "the fixture did not start")
+            ready, output = run_gateway_readiness(f"http://127.0.0.1:{port}/mcp")
             self.assertTrue(ready, output)
-            self.assertIn("OpenD ready", output)
-            self.assertNotIn(TOKEN, output)
-            request = server.requests[0]
-            self.assertEqual(request["headers"]["Authorization"], f"Bearer {TOKEN}")
-            self.assertEqual(
-                json.loads(request["body"]),
-                {
-                    "jsonrpc": "2.0",
-                    "id": deploy_verify.HEALTH_REQUEST_ID,
-                    "method": "tools/call",
-                    "params": {"name": "check_health", "arguments": {}},
-                },
-            )
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+            listener.close()
+        self.assertFalse(thread.is_alive(), "the fixture did not stop")
+
+    def test_json_health_confirms_login_with_read_only_calls(self):
+        with ScriptedServer([json_reply(VALID_HEALTH_RESULT)]) as server:
+            ready, output = run_gateway_readiness(server.url)
+        self.assertTrue(ready, output)
+        self.assertIn("OpenD ready", output)
+        self.assertNotIn(TOKEN, output)
+        request = server.requests[0]
+        self.assertEqual(request["headers"]["Authorization"], f"Bearer {TOKEN}")
+        self.assertEqual(
+            json.loads(request["body"]),
+            {
+                "jsonrpc": "2.0",
+                "id": deploy_verify.HEALTH_REQUEST_ID,
+                "method": "tools/call",
+                "params": {"name": "check_health", "arguments": {}},
+            },
+        )
 
     def test_remembered_login_can_finish_after_initial_health_or_http_failure(self):
         warming = json.loads(json.dumps(VALID_HEALTH_RESULT))
@@ -660,7 +621,7 @@ class GatewayReadinessTest(unittest.TestCase):
             (
                 200,
                 "text/event-stream",
-                b"data: " + json.dumps(VALID_HEALTH_RESULT).encode(),
+                b"data: " + json.dumps(VALID_HEALTH_RESULT).encode() + b"\n\n",
             ),
             (200, "text/plain", json.dumps(VALID_HEALTH_RESULT).encode()),
         ):

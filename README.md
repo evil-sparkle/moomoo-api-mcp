@@ -92,9 +92,10 @@ uv run moomoo-api-mcp
 ```
 
 Set up the separate gateway and environment as described under
-[configuration](#configuration). For stdio, set `MCP_TRANSPORT=stdio` in the
-client's process environment. See [contributor guidance](#contributing) for
-checks, hooks and OpenSpec workflows.
+[configuration](#configuration), including `MCP_AUTH_TOKEN` in the server
+process environment. Source launches use the same stateless Streamable HTTP
+endpoint as containers; connect clients to the running server at `/mcp`.
+See [contributor guidance](#contributing) for checks, hooks and OpenSpec workflows.
 
 ## Documentation
 
@@ -284,9 +285,9 @@ password alone never enables REAL writes. Container operators should use the
 | `MOOMOO_TRADE_PASSWORD`     | Your trading password (plain text)                                    | `123456`      |
 | `MOOMOO_TRADE_PASSWORD_MD5` | MD5 hash of 6-digit trade PIN (alternative to plain text)             | `e10adc...`   |
 | `MOOMOO_SECURITY_FIRM`      | Your broker region (e.g., FUTUSG, FUTUINC)                            | `FUTUSG`      |
-| `MCP_TRANSPORT`             | Optional: Transport mode (`streamable-http` [stateless, JSON responses], `sse`, `stdio`) | `streamable-http` |
+| `MCP_TRANSPORT`             | Optional: Only `streamable-http` is accepted (stateless, JSON responses) | `streamable-http` |
 | `MOOMOO_REAL_ACC_IDS`       | **Required in `REAL` mode.** Comma-separated accounts REAL writes may target | `12345678` |
-| `MCP_AUTH_TOKEN`            | **Required** for the `streamable-http` and `sse` transports           | `secret-token`|
+| `MCP_AUTH_TOKEN`            | **Required** for the HTTP endpoint           | `secret-token`|
 | `MCP_ALLOW_UNAUTHENTICATED_HTTP` | Optional: `1` serves HTTP without a token, honoured only in `READ_ONLY` | `1`     |
 | `MOOMOO_MAX_ORDER_QTY`      | Optional: cap on quantity per order; for a combo, on the largest leg   | `500`         |
 | `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` | Optional: notional caps, one per currency                 | `USD:25000,HKD:200000` |
@@ -386,10 +387,10 @@ reads does not use the REAL write allowlist.
 
 ### 3. Connect an MCP client
 
-#### Container endpoint: Claude Code and other HTTP clients
+#### HTTP endpoint: Claude Code and other HTTP clients
 
-The recommended container deployment serves authenticated Streamable HTTP at
-`http://127.0.0.1:8000/mcp`. That address refers to the Docker host; a client on
+The container deployment and source launches serve authenticated Streamable HTTP
+in stateless mode with JSON responses at `http://127.0.0.1:8000/mcp`. That address refers to the Docker host; a client on
 another machine needs an authorized private route or port forward to it. Do not
 publish OpenD's port 11111. The token must match the deployed `MCP_AUTH_TOKEN`.
 
@@ -406,46 +407,6 @@ Streamable HTTP, the reachable `/mcp` endpoint and its bearer header using that
 client's configuration format. A shared protocol does not establish that every
 client supports the same JSON configuration or authentication options.
 
-SSE remains available through `MCP_TRANSPORT=sse` at `/sse` for clients that
-require it. Prefer Streamable HTTP for the container deployment.
-
-#### Claude Desktop: local source checkout over stdio
-
-For a client that launches a local stdio server, use this fork's checkout rather
-than a package-registry command. Run `uv sync --frozen` in that checkout first.
-The [MCP local-server guide](https://modelcontextprotocol.io/docs/develop/connect-local-servers)
-describes Claude Desktop's command/arguments configuration. Use absolute paths
-for both `uv` and this repository in `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "moomoo": {
-      "command": "/absolute/path/to/uv",
-      "args": [
-        "--directory",
-        "/absolute/path/to/moomoo-api-mcp",
-        "run",
-        "--frozen",
-        "moomoo-api-mcp"
-      ],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "MOOMOO_TRADING_MODE": "READ_ONLY",
-        "MOOMOO_OPEND_HOST": "127.0.0.1",
-        "MOOMOO_OPEND_PORT": "11111",
-        "MOOMOO_SECURITY_FIRM": "FUTUSG"
-      }
-    }
-  }
-}
-```
-
-Use your broker's securities firm. This launches a separate local MCP process
-and requires a separately running, logged-in OpenD gateway. It does not connect
-to the container's private OpenD listener or reuse the container's MCP process.
-Do not add trade credentials just to configure a client; READ_ONLY is the default.
-
 Claude's [remote connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)
 connect from Anthropic infrastructure. A host-loopback URL is not reachable by
 that path; this repository does not provide a ready-to-use Claude remote connector
@@ -456,9 +417,8 @@ or a stdio-to-HTTP bridge for its private container endpoint. Do not assume a
 
 Use the [optional official tunnel](docs/deploy-vps.md#optional-chatgpt-access)
 through `deploy.sh --chatgpt`. It connects to this fork's existing container and
-requires READ_ONLY. Local stdio, HTTP-client configuration and the ChatGPT tunnel
-are distinct connection paths; validate tool discovery and `check_health` in the
-actual client before relying on the integration.
+requires READ_ONLY and uses the same stateless HTTP endpoint. Validate tool
+discovery and `check_health` in the actual client before relying on the integration.
 
 ## AI Agent Guidance
 
@@ -582,6 +542,17 @@ When using `get_orders` or `get_history_orders`, the `status_filter_list` parame
 > **Note**: The server automatically converts these strings to the required SDK enum format. If no orders match the filter, an empty list is returned.
 
 ## Migration Notes
+
+### Stateless Streamable HTTP is the only transport
+
+`streamable-http` is the default for both containers and source launches. Older
+`MCP_TRANSPORT=sse` or `stdio` settings fail startup; change them to
+`streamable-http` or remove the setting. Clients must connect by HTTP to `/mcp`
+and send a valid bearer token. Command-based stdio server configurations are
+no longer supported. The endpoint returns JSON and issues no session ID.
+
+Without `MCP_AUTH_TOKEN`, startup fails unless the explicit READ_ONLY development
+opt-out `MCP_ALLOW_UNAUTHENTICATED_HTTP=1` is enabled.
 
 ### Trading mode must be configured before writing
 

@@ -411,9 +411,10 @@ trading readiness.
 - **THEN** the probe SHALL be an MCP `initialize` request authenticated with
   the resolved token
 - **AND** a JSON-RPC success response carrying a correctly shaped initialize
-  result with the matching request id — as JSON or as an SSE-framed stream —
+  result with the matching request id as an `application/json` response
   SHALL verify
 - **AND** an HTTP 200 response alone SHALL NOT verify
+- **AND** an event-stream response SHALL NOT verify, even if it carries a valid result
 
 #### Scenario: An endpoint that is not answering yet is retried
 
@@ -444,7 +445,7 @@ trading readiness.
 
 #### Scenario: Initialize fields are validated where the lifecycle puts them
 
-- **GIVEN** the endpoint answers HTTP 200 with a JSON or SSE-framed response
+- **GIVEN** the endpoint answers HTTP 200 with a JSON response
 - **WHEN** the response is validated
 - **THEN** `protocolVersion`, `capabilities` and `serverInfo` SHALL be
   required inside the result object with appropriate types

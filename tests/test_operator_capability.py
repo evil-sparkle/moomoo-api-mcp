@@ -134,26 +134,6 @@ def test_unconfigured_operator_capability_cannot_be_claimed(recovery_engine):
     recovery_engine.acknowledge.assert_not_called()
 
 
-def test_sse_does_not_accept_operator_credential(recovery_engine):
-    app = server.create_sse_app(AGENT_TOKEN)
-    with TestClient(app) as client:
-        denied = client.post(
-            "/messages/?session_id=untrusted-session",
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "acknowledge_recovery",
-                    "arguments": RECOVERY_ARGUMENTS,
-                },
-            },
-            headers={"Authorization": "Bearer " + OPERATOR_TOKEN},
-        )
-    assert denied.status_code == 401
-    recovery_engine.acknowledge.assert_not_called()
-
-
 def test_operator_failure_does_not_authorize_the_next_agent_request(recovery_engine):
     recovery_engine.acknowledge.side_effect = ValueError("Evidence remains unresolved")
     app = server.create_streamable_http_app(AGENT_TOKEN, OPERATOR_TOKEN)

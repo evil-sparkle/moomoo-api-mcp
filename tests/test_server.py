@@ -308,56 +308,16 @@ class TestStartupConfigurationFailure:
 
         with (
             patch.dict(os.environ, env, clear=True),
-            patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
             patch("uvicorn.run") as mock_uvicorn_run,
             pytest.raises(SystemExit),
         ):
             main()
 
-        mock_mcp_run.assert_not_called()
         mock_uvicorn_run.assert_not_called()
-
-    def test_a_valid_configuration_serves(self) -> None:
-        from moomoo_mcp.server import main
-
-        with (
-            patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}, clear=True),
-            patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
-        ):
-            main()
-
-        mock_mcp_run.assert_called_once()
 
 
 class TestFastMCPSecurity:
-    """Tests for FastMCP HTTP/SSE authentication and transport security."""
-
-    def test_sse_app_rejects_missing_auth_token(self) -> None:
-        from starlette.testclient import TestClient
-
-        from moomoo_mcp.server import create_sse_app
-
-        app = create_sse_app(auth_token="test_secure_token_123")
-        client = TestClient(app)
-
-        response = client.get("/sse")
-        assert response.status_code == 401
-        assert "Unauthorized" in response.text
-
-    def test_sse_app_rejects_invalid_bearer_token(self) -> None:
-        from starlette.testclient import TestClient
-
-        from moomoo_mcp.server import create_sse_app
-
-        app = create_sse_app(auth_token="test_secure_token_123")
-        client = TestClient(app)
-
-        response = client.get(
-            "/sse",
-            headers={"Authorization": "Bearer wrong_token_abc"},
-        )
-        assert response.status_code == 401
-        assert "Unauthorized" in response.text
+    """Tests for FastMCP HTTP authentication and transport security."""
 
     def test_bearer_auth_middleware_accepts_valid_token(self) -> None:
         from starlette.applications import Starlette
@@ -429,25 +389,34 @@ class TestFastMCPSecurity:
         assert response.status_code == 401
         assert "Unauthorized" in response.text
 
-    def test_main_rejects_invalid_transport(self) -> None:
+    @pytest.mark.parametrize("transport", ["sse", "stdio", "unsupported-mode"])
+    def test_main_rejects_invalid_transport(self, transport) -> None:
         from moomoo_mcp.server import main
 
         with (
-            patch.dict(os.environ, {"MCP_TRANSPORT": "unsupported-mode"}, clear=True),
+            patch.dict(
+                os.environ,
+                {"MCP_TRANSPORT": transport, "MCP_AUTH_TOKEN": "test-token"},
+                clear=True,
+            ),
             pytest.raises(SystemExit),
         ):
             main()
 
-    def test_main_starts_streamable_http_with_auth(self) -> None:
+    @pytest.mark.parametrize(
+        "transport_env", [{}, {"MCP_TRANSPORT": "streamable-http"}]
+    )
+    def test_main_starts_streamable_http_with_auth(self, transport_env) -> None:
         from moomoo_mcp.server import main
 
         with (
             patch.dict(
                 os.environ,
                 {
-                    "MCP_TRANSPORT": "streamable-http",
+                    **transport_env,
                     "MCP_AUTH_TOKEN": "my-secret-token",
                 },
+                clear=True,
             ),
             patch("moomoo_mcp.server.create_streamable_http_app") as mock_create,
             patch("uvicorn.run") as mock_uvicorn_run,
@@ -462,30 +431,6 @@ class TestFastMCPSecurity:
                 operator_token=None,
                 allow_chatgpt_tunnel_host=False,
             )
-            mock_uvicorn_run.assert_called_once_with(
-                mock_app, host="127.0.0.1", port=8000
-            )
-
-    def test_main_starts_sse_with_auth(self) -> None:
-        from moomoo_mcp.server import main
-
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "MCP_TRANSPORT": "sse",
-                    "MCP_AUTH_TOKEN": "my-secret-token",
-                },
-            ),
-            patch("moomoo_mcp.server.create_sse_app") as mock_create,
-            patch("uvicorn.run") as mock_uvicorn_run,
-        ):
-            mock_app = MagicMock()
-            mock_create.return_value = mock_app
-
-            main()
-
-            mock_create.assert_called_once_with(auth_token="my-secret-token")
             mock_uvicorn_run.assert_called_once_with(
                 mock_app, host="127.0.0.1", port=8000
             )
@@ -515,22 +460,19 @@ class TestFastMCPSecurity:
                 in caplog.text
             )
 
-    @pytest.mark.parametrize("transport", ["sse", "streamable-http"])
-    def test_main_refuses_http_without_a_token(self, transport) -> None:
+    def test_main_refuses_http_without_a_token(self) -> None:
         """An unauthenticated HTTP endpoint exposes every tool this server has,
         including the order-mutating ones, to anything that can reach the port.
         """
         from moomoo_mcp.server import main
 
         with (
-            patch.dict(os.environ, {"MCP_TRANSPORT": transport}, clear=True),
-            patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
+            patch.dict(os.environ, {}, clear=True),
             patch("uvicorn.run") as mock_uvicorn_run,
             pytest.raises(SystemExit),
         ):
             main()
 
-        mock_mcp_run.assert_not_called()
         mock_uvicorn_run.assert_not_called()
 
     def test_the_opt_out_serves_unauthenticated_in_read_only(
@@ -590,17 +532,6 @@ class TestFastMCPSecurity:
 
         mock_uvicorn_run.assert_not_called()
 
-    def test_stdio_starts_without_a_token(self) -> None:
-        from moomoo_mcp.server import main
-
-        with (
-            patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}, clear=True),
-            patch("moomoo_mcp.server.mcp.run") as mock_mcp_run,
-        ):
-            main()
-
-        mock_mcp_run.assert_called_once()
-
 
 class TestStatelessStreamableHTTP:
     """Tests pinning stateless_http and json_response under Streamable HTTP."""
@@ -629,6 +560,17 @@ class TestStatelessStreamableHTTP:
         """FastMCP settings must explicitly pin stateless_http and json_response."""
         assert server.mcp.settings.stateless_http is True
         assert server.mcp.settings.json_response is True
+
+    @pytest.mark.parametrize("method,path", [("GET", "/sse"), ("POST", "/messages/")])
+    def test_legacy_routes_are_not_served(self, method, path) -> None:
+        from starlette.testclient import TestClient
+
+        app = server.create_streamable_http_app(auth_token="test_token")
+        with TestClient(app) as client:
+            response = client.request(
+                method, path, headers={"Authorization": "Bearer test_token"}
+            )
+        assert response.status_code == 404
 
     def test_initialize_issues_no_session_id(self) -> None:
         """initialize returns a JSON response without an mcp-session-id header."""

@@ -280,7 +280,7 @@ def probe(
         "--header",
         "Content-Type: application/json",
         "--header",
-        "Accept: application/json, text/event-stream",
+        "Accept: application/json",
         "--data-binary",
         request,
         "--write-out",
@@ -329,62 +329,22 @@ def probe(
 def initialize_problem(body: bytes, content_type: str) -> str | None:
     """Why a 200 response is not a successful initialize, or None if it is.
 
-    Streamable HTTP answers a POST either with the JSON-RPC message itself or
-    with an SSE stream carrying it, so both are accepted and checked alike.
+    The supported endpoint returns a single JSON-RPC JSON response.
     """
-    message, problem = response_message(body, content_type, REQUEST_ID, "initialize")
+    message, problem = response_message(body, content_type)
     return problem if problem is not None else initialize_result_problem(message)
 
 
-def response_message(
-    body: bytes, content_type: str, request_id: str, request_name: str
-) -> tuple[Any, str | None]:
-    """Decode JSON or a complete SSE response, ignoring preceding notifications."""
+def response_message(body: bytes, content_type: str) -> tuple[Any, str | None]:
+    """Decode the single JSON response required by our HTTP endpoint."""
     media_type = content_type.split(";", 1)[0].strip().lower()
-    if media_type == "application/json":
-        try:
-            message: Any = json.loads(body)
-        except ValueError:
-            return None, "the body is not valid JSON"
-        return message, None
-    if media_type == "text/event-stream":
-        try:
-            text = body.decode("utf-8")
-        except UnicodeDecodeError:
-            return None, "the SSE stream is not UTF-8"
-        for data in sse_events(text):
-            try:
-                message = json.loads(data)
-            except ValueError:
-                return None, "an SSE event is not valid JSON"
-            if isinstance(message, dict) and message.get("id") == request_id:
-                return message, None
-        return None, f"the SSE stream carries no response to the {request_name} request"
-    shown = printable(media_type) if media_type else "untyped"
-    return None, f"the body is {shown}, not JSON or an SSE stream"
-
-
-def sse_events(text: str) -> list[str]:
-    """The data of each complete event in an SSE stream.
-
-    Lines end in CRLF, LF or CR; a blank line dispatches an event; a trailing
-    event with no blank line after it is incomplete and, as the SSE standard
-    says, dropped.
-    """
-    events: list[str] = []
-    data: list[str] = []
-    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        if line == "":
-            if data:
-                events.append("\n".join(data))
-                data = []
-            continue
-        field, separator, value = line.partition(":")
-        if separator and value.startswith(" "):
-            value = value[1:]
-        if field == "data":
-            data.append(value)
-    return events
+    if media_type != "application/json":
+        shown = printable(media_type) if media_type else "untyped"
+        return None, f"the body is {shown}, not JSON"
+    try:
+        return json.loads(body), None
+    except ValueError:
+        return None, "the body is not valid JSON"
 
 
 def initialize_result_problem(message: Any) -> str | None:
@@ -490,9 +450,7 @@ def whole_seconds(value: str) -> int:
 
 def health_response(body: bytes, content_type: str) -> Attempt:
     """Classify health using fixed labels; never relay broker-supplied errors."""
-    message, problem = response_message(
-        body, content_type, HEALTH_REQUEST_ID, "check_health"
-    )
+    message, problem = response_message(body, content_type)
     if problem is not None:
         return Attempt("200", problem="invalid check_health response")
     if (

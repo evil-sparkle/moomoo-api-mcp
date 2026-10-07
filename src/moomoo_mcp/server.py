@@ -36,7 +36,7 @@ operator_principal: ContextVar[str | None] = ContextVar(
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Enforces constant-time bearer token authorization on HTTP/SSE requests."""
+    """Enforces constant-time bearer token authorization on HTTP requests."""
 
     def __init__(self, app, auth_token: str, operator_token: str | None = None) -> None:
         super().__init__(app)
@@ -66,7 +66,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         )
 
 
-# Disable moomoo library console logging to prevent corruption of MCP stdout protocol
+# Keep SDK console logging suppressed; the application owns server diagnostics.
 if hasattr(ft_logger, "logger") and hasattr(ft_logger.logger, "console_logger"):
     # Clear existing handlers
     ft_logger.logger.console_logger.handlers = []
@@ -292,16 +292,6 @@ import moomoo_mcp.tools.system  # noqa: E402, F401
 import moomoo_mcp.tools.trading  # noqa: E402, F401
 
 
-def create_sse_app(auth_token: str | None = None):
-    """Build the Starlette SSE application with optional bearer auth."""
-    app = mcp.sse_app()
-    raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
-    token = raw.strip()
-    if token:
-        app.add_middleware(BearerAuthMiddleware, auth_token=token, operator_token=None)
-    return app
-
-
 def create_streamable_http_app(
     auth_token: str | None = None,
     operator_token: str | None = None,
@@ -337,8 +327,8 @@ def create_streamable_http_app(
 def main():
     """Entry point for the MCP server.
 
-    Configuration is loaded and validated first, before a transport is chosen
-    and before anything listens. A bad value therefore exits the process with a
+    Configuration is loaded and validated first, before the HTTP server starts
+    listening. A bad value therefore exits the process with a
     message naming the variable, rather than surfacing on whichever tool call
     first happened to need it.
     """
@@ -371,35 +361,22 @@ def main():
                 )
                 atexit.register(close_services)
 
-    transport = settings.transport
-
-    if transport in ("sse", "streamable-http"):
-        host = os.environ.get("FASTMCP_HOST", "127.0.0.1")
-        port = int(os.environ.get("FASTMCP_PORT", "8000"))
-        endpoint = "/mcp" if transport == "streamable-http" else "/sse"
-
-        if settings.auth_token:
-            logger.info(
-                f"Enabling bearer token authentication for {transport} transport."
-            )
+    host = os.environ.get("FASTMCP_HOST", "127.0.0.1")
+    port = int(os.environ.get("FASTMCP_PORT", "8000"))
+    if settings.auth_token:
         logger.info(
-            f"Serving MCP {transport} endpoint at http://{host}:{port}{endpoint}"
+            "Enabling bearer token authentication for streamable-http transport."
         )
+    logger.info(f"Serving MCP streamable-http endpoint at http://{host}:{port}/mcp")
 
-        import uvicorn
+    import uvicorn
 
-        if transport == "streamable-http":
-            app = create_streamable_http_app(
-                auth_token=settings.auth_token,
-                operator_token=settings.operator_token,
-                allow_chatgpt_tunnel_host=settings.allow_chatgpt_tunnel_host,
-            )
-        else:
-            app = create_sse_app(auth_token=settings.auth_token)
-
-        uvicorn.run(app, host=host, port=port)
-    else:
-        mcp.run()
+    app = create_streamable_http_app(
+        auth_token=settings.auth_token,
+        operator_token=settings.operator_token,
+        allow_chatgpt_tunnel_host=settings.allow_chatgpt_tunnel_host,
+    )
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
