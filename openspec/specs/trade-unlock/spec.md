@@ -10,6 +10,11 @@ Defines trading authorization policies and mechanisms for unlocking and locking 
 
 The `unlock_trade` tool SHALL unlock the gateway only when all of these hold:
 
+#### Scenario: Manual unlock authorization contract
+
+- **WHEN** a caller invokes `unlock_trade`
+- **THEN** the following detailed obligations SHALL hold:
+
 - `MOOMOO_TRADING_MODE` is `REAL`;
 - no stored trade credential is configured;
 - the caller supplies a password or password hash.
@@ -68,6 +73,11 @@ immediately before an order mutation is dispatched and SHALL re-lock it immediat
 afterwards. This is the only path by which this server unlocks the gateway with a
 stored credential.
 
+#### Scenario: Just-in-time unlock lifecycle contract
+
+- **WHEN** a REAL mutation uses a stored trade credential
+- **THEN** the following detailed obligations SHALL hold:
+
 Mutations that use the unlock SHALL be serialized. The unlock → dispatch → relock
 sequence of one mutation SHALL NOT interleave with another's.
 
@@ -118,6 +128,11 @@ The MCP server SHALL provide a `lock_trade` tool that lets callers explicitly lo
 the trading gateway. `lock_trade` is a *lock-only request*: it issues a lock and
 never an unlock.
 
+#### Scenario: Explicit lock request semantics
+
+- **WHEN** a caller invokes `lock_trade`
+- **THEN** the following detailed obligations SHALL hold:
+
 It SHALL be serialized with just-in-time writes. It SHALL wait for an in-progress
 unlock → dispatch → relock sequence to finish, and SHALL NOT lock the gateway inside
 one.
@@ -153,6 +168,11 @@ Its result SHALL report whether the execution halt is still in effect afterwards
 The trade service SHALL issue a lock request to the gateway when its trade connection
 is first established, and again each time the SDK re-establishes that connection,
 when either of these holds:
+
+#### Scenario: Connection lock-at-rest contract
+
+- **WHEN** the trade service establishes or re-establishes a gateway connection
+- **THEN** the following detailed obligations SHALL hold:
 
 - `MOOMOO_TRADING_MODE=READ_ONLY`; or
 - `MOOMOO_TRADING_MODE=REAL` and a stored trade credential (`MOOMOO_TRADE_PASSWORD`
@@ -231,6 +251,11 @@ that a lock is requested and that a refusal is reported.
 
 In REAL mode with a stored trade credential, the trade service SHALL hold exactly one
 of two execution states: `ARMED` or `HALTED`. The process starts `ARMED`.
+
+#### Scenario: Execution halt transition contract
+
+- **WHEN** a REAL execution process evaluates its unlock and relock state
+- **THEN** the following detailed obligations SHALL hold:
 
 **Transitions**
 

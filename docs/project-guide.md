@@ -1,0 +1,207 @@
+# Project guide
+
+Read only the sections relevant to the change; [the index](README.md) points to
+the detailed operator runbooks.
+
+This is orientation, not a second specification. The requirements live in
+`openspec/specs/`, and the deployment runbooks live in `docs/`. When this
+guide disagrees with the code, or with a spec, the code and the spec win: fix
+this guide. Use the source and canonical specs for implementation patterns.
+
+## Purpose
+
+An MCP server that gives AI agents (Claude Code, Gemini CLI and others) market
+data, account data and order management on Moomoo, through the `moomoo-api`
+SDK and a Moomoo OpenD gateway.
+
+This repository is a fork of `Litash/moomoo-api-mcp`. Upstream publishes the
+PyPI package. This fork maintains the container deployment (CI image build,
+`docs/deploy-vps.md`) and does not publish to PyPI.
+
+## Runtime and toolchain
+
+These are the real constraints. Where the sources below disagree, fix the
+source.
+
+| Constraint | Value | Source |
+| --- | --- | --- |
+| Supported Python | `>=3.10` | `pyproject.toml` `requires-python` |
+| Syntax and type-check target | 3.10 | `pyproject.toml` ruff `target-version = "py310"`, basedpyright `pythonVersion = "3.10"` |
+| Interpreter in the image | 3.12.13, uv-managed | `Dockerfile` `UV_PYTHON` |
+| Interpreter in CI tests | 3.12 | `.github/workflows/ci.yml` `test` job |
+| Interpreter for local development | 3.12 | `.python-version` |
+| MCP SDK | `mcp>=1.10.0,<2` (FastMCP; 2.x renamed it) | `pyproject.toml` |
+| Moomoo SDK | `moomoo-api>=10.10.7008` | `pyproject.toml` |
+| Package manager | uv, locked by `uv.lock` | |
+
+Write code that runs on 3.10. Features from later versions (PEP 649 deferred
+annotations, t-strings, `except*`, PEP 695 `type` aliases) are out until
+`requires-python` moves, and moving it is a deliberate change of its own.
+
+## Module map
+
+`src/moomoo_mcp/`:
+
+- `server.py`: the FastMCP instance, the process-owned gateway connections
+  (`get_services`, `close_services`), bearer-token middleware, and the
+  transport entry point `main`. Nothing unlocks at startup.
+- `settings.py`: every environment variable this process reads, parsed and
+  validated once before a transport is chosen, so an invalid value exits
+  before anything listens.
+- `supervisor.py`: the container's PID 1. It starts OpenD and the MCP server
+  and applies the recovery policy. It imports no application code.
+- `services/`: SDK wrappers. `base_service.py` (quote connection, health
+  aggregation), `trade_service.py` (trade connection, lock at rest on connect
+  and reconnect, just-in-time unlock, the ARMED/HALTED execution state), `trading_policy.py` (the
+  `MOOMOO_TRADING_MODE` gate), `market_data_service.py`, `health.py` (bounded
+  probes), `sdk_response.py` (narrowing `(ret, data)`), `validation.py`,
+  `clock.py`; `execution_identity.py` (paper token and canonical identity),
+  `execution_store.py` (SQLite durability and process lock), and
+  `paper_execution.py` (paper admission, dispatch and recovery).
+- `tools/`: MCP tools by area (`account.py`, `market_data.py`, `trading.py`,
+  `system.py`), plus `offload.py` (running blocking SDK calls off the event
+  loop), `serialization.py` (identifiers as strings at the response boundary)
+  and `kline_cursor.py` (pagination cursors).
+
+## Architectural contracts
+
+The code follows these rules. Each points to where it is specified or explained.
+
+- **Gateway connections belong to the process.** `get_services()` builds the
+  quote and trade connections once, lazily, on the first request, and every
+  session shares them. They are released at process exit. `app_lifespan` only
+  yields them. Never construct or close a connection inside the lifespan: under
+  stateless HTTP it runs per request. Tools read services through
+  `ctx.request_context.lifespan_context`. The rationale is in the `app_lifespan`
+  docstring.
+- **Streamable HTTP is stateless.** No MCP session id is issued or required
+  (`stateless_http=True` in `server.py`). Authentication is separate: when
+  `MCP_AUTH_TOKEN` is set, bearer authentication is enforced on every request,
+  independently of session state. An HTTP transport refuses to start without
+  a token, outside an explicit `MCP_ALLOW_UNAUTHENTICATED_HTTP=1` opt-out in
+  READ_ONLY mode. Do not treat statelessness as authentication.
+- **The OpenD gateway may be absent.** A failed connection is logged and the
+  server keeps serving, so `check_health` stays callable.
+- **Blocking SDK calls leave the event loop.** Tools start blocking work with
+  `tools/offload.py` `run_blocking` and wait on existing futures with
+  `await_futures`.
+- **The trading mode is enforced before the gateway.** `READ_ONLY`, `SIMULATE`
+  or `REAL` (`MOOMOO_TRADING_MODE`) decides, in the service layer, which writes
+  and unlocks are refused. A configured password never changes the mode.
+- **Paper execution is persistent in both trading modes.** SIMULATE orders use
+  the same dedicated SQLite journal whether the deployment mode is SIMULATE or
+  REAL. READ_ONLY never opens it. Real-order journaling is deferred. Unknown
+  retired-epoch tokens fail closed, and recovery review gates new admissions.
+  Operator acknowledgement requires its separate streamable-HTTP credential;
+  SSE and stdio do not support operator recovery. See `execution-journal` and
+  `docs/paper-execution.md`.
+- **Trading commands are never replayed.** A lost order response is not treated
+  as a result, and recovery never resubmits the command.
+
+The process-ownership, stateless-transport and no-replay contracts are specified
+by `container-deployment`, `trade-unlock` and `transport-sessions` (archived
+from `update-container-restart-resilience`). `docs/state-and-restarts.md`
+remains their fullest narrative description.
+
+## Deployment
+
+One container, `moomoo-mcp`, runs two processes under
+`moomoo-api-mcp-supervisor` as PID 1, with no `init: true`:
+
+- OpenD listens on `127.0.0.1:11111`, container loopback only, and is published
+  nowhere. The MCP server dials it there.
+- The MCP endpoint is published on host loopback, `127.0.0.1:8000`.
+- The `opend-data` volume (`/home/opend/.com.moomoo.OpenD`, uid 10001) holds the
+  device authorization and survives container restarts and recreation.
+- OpenD login is interactive once, then unattended through the configured
+  account and remembered state. The retired login-password MD5 setting is
+  neither injected by Compose nor read by the supervisor. Missing remembered
+  state leaves MCP diagnostics available without starting OpenD.
+- The optional `docker-compose.paper.yml` overlay adds `execution-data` at
+  `/var/lib/moomoo-mcp/data`, owned by uid 10001, for paper execution. Keep its
+  volume identity across SIMULATE/REAL mode changes. One executor holds the
+  process lock; SQLite online backup is the preferred consistent backup method.
+  A released process lock alone does not make a crash-left main-file copy safe.
+
+Recovery policy (`supervisor.py`):
+
+| Event | Response |
+| --- | --- |
+| OpenD exits | Restart OpenD in place with backoff; MCP keeps serving |
+| OpenD exits again past `OPEND_MAX_RESTARTS` within `OPEND_RESTART_WINDOW_SECONDS` | Stop MCP, exit non-zero; `restart: unless-stopped` restarts the container with fresh processes |
+| MCP exits | Stop OpenD, exit non-zero; `restart: unless-stopped` restarts the container with fresh processes |
+| OpenD running, broker unavailable | Nothing. Health reports it; no restart |
+| No usable OpenD login configured | Log why, run MCP without a gateway |
+| SIGTERM / SIGINT | Forward to both, bounded wait, then SIGKILL |
+
+The policy is specified by `openspec/specs/container-deployment` › `Paired
+Process Supervision`. It was added by `refactor-single-container-deployment`,
+which was verified against the real OpenD on the live deployment and archived
+on 2026-09-19.
+
+## Where things are specified
+
+| Document | Owns |
+| --- | --- |
+| `openspec/specs/container-deployment` | Packaging, loopback binding, supervision policy, volume persistence, non-root execution, download integrity |
+| `openspec/specs/transport-sessions` | Stateless Streamable HTTP, process-owned connections, transport-level restart semantics |
+| `openspec/specs/trade-unlock`, `trading-policy` | Mode-dependent authorization, startup and just-in-time unlock, reconnect locking |
+| `openspec/specs/execution-journal` | Paper identity, durable dispatch/outcome, recovery and operator review |
+| `docs/paper-execution.md` | Optional paper deployment, persistent storage, backup and recovery procedures |
+| Other `openspec/specs/*` | One capability per tool family |
+| `docs/state-and-restarts.md` | Operator view: what state lives where, what each restart costs |
+| `docs/deploy-vps.md`, `docs/rootless-docker.md` | Operator commands, upgrade and recovery procedures |
+
+Descriptions of the old two-container stack belong only in history, migration
+or rollback notes.
+
+## Development
+
+See [the development workflow](development.md) for checks, completion requirements,
+and pinned OpenSpec regeneration.
+
+## Domain notes
+
+- **OpenD** is Moomoo's gateway process. It logs in to Moomoo, and the SDK talks
+  to it over TCP (default port 11111). Its API has no authentication of its own,
+  which is why it listens on loopback only.
+- **Codes** take the form `MARKET.SYMBOL`: `HK.00700`, `US.AAPL`, `SH.600519`,
+  `SZ.000001`.
+- **SDK response shapes are operation-specific.** Check the return code before
+  consuming the payload, then narrow it with the matching helper in
+  `services/sdk_response.py` (`as_frame`, `as_dict`, `as_list`). Successful
+  payloads may be DataFrames, dicts or lists, and some calls return more than
+  two values: `request_history_kline` also returns a pagination key.
+- **Trading environments**: `TrdEnv.SIMULATE` (paper) and `TrdEnv.REAL`. Which
+  one a request may use is decided by the trading policy, not by the caller.
+- **Limits**: subscription quotas depend on the account tier, and OpenD rate
+  limits requests.
+
+## Constraints
+
+- Never commit credentials, account numbers or trade passwords. Configuration
+  comes from the environment. `.env.example` is the template.
+- An order whose outcome is unknown must be reconciled by querying orders or
+  deals, never by retrying.
+
+## Optional official tunnel
+
+The approved containerize-private-chatgpt-tunnel change
+is archived at openspec/changes/archive/2026-10-07-containerize-private-chatgpt-tunnel.
+Its requirements are synced to the main specifications. It adds an explicitly
+selected separate Compose container; brokerage still supervises MCP and OpenD.
+The unmodified official client uses fixed endpoints, a filtered child environment
+and authenticated READ_ONLY startup. Trust in OpenAI and the Docker host includes
+accepted upstream redirect limitations. Preserve the official release pin.
+CI publishes the optional image to the existing ECR repository with tunnel-prefixed
+commit tags. scripts/deploy.sh is the sole manual deployment entrypoint: --chatgpt
+selects the matching immutable image and retains the existing project; later
+deployments keep that selection, and --no-chatgpt disables the optional service.
+Production hosts do not build the image or stage credential files separately.
+Compose injects only MCP_AUTH_TOKEN, CHATGPT_TUNNEL_API_KEY and CHATGPT_TUNNEL_ID
+from the deployment environment. Normal restarts reuse the same values;
+deliberate rotation recreates affected containers. Managed rootful/rootless
+integration is required. Retired diagnostic runners and dated reports remain
+only in earlier Git commits. Site migration instructions stay outside this
+repository; perform migration after PR merge with available permissions/credentials.
+Live OpenAI/ChatGPT/iPad milestones remain separate.

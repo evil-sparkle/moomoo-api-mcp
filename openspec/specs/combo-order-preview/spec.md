@@ -9,7 +9,14 @@ Provides read-only estimation and preview of account margin and buying-power imp
 ### Requirement: Preview Combo Account Impact Without Submission
 
 The system SHALL expose `preview_combo_order` using the SDK combo tradability
-query. It SHALL reuse placement leg validation and account selection and accept
+query.
+
+#### Scenario: Combo preview safety and response contract
+
+- **WHEN** `preview_combo_order` queries account impact
+- **THEN** the following detailed obligations SHALL hold:
+
+It SHALL reuse placement leg validation and account selection and accept
 exact closing position IDs. It SHALL return available net-liquidation, initial
 and maintenance margin, option buying-power, withdrawal, and buying-power-decrease
 fields with an observation timestamp. Missing values SHALL remain unavailable.

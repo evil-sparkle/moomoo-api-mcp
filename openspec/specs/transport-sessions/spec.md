@@ -11,6 +11,11 @@ Defines transport session handling and gateway connection lifecycle for the MCP 
 When served over the Streamable HTTP transport, the MCP server SHALL keep no
 per-client session state:
 
+#### Scenario: Stateless request lifecycle contract
+
+- **WHEN** a client sends a Streamable HTTP request
+- **THEN** the following detailed obligations SHALL hold:
+
 - It SHALL NOT issue a session id, and SHALL NOT require one.
 - It SHALL ignore any session id a client presents.
 - It SHALL process each request as already initialized.
@@ -111,7 +116,14 @@ gateway SHALL NOT prevent the server from serving requests, including
 
 In the fixed managed deployment, requests forwarded by the optional tunnel client
 SHALL use the existing stateless Streamable HTTP endpoint and SHALL pass the same bearer-authentication,
-Host, and Origin checks as direct clients. The final HTTP Host SHALL be derived
+Host, and Origin checks as direct clients.
+
+#### Scenario: Forwarded HTTP authentication and origin contract
+
+- **WHEN** the optional tunnel forwards a request to the approved MCP destination
+- **THEN** the following detailed obligations SHALL hold:
+
+The final HTTP Host SHALL be derived
 from the approved MCP URL: the existing loopback URL for local clients, or exactly
 `http://moomoo-mcp:8000/mcp` for explicitly enabled Compose integration. An Origin, when present, SHALL be accepted
 only if it exactly matches a reviewed allowed origin; wildcard or disabled

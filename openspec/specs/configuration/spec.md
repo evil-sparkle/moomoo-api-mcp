@@ -27,6 +27,11 @@ The server **MUST** allow configuring the OpenD connection address via environme
 
 The system SHALL support the following security configuration environment variables.
 
+#### Scenario: Security configuration parsing contract
+
+- **WHEN** the service loads security configuration
+- **THEN** the following detailed obligations SHALL hold:
+
 - `MCP_TRANSPORT`: MCP transport mode (`streamable-http`, `sse`, or `stdio`).
 - `MCP_AUTH_TOKEN`: shared-secret bearer token for the HTTP and SSE transports.
   Required when either of them is selected.
@@ -110,7 +115,14 @@ names the variable. The server SHALL NOT fall back to a default in its place.
 ### Requirement: Configure Trade Account Market Discovery
 
 The system SHALL support `MOOMOO_TRADING_MARKET` with values `NONE`, `HK`, `US`,
-`CN`, `HKCC`, `SG`, `AU`, `JP`, `MY`, and `CA`. Missing or blank configuration
+`CN`, `HKCC`, `SG`, `AU`, `JP`, `MY`, and `CA`.
+
+#### Scenario: Market discovery configuration contract
+
+- **WHEN** the trade context selects its discovery market
+- **THEN** the following detailed obligations SHALL hold:
+
+Missing or blank configuration
 SHALL resolve to `NONE`. Values SHALL be trimmed and normalized to uppercase.
 `NONE` SHALL request all securities accounts exposed by the provider for the
 configured login and securities firm; a named value SHALL select the provider's
@@ -176,7 +188,14 @@ The server SHALL support `MCP_ALLOW_CHATGPT_TUNNEL_HOST` with absent, blank or `
 
 The optional Compose service SHALL receive `CHATGPT_TUNNEL_API_KEY`,
 `CHATGPT_TUNNEL_ID` and the existing ordinary `MCP_AUTH_TOKEN` through explicit
-environment injection. The public template SHALL document the settings and the
+environment injection.
+
+#### Scenario: Optional tunnel credential validation contract
+
+- **WHEN** an operator configures the optional tunnel service
+- **THEN** the following detailed obligations SHALL hold:
+
+The public template SHALL document the settings and the
 required READ_ONLY deployment mode. The runtime key SHALL be nonblank printable
 ASCII; the selected identifier SHALL match `tunnel_[a-zA-Z0-9_-]{1,128}` after
 normalization. Credentials SHALL NOT be required by default-off deployments or

@@ -74,7 +74,14 @@ so an existing volume is read rather than re-authorized.
 ### Requirement: Binary Download Integrity Verification
 
 The image build SHALL verify the downloaded OpenD archive against the
-reviewed SHA-256 pin for the selected OpenD release. The pin is recorded in the
+reviewed SHA-256 pin for the selected OpenD release.
+
+#### Scenario: OpenD archive verification contract
+
+- **WHEN** the image build downloads an OpenD archive
+- **THEN** the following detailed obligations SHALL hold:
+
+The pin is recorded in the
 version-controlled build configuration next to that release's version, tag and
 download URL; today that is the `OPEND_SHA256` build arg. Verification SHALL
 occur before extraction, and a mismatch SHALL fail the build, whichever source
@@ -229,7 +236,14 @@ When the OpenD gateway process exits and is restarted in place, within the
 retry budget of the deployment's supervision policy, the MCP server process
 SHALL keep running, and gateway access SHALL recover without restarting the MCP
 server and without any change to client configuration once the gateway is
-reachable and logged in again. A gateway failure that exhausts that budget MAY
+reachable and logged in again.
+
+#### Scenario: Gateway restart recovery boundaries
+
+- **WHEN** the gateway exits and supervision evaluates recovery
+- **THEN** the following detailed obligations SHALL hold:
+
+A gateway failure that exhausts that budget MAY
 instead stop the MCP server and exit the supervisor non-zero, as
 `Paired Process Supervision` specifies, so that the container runtime's restart
 policy restarts the container with fresh supervisor, OpenD and MCP processes.
@@ -338,7 +352,14 @@ command reached the broker.
 
 Deployment verification SHALL be performed by a verifier that reads its
 authentication token from the configuration Docker Compose resolves for the
-MCP service, and SHALL NOT interpret dotenv files itself. The token SHALL be
+MCP service, and SHALL NOT interpret dotenv files itself.
+
+#### Scenario: Authenticated deployment probe contract
+
+- **WHEN** the deployment verifier probes the MCP endpoint
+- **THEN** the following detailed obligations SHALL hold:
+
+The token SHALL be
 delivered to the HTTP client through a private channel, and SHALL NOT appear
 in process arguments, in files created for the probe, or in printed output.
 Verified SHALL mean the MCP endpoint accepted the configured authentication
@@ -483,6 +504,11 @@ trading readiness.
 The deployment SHALL persist execution journal data across container restarts and
 container recreation, using a dedicated volume that is separate from the OpenD
 device authorization volume.
+
+#### Scenario: Journal volume and backup contract
+
+- **WHEN** a deployment provisions, restarts, or recovers journal storage
+- **THEN** the following detailed obligations SHALL hold:
 
 - The journal volume SHALL be mounted at a dedicated path and owned by the
   unprivileged user id the server runs as, so the server reads and writes it without
@@ -639,7 +665,14 @@ execution-journal volume, or existing local-client path.
 The pinned OpenD deployment SHALL support one-time interactive login through
 `OPEND_INTERACTIVE=1` and unattended login through the configured account,
 `MOOMOO_LOGIN_BY_REMEMBER=1` and remembered state in the existing persistent
-volume. The supervisor SHALL NOT use `MOOMOO_LOGIN_PWD_MD5` or emit
+volume.
+
+#### Scenario: Remembered login credential separation
+
+- **WHEN** the supervisor starts OpenD using interactive or remembered login
+- **THEN** the following detailed obligations SHALL hold:
+
+The supervisor SHALL NOT use `MOOMOO_LOGIN_PWD_MD5` or emit
 `-login_pwd_md5`; Compose SHALL NOT inject that retired setting. The public
 template and runbooks SHALL describe the interactive/remembered flow without
 offering password-MD5 startup. Trade-unlock credentials SHALL remain independent.
@@ -689,7 +722,14 @@ The existing GitHub Actions image pipeline SHALL build the tunnel from enumerate
 
 ### Requirement: Reproducible hardened tunnel image
 
-The tunnel SHALL use a dedicated small image containing the official reviewed release and minimal startup/diagnostic support, with immutable image inputs and archive integrity verification before binary execution. The reviewed release manifest SHALL remain the release source of truth. Runtime startup SHALL NOT download latest or upgrade the client. The container SHALL run as a numeric non-root UID/GID with a read-only root filesystem, dropped capabilities, no-new-privileges, and narrowly scoped writable runtime storage. It SHALL preserve signal handling, bounded shutdown and independent restart behavior.
+The tunnel SHALL use a dedicated small image containing the official reviewed release and minimal startup/diagnostic support, with immutable image inputs and archive integrity verification before binary execution.
+
+#### Scenario: Tunnel image runtime hardening contract
+
+- **WHEN** the optional tunnel image is built or started
+- **THEN** the following detailed obligations SHALL hold:
+
+The reviewed release manifest SHALL remain the release source of truth. Runtime startup SHALL NOT download latest or upgrade the client. The container SHALL run as a numeric non-root UID/GID with a read-only root filesystem, dropped capabilities, no-new-privileges, and narrowly scoped writable runtime storage. It SHALL preserve signal handling, bounded shutdown and independent restart behavior.
 
 #### Scenario: Unverified archive
 

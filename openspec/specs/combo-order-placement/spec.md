@@ -119,6 +119,11 @@ market.
 The system SHALL apply the same account resolution to combo placement and combo
 preview as to single-leg placement.
 
+#### Scenario: Combo account resolution contract
+
+- **WHEN** combo placement or preview selects an account
+- **THEN** the following detailed obligations SHALL hold:
+
 - When `acc_id` is `"0"`, the service SHALL select an account only when exactly one
   eligible account is authorized for the legs' market. In REAL, an account is
   eligible only if it is allowlisted.
@@ -162,6 +167,11 @@ quantity, and wait for the user's explicit confirmation.
 
 Combo placement SHALL be subject to the trading policy's order guardrails, measured
 as follows:
+
+#### Scenario: Combo guardrail measurement contract
+
+- **WHEN** combo placement evaluates configured order limits
+- **THEN** the following detailed obligations SHALL hold:
 
 - The quantity limit SHALL apply to the largest leg quantity, `qty × qty_ratio`.
 - The notional limit SHALL apply to the package premium:

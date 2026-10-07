@@ -15,6 +15,11 @@ Every journaled mutation SHALL carry a complete operation token consisting of a
 caller-owned `operation_id` and a server-issued `admission_epoch`. The server SHALL
 NOT generate, default, derive, parse, or rewrite an identifier.
 
+#### Scenario: Journal admission and retry contract
+
+- **WHEN** the journal evaluates a mutation token
+- **THEN** the following detailed obligations SHALL hold:
+
 The `operation_id` SHALL be a non-empty, printable string within a bounded length.
 It is scoped to the journal database and its bound paper environment and accounts.
 Once reserved in the journal, the identifier is immutable.
@@ -159,6 +164,11 @@ The journal SHALL compute a canonical form of each operation's request and a
 fingerprint over it, and SHALL store both, so that a conflict can be explained
 rather than merely asserted.
 
+#### Scenario: Canonical request identity contract
+
+- **WHEN** the journal canonicalizes a mutation request
+- **THEN** the following detailed obligations SHALL hold:
+
 - The canonical form SHALL cover the trading environment, the account, the operation
   type, and the operation's own parameters.
 - Prices SHALL be carried and stored as decimal strings, and compared by decimal
@@ -237,6 +247,11 @@ rather than merely asserted.
 ### Requirement: Pre-Dispatch Commitment and Single Invocation
 
 The journal SHALL enforce a two-phase dispatch lifecycle:
+
+#### Scenario: Durable dispatch lifecycle contract
+
+- **WHEN** an admitted mutation proceeds toward gateway dispatch
+- **THEN** the following detailed obligations SHALL hold:
 
 1. **Identity Resolution:** Validate the token's form and the request schema, then
    look up the identifier across all epochs. A known identifier SHALL resolve from its
@@ -403,6 +418,11 @@ and SHALL NOT retry that invocation automatically.
 The journal SHALL record the outcome of each dispatched operation using the dispatch
 boundary defined by `order-placement` › Report the Dispatch Boundary.
 
+#### Scenario: Dispatch outcome classification contract
+
+- **WHEN** a dispatched operation returns or loses its response
+- **THEN** the following detailed obligations SHALL hold:
+
 Local lifecycle states SHALL remain distinct from broker order statuses. Local states
 are `ADMITTED`, `DISPATCHING`, `ACKNOWLEDGED`, `UNKNOWN_OUTCOME`, `RECONCILED`,
 `REFUSED`, and `TERMINAL_ACCOUNTED`. Broker statuses are those the provider reports,
@@ -519,6 +539,11 @@ such as `SUBMITTED`, `FILLED_PART`, `FILLED_ALL`, `CANCELLED_ALL` and `REJECTED`
 When the gateway acknowledged a mutation but a later local step failed, the result
 SHALL report the broker's evidence separately from the local failure.
 
+#### Scenario: Acknowledged mutation with local failure
+
+- **WHEN** a local step fails after gateway acknowledgement
+- **THEN** the following detailed obligations SHALL hold:
+
 The result SHALL state:
 
 - what the broker evidenced, including the order identifier when it was readable;
@@ -564,6 +589,11 @@ reported as safe to retry.
 
 The system SHALL provide an explicit reconciliation path for operations that are not
 in a terminal state. Reconciliation SHALL apply only to operations the journal owns.
+
+#### Scenario: Journal reconciliation ownership contract
+
+- **WHEN** an operator requests reconciliation of an unresolved operation
+- **THEN** the following detailed obligations SHALL hold:
 
 Reconciliation SHALL use order and history-order observations. It SHALL NOT depend on
 broker deal records, because the paper provider does not offer a deal query.
@@ -660,6 +690,11 @@ Reconciliation SHALL NOT dispatch any order-mutating request.
 
 The execution store SHALL verify its storage before serving mutations, enforce
 single-process execution, and SHALL NEVER silently recreate missing storage.
+
+#### Scenario: Journal storage lifecycle contract
+
+- **WHEN** the execution store opens, restarts, or restores storage
+- **THEN** the following detailed obligations SHALL hold:
 
 - Creating the journal SHALL be an explicit, configured act. A missing file at a
   configured path SHALL fail closed.
@@ -771,6 +806,11 @@ single-process execution, and SHALL NEVER silently recreate missing storage.
 
 Every start of a paper execution process SHALL require recovery review before new
 mutations are admitted.
+
+#### Scenario: Recovery review and acknowledgement contract
+
+- **WHEN** a paper execution process starts and an operator reviews recovery
+- **THEN** the following detailed obligations SHALL hold:
 
 On start, the system SHALL enumerate operations that are not in a terminal state.
 Until review has run and each has been accounted for, new mutations SHALL be refused.

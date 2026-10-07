@@ -13,6 +13,11 @@ through the configured trade-context filter and securities firm. It SHALL accept
 optional `market` and `trd_env` arguments and return the existing list shape,
 including exact string IDs, account types, simulation status and provider metadata.
 
+#### Scenario: Account list filtering contract
+
+- **WHEN** `get_accounts` applies optional filters
+- **THEN** the following detailed obligations SHALL hold:
+
 Omitted or null filters SHALL retain all returned accounts. `market` SHALL accept
 the values defined by Configure Trade Account Market Discovery, with `NONE` meaning
 no additional market filtering. A named market SHALL match membership in the
@@ -187,7 +192,14 @@ SHALL fail explicitly rather than be represented as valid IDs.
 For assets, positions, account summaries, cash flow, maximum tradable quantity,
 current orders/deals and historical orders/deals, `acc_id="0"`
 SHALL resolve only when exactly one discovered account matches the requested
-environment. Zero or multiple matches SHALL produce a clear account-selection
+environment.
+
+#### Scenario: Account-bound read selection contract
+
+- **WHEN** an account-bound read resolves its account
+- **THEN** the following detailed obligations SHALL hold:
+
+Zero or multiple matches SHALL produce a clear account-selection
 error before the account-specific query, directing callers to `get_accounts` and
 an explicit ID. Candidate IDs in error messages SHALL be masked to their last
 four digits. Position, code and discovery-response filters SHALL NOT silently
