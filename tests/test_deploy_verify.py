@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from scripts import deploy_verify
@@ -37,6 +39,18 @@ VALID_RESULT = {
         "protocolVersion": "2025-06-18",
         "capabilities": {"tools": {}},
         "serverInfo": {"name": "moomoo-api-mcp", "version": "1.0"},
+    },
+}
+VALID_HEALTH_RESULT = {
+    "jsonrpc": "2.0",
+    "id": deploy_verify.HEALTH_REQUEST_ID,
+    "result": {
+        "isError": False,
+        "structuredContent": {
+            "status": "connected",
+            "quote": {"status": "ok", "logged_in": True},
+            "trade": {"status": "ok", "account_count": 1},
+        },
     },
 }
 
@@ -146,6 +160,13 @@ def run_verify(url, token=TOKEN, timeout=0):
     with contextlib.redirect_stderr(captured):
         verified = deploy_verify.verify(url, timeout, token)
     return verified, captured.getvalue()
+
+
+def run_gateway_readiness(url, token=TOKEN, timeout=0):
+    captured = io.StringIO()
+    with contextlib.redirect_stderr(captured):
+        ready = deploy_verify.gateway_readiness(url, timeout, token)
+    return ready, captured.getvalue()
 
 
 class ResolveTokenTest(unittest.TestCase):
@@ -494,6 +515,200 @@ class ProbeTest(unittest.TestCase):
 
 
 @unittest.skipIf(REAL_CURL is None, "curl is not installed")
+class GatewayReadinessTest(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(deploy_verify, "RETRY_INTERVAL", 0.05)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_actual_stateless_fastmcp_health_responses_are_understood(self):
+        import uvicorn
+        from mcp.server.fastmcp import FastMCP
+
+        for json_response in (True, False):
+            with self.subTest(json_response=json_response):
+                app = FastMCP(
+                    "readiness-fixture",
+                    stateless_http=True,
+                    json_response=json_response,
+                )
+
+                @app.tool()
+                def check_health() -> dict[str, Any]:
+                    return VALID_HEALTH_RESULT["result"]["structuredContent"]
+
+                listener = socket.socket()
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+                port = listener.getsockname()[1]
+                server = uvicorn.Server(
+                    uvicorn.Config(app.streamable_http_app(), log_level="critical")
+                )
+                thread = threading.Thread(
+                    target=server.run, kwargs={"sockets": [listener]}, daemon=True
+                )
+                thread.start()
+                try:
+                    deadline = time.monotonic() + 10
+                    while not server.started and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(server.started, "the fixture did not start")
+                    ready, output = run_gateway_readiness(
+                        f"http://127.0.0.1:{port}/mcp"
+                    )
+                    self.assertTrue(ready, output)
+                finally:
+                    server.should_exit = True
+                    thread.join(timeout=10)
+                    listener.close()
+                self.assertFalse(thread.is_alive(), "the fixture did not stop")
+
+    def test_json_and_sse_health_confirm_login_with_read_only_calls(self):
+        notification = {"jsonrpc": "2.0", "method": "notifications/message"}
+        for reply in (
+            json_reply(VALID_HEALTH_RESULT),
+            sse_reply(notification, VALID_HEALTH_RESULT),
+        ):
+            with self.subTest(reply=reply), ScriptedServer([reply]) as server:
+                ready, output = run_gateway_readiness(server.url)
+            self.assertTrue(ready, output)
+            self.assertIn("OpenD ready", output)
+            self.assertNotIn(TOKEN, output)
+            request = server.requests[0]
+            self.assertEqual(request["headers"]["Authorization"], f"Bearer {TOKEN}")
+            self.assertEqual(
+                json.loads(request["body"]),
+                {
+                    "jsonrpc": "2.0",
+                    "id": deploy_verify.HEALTH_REQUEST_ID,
+                    "method": "tools/call",
+                    "params": {"name": "check_health", "arguments": {}},
+                },
+            )
+
+    def test_remembered_login_can_finish_after_initial_health_or_http_failure(self):
+        warming = json.loads(json.dumps(VALID_HEALTH_RESULT))
+        warming["result"]["structuredContent"]["quote"]["logged_in"] = False
+        for initial in (json_reply(warming), (503, "application/json", b"{}")):
+            with (
+                self.subTest(initial=initial),
+                ScriptedServer([initial, json_reply(VALID_HEALTH_RESULT)]) as server,
+            ):
+                ready, output = run_gateway_readiness(server.url, timeout=1)
+            self.assertTrue(ready, output)
+            self.assertEqual(len(server.requests), 2)
+            self.assertNotIn("login required", output)
+
+    def test_connectivity_requires_positive_login_and_both_service_probes(self):
+        cases = (
+            ({"status": "ok", "logged_in": False}, "ok", "connected", "login required"),
+            ({"status": "ok"}, "ok", "connected", "login unconfirmed"),
+            ({"status": "ok", "logged_in": 1}, "ok", "connected", "login unconfirmed"),
+            ({"status": "ok", "logged_in": True}, "error", "degraded", "degraded"),
+            ({"status": "error"}, "error", "disconnected", "disconnected"),
+            (
+                {"status": "ok", "logged_in": True},
+                "error",
+                "connected",
+                "probes incomplete",
+            ),
+        )
+        for quote, trade_status, status, expected in cases:
+            response = json.loads(json.dumps(VALID_HEALTH_RESULT))
+            health = response["result"]["structuredContent"]
+            health.update(status=status, quote=quote, trade={"status": trade_status})
+            with (
+                self.subTest(health=health),
+                ScriptedServer([json_reply(response)]) as server,
+            ):
+                ready, output = run_gateway_readiness(server.url)
+            self.assertFalse(ready)
+            self.assertEqual(len(server.requests), 1, "timeout zero means one attempt")
+            self.assertIn(expected, output)
+            self.assertIn("OpenD readiness is unconfirmed", output)
+            self.assertIn("compose-prod.sh stop moomoo-mcp", output)
+            self.assertIn("-e OPEND_INTERACTIVE=1 -e OPEND_MAX_RESTARTS=0", output)
+            self.assertIn("choose Y to remember", output)
+            self.assertIn("Keep OPEND_INTERACTIVE=0", output)
+            self.assertIn("compose-prod.sh up -d moomoo-mcp", output)
+            self.assertNotIn("OpenD ready:", output)
+
+    def test_bad_or_refused_health_responses_stop_without_exposing_payloads(self):
+        missing_quote = json.loads(json.dumps(VALID_HEALTH_RESULT))
+        del missing_quote["result"]["structuredContent"]["quote"]
+        for reply in (
+            (401, "application/json", TOKEN.encode()),
+            (403, "application/json", TOKEN.encode()),
+            (200, "application/json", TOKEN.encode()),
+            json_reply(VALID_RESULT),
+            json_reply(dict(VALID_HEALTH_RESULT, id="unrelated")),
+            json_reply(missing_quote),
+            json_reply(
+                {
+                    "jsonrpc": "2.0",
+                    "id": deploy_verify.HEALTH_REQUEST_ID,
+                    "error": {"code": -32603, "message": TOKEN},
+                }
+            ),
+            json_reply(
+                {
+                    "jsonrpc": "2.0",
+                    "id": deploy_verify.HEALTH_REQUEST_ID,
+                    "result": {"isError": True, "content": TOKEN},
+                }
+            ),
+            (
+                200,
+                "text/event-stream",
+                b"data: " + json.dumps(VALID_HEALTH_RESULT).encode(),
+            ),
+            (200, "text/plain", json.dumps(VALID_HEALTH_RESULT).encode()),
+        ):
+            with self.subTest(reply=reply), ScriptedServer([reply]) as server:
+                ready, output = run_gateway_readiness(server.url, timeout=1)
+            self.assertFalse(ready)
+            self.assertEqual(len(server.requests), 1)
+            self.assertNotIn(TOKEN, output)
+            self.assertNotIn("OpenD ready:", output)
+
+    def test_partial_transfer_cannot_confirm_readiness(self):
+        status, content_type, body = json_reply(VALID_HEALTH_RESULT)
+        with ScriptedServer([(status, content_type, body, 100)]) as server:
+            ready, output = run_gateway_readiness(server.url)
+        self.assertFalse(ready)
+        self.assertIn("curl exit 18", output)
+        self.assertNotIn("OpenD ready:", output)
+
+    def test_readiness_deadline_bounds_attempts_and_sleeps(self):
+        elapsed = [0.0]
+        limits = []
+
+        def clock():
+            return elapsed[0]
+
+        def sleep(seconds):
+            elapsed[0] += seconds
+
+        def probe(_url, _token, limit, **_kwargs):
+            limits.append(limit)
+            elapsed[0] += min(limit, 1.5)
+            return deploy_verify.Attempt(
+                "200", retryable=True, problem="OpenD disconnected"
+            )
+
+        with (
+            mock.patch.object(deploy_verify, "probe", side_effect=probe),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            ready = deploy_verify.gateway_readiness(
+                "http://127.0.0.1/mcp", 2, TOKEN, clock=clock, sleep=sleep
+            )
+        self.assertFalse(ready)
+        self.assertEqual(elapsed[0], 2.0)
+        self.assertTrue(all(0 < limit <= 2 for limit in limits))
+
+
+@unittest.skipIf(REAL_CURL is None, "curl is not installed")
 class CommandLineTest(unittest.TestCase):
     """The helper as deploy.sh runs it: a process, with secrets to keep."""
 
@@ -565,6 +780,26 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("@-", argv)
         self.assertNotIn("--location", argv)
         self.assert_no_secret_leaked(result)
+
+    def test_gateway_readiness_has_separate_exit_status_and_private_token(self):
+        unready = json.loads(json.dumps(VALID_HEALTH_RESULT))
+        health = unready["result"]["structuredContent"]
+        health["quote"]["logged_in"] = False
+        health["quote"]["error"] = TOKEN
+        health["trade"]["account_ids"] = [OTHER_SECRET]
+        for response, exit_code in ((VALID_HEALTH_RESULT, 0), (unready, 1)):
+            with (
+                self.subTest(exit_code=exit_code),
+                ScriptedServer([json_reply(response)]) as server,
+            ):
+                result = self.run_helper(
+                    "gateway-readiness", "--url", server.url, "--timeout", "0"
+                )
+            self.assertEqual(result.returncode, exit_code, result.stderr)
+            self.assertEqual(
+                server.requests[0]["headers"]["Authorization"], f"Bearer {TOKEN}"
+            )
+            self.assert_no_secret_leaked(result)
 
     def test_failures_leak_nothing(self):
         cases = {

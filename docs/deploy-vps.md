@@ -381,8 +381,46 @@ and redeploys using the same image, which preserve the earlier rollback image.
 Cleanup errors warn without failing a verified deployment. Other repositories,
 untagged images, tunnel-prefixed tags, and volumes are untouched.
 
-Confirm login and MCP availability after each deployment; container startup
-alone is not a successful authenticated session.
+After MCP verification, deployment separately calls the read-only `check_health`
+tool, waiting up to `DEPLOY_GATEWAY_TIMEOUT` seconds (default 60; a whole number
+of seconds; `0` means one attempt) for remembered login to finish. `OpenD ready`
+requires successful quote and trade probes and an explicitly true quote-login
+flag. It confirms gateway connectivity and quote login, not trading permission,
+unlocked trading, or market authorization.
+
+If OpenD remains unavailable, reports incomplete login, or provides no usable
+health result, the script prints a gateway readiness warning and recovery
+instructions. A verified MCP deployment still exits successfully and remains
+running for diagnostics; this warning does not trigger rollback. `--prepare`
+does not send health requests. You can check readiness again without redeploying:
+
+```sh
+python3 scripts/deploy_verify.py gateway-readiness
+```
+
+For a required initial login, or when remembered login is no longer usable,
+first stop the background service so two gateways do not share the same state:
+
+```sh
+./scripts/compose-prod.sh stop moomoo-mcp
+./scripts/compose-prod.sh run --rm --no-deps -it \
+  -e OPEND_INTERACTIVE=1 -e OPEND_MAX_RESTARTS=0 moomoo-mcp
+```
+
+Complete the terminal prompts, choose `Y` to remember the password, confirm
+successful login, then stop the temporary container with Ctrl-C. Keep
+`OPEND_INTERACTIVE=0` and `MOOMOO_LOGIN_BY_REMEMBER=1` for background operation,
+and ensure the account and region match that login. Then start the service and
+check readiness again:
+
+```sh
+./scripts/compose-prod.sh up -d moomoo-mcp
+python3 scripts/deploy_verify.py gateway-readiness
+```
+
+An unavailable gateway can also reflect connectivity or permission problems;
+inspect diagnostics before repeating login. Container startup alone does not
+confirm a usable broker session.
 
 Keep the tracked working tree clean. Runtime secrets belong in `.env`; the non-secret
 registry, image tag and retained Compose project belong in `.deploy.env`. Both are ignored by Git.

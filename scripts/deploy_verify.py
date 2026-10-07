@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Check a deployment's configuration, then verify its MCP endpoint.
 
-deploy.sh decides what to deploy and how to roll it back. This answers the two
-questions it used to answer by re-implementing Docker Compose in Bash:
+deploy.sh decides what to deploy and how to roll it back. This resolves the
+configuration through Docker Compose and checks MCP and gateway readiness:
 
   check-config  Does Compose resolve a usable MCP_AUTH_TOKEN for the service?
   verify        Does the running endpoint accept that token and answer an MCP
                 initialize with a well-formed result?
+  gateway-readiness  Do read-only gateway probes succeed, with quote login
+                     explicitly confirmed?
 
 The configuration is what ``scripts/compose-prod.sh config --format json``
 resolves -- the same wrapper, Docker context, env files and compose files that
@@ -32,7 +34,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -56,6 +57,7 @@ COMPOSE_CONFIG = (
 )
 DEFAULT_URL = "http://127.0.0.1:8000/mcp"
 DEFAULT_TIMEOUT = 90
+DEFAULT_GATEWAY_TIMEOUT = 60
 # One attempt never outlives this, nor the deadline.
 ATTEMPT_SECONDS = 10.0
 RETRY_INTERVAL = 3.0
@@ -71,6 +73,16 @@ INITIALIZE_REQUEST = json.dumps(
             "capabilities": {},
             "clientInfo": {"name": "deploy-verify", "version": "0"},
         },
+    },
+    separators=(",", ":"),
+)
+HEALTH_REQUEST_ID = "deploy-gateway-readiness"
+HEALTH_REQUEST = json.dumps(
+    {
+        "jsonrpc": "2.0",
+        "id": HEALTH_REQUEST_ID,
+        "method": "tools/call",
+        "params": {"name": "check_health", "arguments": {}},
     },
     separators=(",", ":"),
 )
@@ -167,7 +179,15 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
             if any(character < " " or character > "~" for character in value):
                 raise ConfigError(f"The selected tunnel has invalid {variable}.")
         identifier = tunnel_environment["CHATGPT_TUNNEL_ID"].strip()
-        if not re.fullmatch(r"tunnel_[a-zA-Z0-9_-]{1,128}", identifier):
+        suffix = identifier.removeprefix("tunnel_")
+        if (
+            not identifier.startswith("tunnel_")
+            or not 1 <= len(suffix) <= 128
+            or not all(
+                character.isascii() and (character.isalnum() or character in "_-")
+                for character in suffix
+            )
+        ):
             raise ConfigError("The selected tunnel has invalid CHATGPT_TUNNEL_ID.")
     return token
 
@@ -229,8 +249,15 @@ def printable(text: str, limit: int = 60) -> str:
     return kept if len(kept) <= limit else kept[:limit] + "..."
 
 
-def probe(url: str, token: str, limit: float) -> Attempt:
-    """POST one initialize through curl and classify what came back.
+def probe(
+    url: str,
+    token: str,
+    limit: float,
+    *,
+    request: str = INITIALIZE_REQUEST,
+    response_check: Callable[[bytes, str], Attempt] | None = None,
+) -> Attempt:
+    """POST one MCP request through curl and classify what came back.
 
     An attempt can verify only when all of these hold: curl exits zero
     (the transfer completed — a partial transfer, timeout or signal
@@ -255,7 +282,7 @@ def probe(url: str, token: str, limit: float) -> Attempt:
         "--header",
         "Accept: application/json, text/event-stream",
         "--data-binary",
-        INITIALIZE_REQUEST,
+        request,
         "--write-out",
         "\n%{http_code}\n%{content_type}",
     ]
@@ -291,6 +318,8 @@ def probe(url: str, token: str, limit: float) -> Attempt:
         return Attempt(status, retryable=True, problem=f"HTTP {status}")
     if status != "200":
         return Attempt(status, problem=f"HTTP {printable(status)}")
+    if response_check is not None:
+        return response_check(body, content_type.decode("latin-1"))
     problem = initialize_problem(body, content_type.decode("latin-1"))
     if problem is not None:
         return Attempt(status, problem=problem)
@@ -303,17 +332,36 @@ def initialize_problem(body: bytes, content_type: str) -> str | None:
     Streamable HTTP answers a POST either with the JSON-RPC message itself or
     with an SSE stream carrying it, so both are accepted and checked alike.
     """
+    message, problem = response_message(body, content_type, REQUEST_ID, "initialize")
+    return problem if problem is not None else initialize_result_problem(message)
+
+
+def response_message(
+    body: bytes, content_type: str, request_id: str, request_name: str
+) -> tuple[Any, str | None]:
+    """Decode JSON or a complete SSE response, ignoring preceding notifications."""
     media_type = content_type.split(";", 1)[0].strip().lower()
     if media_type == "application/json":
         try:
             message: Any = json.loads(body)
         except ValueError:
-            return "the body is not valid JSON"
-        return initialize_result_problem(message)
+            return None, "the body is not valid JSON"
+        return message, None
     if media_type == "text/event-stream":
-        return sse_problem(body)
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return None, "the SSE stream is not UTF-8"
+        for data in sse_events(text):
+            try:
+                message = json.loads(data)
+            except ValueError:
+                return None, "an SSE event is not valid JSON"
+            if isinstance(message, dict) and message.get("id") == request_id:
+                return message, None
+        return None, f"the SSE stream carries no response to the {request_name} request"
     shown = printable(media_type) if media_type else "untyped"
-    return f"the body is {shown}, not JSON or an SSE stream"
+    return None, f"the body is {shown}, not JSON or an SSE stream"
 
 
 def sse_events(text: str) -> list[str]:
@@ -337,22 +385,6 @@ def sse_events(text: str) -> list[str]:
         if field == "data":
             data.append(value)
     return events
-
-
-def sse_problem(body: bytes) -> str | None:
-    try:
-        text = body.decode("utf-8")
-    except UnicodeDecodeError:
-        return "the SSE stream is not UTF-8"
-    for data in sse_events(text):
-        try:
-            message: Any = json.loads(data)
-        except ValueError:
-            return "an SSE event is not valid JSON"
-        # Notifications may precede the response; only the answer counts.
-        if isinstance(message, dict) and message.get("id") == REQUEST_ID:
-            return initialize_result_problem(message)
-    return "the SSE stream carries no response to the initialize request"
 
 
 def initialize_result_problem(message: Any) -> str | None:
@@ -456,6 +488,97 @@ def whole_seconds(value: str) -> int:
     return int(value)
 
 
+def health_response(body: bytes, content_type: str) -> Attempt:
+    """Classify health using fixed labels; never relay broker-supplied errors."""
+    message, problem = response_message(
+        body, content_type, HEALTH_REQUEST_ID, "check_health"
+    )
+    if problem is not None:
+        return Attempt("200", problem="invalid check_health response")
+    if (
+        not isinstance(message, dict)
+        or message.get("jsonrpc") != "2.0"
+        or message.get("id") != HEALTH_REQUEST_ID
+        or "error" in message
+    ):
+        return Attempt("200", problem="invalid check_health response")
+    result = message.get("result")
+    if not isinstance(result, dict) or result.get("isError", False) is not False:
+        return Attempt("200", problem="check_health failed")
+    health = result.get("structuredContent")
+    if not isinstance(health, dict):
+        return Attempt("200", problem="check_health has no structured result")
+    status = health.get("status")
+    quote = health.get("quote")
+    trade = health.get("trade")
+    if (
+        status not in ("connected", "degraded", "disconnected")
+        or not isinstance(quote, dict)
+        or not isinstance(trade, dict)
+        or quote.get("status") not in ("ok", "error", "timeout", "unavailable")
+        or trade.get("status") not in ("ok", "error", "timeout", "unavailable")
+    ):
+        return Attempt("200", problem="invalid check_health status")
+    if quote.get("logged_in") is False:
+        return Attempt("200", retryable=True, problem="OpenD login required")
+    if status != "connected" or quote["status"] != "ok" or trade["status"] != "ok":
+        problem = (
+            "OpenD probes incomplete" if status == "connected" else f"OpenD {status}"
+        )
+        return Attempt("200", retryable=True, problem=problem)
+    if quote.get("logged_in") is not True:
+        return Attempt("200", retryable=True, problem="OpenD login unconfirmed")
+    return Attempt("200", verified=True)
+
+
+def gateway_readiness(
+    url: str,
+    timeout: int,
+    token: str,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Wait for gateway probes and confirmed login independently of deployment."""
+    deadline = clock() + timeout
+    problem = "readiness deadline expired"
+    while True:
+        remaining = deadline - clock()
+        limit = ATTEMPT_SECONDS if timeout == 0 else min(ATTEMPT_SECONDS, remaining)
+        if limit <= 0:
+            break
+        attempt = probe(
+            url, token, limit, request=HEALTH_REQUEST, response_check=health_response
+        )
+        if attempt.verified:
+            say("OpenD ready: quote login confirmed; quote and trade probes succeeded.")
+            return True
+        problem = attempt.problem
+        remaining = deadline - clock()
+        if not attempt.retryable or remaining <= 0:
+            break
+        sleep(min(RETRY_INTERVAL, remaining))
+    say(f"OpenD readiness warning: {problem}.")
+    say(
+        "OpenD readiness is unconfirmed. Check gateway diagnostics and "
+        "account/region configuration. If initial "
+        "login is incomplete or remembered login is unavailable, run:"
+    )
+    say("  ./scripts/compose-prod.sh stop moomoo-mcp")
+    say(
+        "  ./scripts/compose-prod.sh run --rm --no-deps -it "
+        "-e OPEND_INTERACTIVE=1 -e OPEND_MAX_RESTARTS=0 moomoo-mcp"
+    )
+    say(
+        "Complete the terminal prompts, choose Y to remember the password, "
+        "confirm successful login, then Ctrl-C. Keep OPEND_INTERACTIVE=0 and "
+        "MOOMOO_LOGIN_BY_REMEMBER=1 for background operation, then run:"
+    )
+    say("  ./scripts/compose-prod.sh up -d moomoo-mcp")
+    say("  python3 scripts/deploy_verify.py gateway-readiness")
+    return False
+
+
 def on_signal(signum: int, _frame: FrameType | None) -> None:
     raise Interrupted(signum)
 
@@ -465,7 +588,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="deploy_verify.py",
         description=(
             "Read MCP_AUTH_TOKEN from the configuration Compose resolves, and "
-            "verify the MCP endpoint accepts it."
+            "verify MCP authentication or separately check OpenD readiness."
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -482,6 +605,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_TIMEOUT,
         help="seconds to keep retrying an endpoint that is not up yet (0: once)",
     )
+    gateway_parser = commands.add_parser(
+        "gateway-readiness", help="report gateway probes and confirmed quote login"
+    )
+    gateway_parser.add_argument("--url", default=DEFAULT_URL)
+    gateway_parser.add_argument(
+        "--timeout",
+        type=whole_seconds,
+        default=DEFAULT_GATEWAY_TIMEOUT,
+        help="seconds to wait for OpenD readiness (0: once)",
+    )
     args = parser.parse_args(argv)
 
     signal.signal(signal.SIGINT, on_signal)
@@ -497,6 +630,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "without authentication, and verify will send no token."
                 )
             return 0
+        if args.command == "gateway-readiness":
+            return 0 if gateway_readiness(args.url, args.timeout, token) else 1
         return 0 if verify(args.url, args.timeout, token) else 1
     except ConfigError as error:
         say(f"Configuration error: {error}")
