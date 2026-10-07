@@ -454,7 +454,7 @@ named directory in the checkout does not remove the Docker volume.
 | --- | --- |
 | OpenD device authorization and remembered login | Stored in `opend-data`; preserve across recreation and rollback. Deleting it requires interactive login again. |
 | OpenD live login | Process memory; gateway or container restart requires broker login again, commonly around 30 seconds but not a downtime guarantee. |
-| MCP HTTP session | Streamable HTTP is stateless; interrupted requests can fail, but there is no session to recreate. SSE has different session behavior. |
+| MCP HTTP session | Only stateless Streamable HTTP with JSON responses is supported; interrupted requests can fail, but there is no session to recreate. |
 | Gateway connections and quote subscriptions | Process-owned; SDK reconnects after gateway failure. Container replacement loses subscriptions. |
 | Trade halt (`ARMED`/`HALTED`) | MCP process memory; container replacement starts a new process. Restarting is not evidence an uncertain order was reconciled. |
 | Paper execution journal and recovery audit | Separate `execution-data` volume when configured; preserve it and its identity through mode changes, upgrades and restores. |
@@ -774,10 +774,9 @@ provider evidence reliably identifies the submitted order and its outcome.
 Account explicitly for uncertain outcomes through the authenticated operator
 recovery interface, supplying the current recovery epoch, observed state, reason,
 evidence reference and verified accounted facts. Ordinary tool credentials do not
-have operator acknowledgement authority. Operator recovery is available only over
-streamable HTTP. SSE and stdio refuse recovery acknowledgement so a long-lived
-session cannot reuse another request's operator identity. Never invent broker
-evidence to clear a gate. Acknowledgement is audited and does not replay a possibly sent request.
+have operator acknowledgement authority. Operator identity is authenticated
+independently on each stateless HTTP request. Never invent broker evidence to
+clear a gate. Acknowledgement is audited and does not replay a possibly sent request.
 
 **Reinitializing, replacing or repointing the journal for the same broker account
 is not an approved recovery method.** Preserve the original journal and unresolved

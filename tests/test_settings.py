@@ -30,11 +30,11 @@ REAL_ENV = {"MOOMOO_TRADING_MODE": "REAL", "MOOMOO_REAL_ACC_IDS": "456"}
 
 
 class TestDefaults:
-    def test_an_empty_environment_is_read_only_on_stdio(self):
+    def test_an_empty_environment_is_read_only_on_streamable_http(self):
         settings = load_settings({})
 
         assert settings.policy.mode is TradingMode.READ_ONLY
-        assert settings.transport == "stdio"
+        assert settings.transport == "streamable-http"
         assert settings.opend_host == "127.0.0.1"
         assert settings.opend_port == 11111
         assert settings.security_firm is None
@@ -179,18 +179,16 @@ class TestLockAtRest:
 class TestTransportAuthentication:
     """An HTTP endpoint is never unauthenticated outside the explicit opt-out."""
 
-    @pytest.mark.parametrize("transport", ["sse", "streamable-http"])
-    def test_http_without_a_token_refuses_to_start(self, transport):
-        settings = load_settings({ENV_TRANSPORT: transport})
+    def test_http_without_a_token_refuses_to_start(self):
+        settings = load_settings({})
 
         with pytest.raises(TradingModeConfigError) as excinfo:
             check_transport_authentication(settings)
 
         assert ENV_AUTH_TOKEN in str(excinfo.value)
 
-    @pytest.mark.parametrize("transport", ["sse", "streamable-http"])
-    def test_http_with_a_token_starts(self, transport):
-        settings = load_settings({ENV_TRANSPORT: transport, ENV_AUTH_TOKEN: "secret"})
+    def test_http_with_a_token_starts(self):
+        settings = load_settings({ENV_AUTH_TOKEN: "secret"})
         check_transport_authentication(settings)
 
     def test_the_opt_out_is_honoured_in_read_only(self, caplog):
@@ -235,10 +233,8 @@ class TestTransportAuthentication:
         with pytest.raises(TradingModeConfigError):
             check_transport_authentication(settings)
 
-    def test_stdio_needs_no_token(self):
-        check_transport_authentication(load_settings({ENV_TRANSPORT: "stdio"}))
-
-    def test_stdio_needs_no_token_in_real_mode(self):
-        check_transport_authentication(
-            load_settings({**REAL_ENV, ENV_TRANSPORT: "stdio"})
-        )
+    @pytest.mark.parametrize("transport", ["sse", "stdio", "unsupported"])
+    def test_removed_transports_are_rejected(self, transport):
+        with pytest.raises(TradingModeConfigError) as excinfo:
+            load_settings({ENV_TRANSPORT: transport})
+        assert ENV_TRANSPORT in str(excinfo.value)

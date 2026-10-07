@@ -818,7 +818,7 @@ async def acknowledge_recovery(
     """Operator-only evidence-backed accounting of an uncertain paper mutation.
 
     Authenticate HTTP using the separate MCP_OPERATOR_TOKEN, never the agent token.
-    operator_id must be 'operator', the authenticated principal. Stdio is refused.
+    operator_id must be 'operator', the principal authenticated for this request.
     Supply the current recovery_epoch and observed_state, resolution
     TERMINAL_ACCOUNTED, a reason, and evidence_reference 'broker-order:<id>'.
     accounted_facts must contain final_status, filled_quantity, average_fill_price,

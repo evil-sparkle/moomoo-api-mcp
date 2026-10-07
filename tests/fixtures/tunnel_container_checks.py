@@ -326,7 +326,7 @@ for label,headers,host,origin,expected in cases:
     c=http.client.HTTPConnection('moomoo-mcp',8000,timeout=15)
     c.putrequest('POST','/mcp',skip_host=True)
     base=[('Host',host),('Content-Type','application/json'),
-          ('Accept','application/json, text/event-stream'),
+          ('Accept','application/json'),
           ('Content-Length',str(len(body)))]
     for name,value in base+headers:
         c.putheader(name,value)

@@ -701,7 +701,7 @@ if name == "curl":
         self.assertEqual(len(curls), 2)
         args = curls[0]
         self.assertIn("Content-Type: application/json", args)
-        self.assertIn("Accept: application/json, text/event-stream", args)
+        self.assertIn("Accept: application/json", args)
         bodies = [args[i + 1] for i, a in enumerate(args) if a == "--data-binary"]
         self.assertEqual(len(bodies), 1)
         self.assertIn('"method":"initialize"', bodies[0])

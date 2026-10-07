@@ -26,9 +26,8 @@ session id. Statelessness is not access control. The endpoint SHALL NOT run
 unauthenticated, except under the explicit read-only development opt-out defined by
 the `configuration` capability.
 
-This requirement covers the Streamable HTTP transport only. The SSE and stdio
-transports are unaffected, apart from the startup authentication rule, which also
-applies to SSE.
+Stateless Streamable HTTP at `/mcp` SHALL be the only supported transport.
+The server SHALL NOT expose legacy SSE routes or a stdio entry point.
 
 #### Scenario: No session id is issued
 

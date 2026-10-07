@@ -6,7 +6,7 @@ auth token in ``main``. A bad value therefore surfaced on the first tool call
 that happened to touch it, and the supervisor kept a server running whose every
 request failed.
 
-``main()`` calls :func:`load_settings` before it chooses a transport, so an
+``main()`` calls :func:`load_settings` before it starts the HTTP server, so an
 invalid value exits the process before anything listens. The container's
 ``restart: unless-stopped`` then produces a crash loop whose log line names the
 variable — which is the intended fail-closed behaviour, and is what the deploy
@@ -47,8 +47,7 @@ ENV_ALLOW_UNAUTHENTICATED_HTTP = "MCP_ALLOW_UNAUTHENTICATED_HTTP"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11111
-VALID_TRANSPORTS = ("stdio", "sse", "streamable-http")
-HTTP_TRANSPORTS = frozenset({"sse", "streamable-http"})
+VALID_TRANSPORTS = ("streamable-http",)
 
 
 def _valid_security_firms() -> tuple[str, ...]:
@@ -156,7 +155,7 @@ def _load_trading_market(environ: Mapping[str, str]) -> str:
 
 
 def _load_transport(environ: Mapping[str, str]) -> str:
-    raw = (environ.get(ENV_TRANSPORT) or "stdio").strip().lower()
+    raw = (environ.get(ENV_TRANSPORT) or "streamable-http").strip().lower()
     if raw not in VALID_TRANSPORTS:
         raise TradingModeConfigError(
             f"{ENV_TRANSPORT} is set to {raw!r}. Valid values: "
@@ -294,8 +293,6 @@ def check_transport_authentication(settings: Settings) -> None:
         TradingModeConfigError: If an HTTP transport has no token and does not
             qualify for the read-only opt-out.
     """
-    if settings.transport not in HTTP_TRANSPORTS:
-        return
     if settings.auth_token:
         return
 
