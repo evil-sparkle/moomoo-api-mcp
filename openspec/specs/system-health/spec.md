@@ -97,6 +97,11 @@ The health result SHALL report the state of the execution journal (`DISABLED`,
 `READY`, `REVIEW_PENDING`, or `JOURNAL_BLOCKED`), alongside the execution halt
 reported under Report Execution Halt.
 
+#### Scenario: Journal health reporting contract
+
+- **WHEN** the health tool reports execution journal state
+- **THEN** the following detailed obligations SHALL hold:
+
 - When journaled paper execution is not configured, it SHALL report the journal as
   `DISABLED`, and this SHALL NOT degrade the reported status.
 - When it is configured, it SHALL report the schema version, the active admission

@@ -14,6 +14,11 @@ layer SHALL enforce policy for single-leg and combo placement, modification,
 cancellation, and unlock before any gateway request. Direct service construction
 SHALL also default to read-only. Health SHALL expose the configured mode.
 
+#### Scenario: Trading mode enforcement contract
+
+- **WHEN** the service evaluates an operation under its configured trading mode
+- **THEN** the following detailed obligations SHALL hold:
+
 Ordinary `READ_ONLY` operation SHALL remain independent of the execution journal.
 In `READ_ONLY` mode the system SHALL NOT open, create or require any journal
 database, and SHALL NOT fail for want of one.
@@ -85,6 +90,11 @@ The trading policy SHALL support optional upper bounds on a single order's quant
 and on its notional value. These bounds protect against erroneous or runaway
 automated orders. Limit enforcement SHALL fail closed: when a configured limit
 cannot be evaluated for an order, the order SHALL be refused, not permitted.
+
+#### Scenario: Order limit evaluation contract
+
+- **WHEN** the trading policy evaluates a proposed order against configured limits
+- **THEN** the following detailed obligations SHALL hold:
 
 **Configuration**
 
@@ -345,6 +355,11 @@ computed.
 Before any gateway request, the service SHALL validate the numeric values of every
 order placement and modification:
 
+#### Scenario: Order numeric validation contract
+
+- **WHEN** a placement or modification supplies numeric order values
+- **THEN** the following detailed obligations SHALL hold:
+
 - A quantity SHALL be a positive integer; booleans are rejected.
 - A single-leg price, trigger price, trail value and trail spread SHALL each be
   finite and not negative.
@@ -409,6 +424,11 @@ When `MOOMOO_TRADING_MODE` is `SIMULATE`, or paper execution is configured in
 identifiers and a journal path. A REAL deployment without paper configuration
 SHALL refuse paper mutations rather than dispatch them without a journal. If it is missing, empty or malformed,
 startup SHALL fail with a configuration error naming the variable.
+
+#### Scenario: Paper account allowlist contract
+
+- **WHEN** a deployment configures or admits paper mutations
+- **THEN** the following detailed obligations SHALL hold:
 
 Every journaled mutation SHALL target an account that is on the allowlist and has
 been verified to be a simulated account. A mutation that names, or resolves to, any

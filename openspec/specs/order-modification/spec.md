@@ -11,6 +11,11 @@ Provides capabilities for modifying open orders (adjusting quantity, price, or l
 The system MUST allow modifying the price, quantity or other attributes of an open
 order. `trd_env` SHALL be supplied explicitly; it has no default.
 
+#### Scenario: Order modification admission contract
+
+- **WHEN** a caller requests an order modification
+- **THEN** the following detailed obligations SHALL hold:
+
 When `acc_id` is `"0"`, the service SHALL resolve it only when exactly one eligible
 account exists for the environment. In REAL, an account is eligible only if it is
 allowlisted. Otherwise the modification SHALL be refused as not sent.
@@ -130,6 +135,11 @@ The system MUST allow cancelling an open order. `trd_env` SHALL be supplied
 explicitly; it has no default. Account resolution for `acc_id="0"` follows the same
 rule as modification. Cancellation SHALL remain permitted while the service is
 in the `HALTED` execution state of the Stage 1 trade relock mechanism.
+
+#### Scenario: Order cancellation admission contract
+
+- **WHEN** a caller requests an order cancellation
+- **THEN** the following detailed obligations SHALL hold:
 
 A cancellation that is journaled paper execution SHALL carry a non-empty,
 caller-supplied `operation_id` with `admission_epoch`, persist admission in

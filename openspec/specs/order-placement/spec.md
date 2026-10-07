@@ -11,6 +11,11 @@ Provides capabilities for submitting new buy and sell orders with various order 
 The system MUST allow placing orders with `code`, `side`, `qty`, `price`,
 `order_type`, and `trd_env`.
 
+#### Scenario: Order placement validation contract
+
+- **WHEN** a caller requests order placement
+- **THEN** the following detailed obligations SHALL hold:
+
 - Supported order types include `NORMAL` (limit), `MARKET`, `STOP`, `STOP_LIMIT`,
   `TRAILING_STOP`, `TRAILING_STOP_LIMIT`, `AUCTION`, `AUCTION_LIMIT`, and others.
 - `trd_env` has no default, so every placement states its environment. The service
@@ -110,6 +115,11 @@ Order placement SHALL resolve the target account before any order-mutating gatew
 request, and SHALL NOT choose between several eligible accounts. When `acc_id` is
 `"0"`:
 
+#### Scenario: Explicit order account resolution contract
+
+- **WHEN** order placement resolves its target account
+- **THEN** the following detailed obligations SHALL hold:
+
 - **REAL.** The service SHALL select an account only when exactly one allowlisted
   REAL account is authorized for the code's market.
 - **SIMULATE.** The service SHALL select an account only when exactly one SIMULATE
@@ -139,6 +149,11 @@ An explicit `acc_id` SHALL be used as given, subject to the REAL account allowli
 Order-mutating operations include placements, combo placements, modifications and
 cancellations. Each reports exactly one of three outcomes. The server SHALL claim
 that a request was sent only when the gateway acknowledged it.
+
+#### Scenario: Mutation dispatch evidence contract
+
+- **WHEN** an order-mutating operation reports its result
+- **THEN** the following detailed obligations SHALL hold:
 
 - **Acknowledged.** The gateway returned a success code for the order-mutating
   request. This is an acknowledgement from the gateway. It does not mean the order

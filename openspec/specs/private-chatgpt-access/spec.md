@@ -11,7 +11,14 @@ acceptance for ChatGPT web and the native iPad application.
 ### Requirement: Optional outbound-only tunnel
 
 The system SHALL provide an optional official OpenAI Secure MCP Tunnel client as
-a separate optional Compose container selected through an explicit overlay. It
+a separate optional Compose container selected through an explicit overlay.
+
+#### Scenario: Tunnel network isolation contract
+
+- **WHEN** the optional Compose tunnel is enabled
+- **THEN** the following detailed obligations SHALL hold:
+
+It
 SHALL connect outbound to the OpenAI tunnel control plane and through Docker DNS
 to exactly `http://moomoo-mcp:8000/mcp` on a user-defined bridge. Enabling it SHALL NOT publish a new inbound port,
 change the MCP host publication from loopback, publish OpenD, add native TLS to the
@@ -42,7 +49,14 @@ and administration endpoints SHALL listen only on its own container loopback
 
 The tunnel daemon SHALL run as a dedicated numeric non-root container UID/GID with no
 brokerage, trade-unlock, operator-recovery, container-control, or OpenAI
-administration credential. It SHALL receive only a tunnel runtime credential,
+administration credential.
+
+#### Scenario: Tunnel identity and secret isolation contract
+
+- **WHEN** the tunnel daemon receives its runtime identity and credentials
+- **THEN** the following detailed obligations SHALL hold:
+
+It SHALL receive only a tunnel runtime credential,
 the selected tunnel identifier, and an ordinary MCP bearer credential. Secret
 values SHALL be supplied through explicit Compose environment injection of the limited OpenAI runtime key, tunnel identifier and existing `MCP_AUTH_TOKEN`,
 SHALL NOT be stored in tracked configuration or process arguments, and SHALL NOT be included
@@ -270,7 +284,14 @@ it SHALL NOT delete or replace OpenD or execution-journal state.
 
 ### Requirement: Gated container startup and bounded recovery
 
-The container SHALL validate authenticated initialize, discovery and check_health proving READ_ONLY before launching a client capable of polling or forwarding. Transient MCP startup failures SHALL be retried within a bounded deadline with bounded requests and safe diagnostics. Authentication, destination, invalid-result and mode errors SHALL fail closed. Every client relaunch SHALL repeat the gate. Process liveness, tunnel readiness and MCP availability SHALL be reported separately without raw bodies or account data. A local hung client SHALL cause bounded process termination and nonzero container exit; healthcheck status alone SHALL NOT be the restart mechanism.
+The container SHALL validate authenticated initialize, discovery and check_health proving READ_ONLY before launching a client capable of polling or forwarding.
+
+#### Scenario: Tunnel startup and recovery contract
+
+- **WHEN** the optional tunnel starts or relaunches its client
+- **THEN** the following detailed obligations SHALL hold:
+
+Transient MCP startup failures SHALL be retried within a bounded deadline with bounded requests and safe diagnostics. Authentication, destination, invalid-result and mode errors SHALL fail closed. Every client relaunch SHALL repeat the gate. Process liveness, tunnel readiness and MCP availability SHALL be reported separately without raw bodies or account data. A local hung client SHALL cause bounded process termination and nonzero container exit; healthcheck status alone SHALL NOT be the restart mechanism.
 
 #### Scenario: Delayed MCP startup
 
@@ -303,7 +324,14 @@ The container SHALL validate authenticated initialize, discovery and check_healt
 ### Requirement: Managed official-client acceptance
 
 The integration SHALL use an unmodified official release with reviewed source,
-version and archive integrity. Its managed runtime SHALL use the fixed
+version and archive integrity.
+
+#### Scenario: Official client acceptance boundaries
+
+- **WHEN** the managed official tunnel client is evaluated for acceptance
+- **THEN** the following detailed obligations SHALL hold:
+
+Its managed runtime SHALL use the fixed
 `https://api.openai.com` control plane with certificate verification, the approved
 private MCP URL, a scrubbed environment and authenticated READ_ONLY startup.
 Acceptance SHALL require passing actual-image tests of normal authenticated
