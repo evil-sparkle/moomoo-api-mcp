@@ -4,14 +4,33 @@ on:
     branches: [main]
     paths:
       - .github/workflows/tunnel-compatibility.yml
+      - .github/workflows/ci.yml
+      - .dockerignore
       - Dockerfile
       - pyproject.toml
       - uv.lock
-      - src/**
+      - src/moomoo_mcp/__init__.py
+      - src/moomoo_mcp/server.py
+      - src/moomoo_mcp/settings.py
+      - src/moomoo_mcp/supervisor.py
+      - src/moomoo_mcp/services/**
+      - src/moomoo_mcp/tools/__init__.py
+      - src/moomoo_mcp/tools/offload.py
+      - src/moomoo_mcp/tools/system.py
+      - src/moomoo_mcp/tools/annotations.py
       - docker-compose*.yml
       - deploy/tunnel-client/**
-      - scripts/**
-      - tests/**
+      - scripts/build-tunnel-image.sh
+      - scripts/prepare-tunnel-build-context.sh
+      - scripts/private_chatgpt_preflight.py
+      - scripts/test-tunnel-container.sh
+      - tests/fixtures/opend_stub.py
+      - tests/fixtures/tunnel_*.py
+      - tests/test_tunnel_*.py
+      - tests/test_private_chatgpt_*.py
+      - tests/test_server.py
+      - tests/test_tool_annotations.py
+      - tests/conftest.py
   workflow_dispatch:
 permissions:
   contents: read

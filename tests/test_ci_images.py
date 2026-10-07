@@ -18,13 +18,27 @@ def step(job, identifier):
     return next(s for s in WORKFLOW["jobs"][job]["steps"] if s.get("id") == identifier)
 
 
-def run_step(tmp_path, script, *, changed="", prefix="", baseline_missing=False):
+def run_step(
+    tmp_path,
+    script,
+    *,
+    changed="",
+    prefix="",
+    baseline_missing=False,
+    event="push",
+    ref="refs/heads/main",
+    invalid_base=False,
+    diff_failure=False,
+):
     binaries = tmp_path / "bin"
     binaries.mkdir()
     git = binaries / "git"
     git.write_text("""#!/usr/bin/env python3
 import os,sys
-if sys.argv[1] == 'diff': print(os.environ['CHANGED_PATHS'])
+if sys.argv[1] == 'diff':
+    if os.environ['DIFF_FAILURE'] == '1': sys.exit(1)
+    print(os.environ['CHANGED_PATHS'])
+elif sys.argv[1] == 'rev-parse' and os.environ['INVALID_BASE'] == '1': sys.exit(1)
 elif sys.argv[1] == 'tag': print('v0.1.0')
 else: print(os.environ['BASELINE'])
 """)
@@ -52,8 +66,10 @@ if 'put-image' not in args:
         "AWS_LOG": str(tmp_path / "aws.jsonl"),
         "GITHUB_OUTPUT": str(output),
         "GITHUB_SHA": COMMIT,
-        "GITHUB_EVENT_NAME": "push",
-        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_EVENT_NAME": event,
+        "GITHUB_REF": ref,
+        "INVALID_BASE": "1" if invalid_base else "0",
+        "DIFF_FAILURE": "1" if diff_failure else "0",
         "TAG_PREFIX": prefix,
         "ECR_REPOSITORY": "moomoo-api-mcp",
         "PUSH": "true",
@@ -80,15 +96,15 @@ if 'put-image' not in args:
 
 
 @pytest.mark.parametrize(
-    "path,mcp,tunnel,docs_only",
+    "path,mcp,tunnel,tests",
     [
-        ("README.md", True, False, True),
-        ("docs/private-chatgpt-mcp.md", False, False, True),
-        ("src/moomoo_mcp/server.py", True, False, False),
-        (".github/workflows/ci.yml", True, True, False),
-        ("docker-compose.chatgpt.yml", False, True, False),
+        ("README.md", True, False, False),
+        ("docs/private-chatgpt-mcp.md", False, False, False),
+        ("src/moomoo_mcp/server.py", True, False, True),
+        (".github/workflows/ci.yml", True, True, True),
+        ("docker-compose.chatgpt.yml", False, False, True),
         *[
-            (path, False, True, False)
+            (path, False, True, True)
             for path in (
                 "deploy/tunnel-client/container/Dockerfile",
                 "deploy/tunnel-client/container/runtime.py",
@@ -102,13 +118,23 @@ if 'put-image' not in args:
         ],
     ],
 )
-def test_main_image_filter_covers_all_build_inputs(
-    tmp_path, path, mcp, tunnel, docs_only
+@pytest.mark.parametrize(
+    "event,ref",
+    [
+        ("push", "refs/heads/main"),
+        ("pull_request", "refs/pull/99/merge"),
+        ("push", "refs/heads/feature/example"),
+    ],
+)
+def test_image_filter_covers_build_inputs_on_pushes_and_prs(
+    tmp_path, path, mcp, tunnel, tests, event, ref
 ):
-    outputs = run_step(tmp_path, step("changes", "filter")["run"], changed=path)
+    outputs = run_step(
+        tmp_path, step("changes", "filter")["run"], changed=path, event=event, ref=ref
+    )
     assert outputs["moomoo-api-mcp"] == str(mcp).lower()
     assert outputs["moomoo-chatgpt-tunnel"] == str(tunnel).lower()
-    assert outputs["docs_only"] == str(docs_only).lower()
+    assert outputs["tests"] == str(tests).lower()
 
 
 @pytest.mark.parametrize("prefix", ["", "tunnel-"])
@@ -155,3 +181,141 @@ def test_published_tags_are_disjoint_and_match_deploy_lookup(tmp_path, prefix):
         prefix + "commit-" + COMMIT,
         prefix + "v0.1.0",
     ]
+
+
+@pytest.mark.parametrize(
+    "changed,tests,smoke,mcp,tunnel",
+    [
+        ("docs/reports/investigation.md", False, False, False, False),
+        (
+            "openspec/profile.json\nscripts/update-openspec.sh\n"
+            "scripts/validate-openspec.sh\n.agents/skills/example/SKILL.md",
+            False,
+            False,
+            False,
+            False,
+        ),
+        (
+            "scripts/deploy.sh\nscripts/deploy_verify.py\n"
+            "tests/test_deploy_verify.py\n.env.example",
+            True,
+            False,
+            False,
+            False,
+        ),
+        ("tests/test_tools/test_accounting_guidance.py", True, False, False, False),
+        ("docs/guide.md\nsrc/moomoo_mcp/tools/account.py", True, True, True, False),
+        ("docker-compose.smoke.yml", True, True, False, False),
+        ("docker-compose.paper.yml", True, True, False, False),
+        ("scripts/test-paper-container.sh", True, True, False, False),
+        ("tests/fixtures/paper_container_checks.py", True, True, False, False),
+        ("tests/fixtures/opend_stub.py", True, True, False, False),
+        (".dockerignore", True, True, True, False),
+        ("pyproject.toml", True, True, True, False),
+        ("uv.lock", True, True, True, False),
+        ("unknown-config.toml", True, False, False, False),
+    ],
+)
+def test_check_scopes_for_tooling_deployment_and_mixed_changes(
+    tmp_path, changed, tests, smoke, mcp, tunnel
+):
+    outputs = run_step(
+        tmp_path,
+        step("changes", "filter")["run"],
+        changed=changed,
+        event="pull_request",
+        ref="refs/pull/99/merge",
+    )
+    for key, expected in {
+        "tests": tests,
+        "smoke": smoke,
+        "moomoo-api-mcp": mcp,
+        "moomoo-chatgpt-tunnel": tunnel,
+    }.items():
+        assert outputs[key] == str(expected).lower(), key
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+@pytest.mark.parametrize("failure", ["invalid_base", "diff_failure", "empty"])
+def test_unreliable_comparison_runs_all_checks_and_builds(tmp_path, event, failure):
+    outputs = run_step(
+        tmp_path,
+        step("changes", "filter")["run"],
+        event=event,
+        changed="" if failure == "empty" else "docs/guide.md",
+        invalid_base=failure == "invalid_base",
+        diff_failure=failure == "diff_failure",
+    )
+    for key in ("tests", "smoke", "moomoo-api-mcp", "moomoo-chatgpt-tunnel"):
+        assert outputs[key] == "true", key
+    assert outputs["baseline"] == ""
+
+
+def test_jobs_use_independent_check_outputs_and_keep_main_retagging():
+    jobs = WORKFLOW["jobs"]
+    assert jobs["test"]["if"] == "needs.changes.outputs.tests == 'true'"
+    assert jobs["smoke"]["needs"] == ["test", "changes"]
+    assert jobs["smoke"]["if"] == "needs.changes.outputs.smoke == 'true'"
+    assert "needs.test.result == 'skipped'" in jobs["docker-build"]["if"]
+    assert (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+        in jobs["docker-build"]["if"]
+    )
+    assert step("docker-build", "retag")["if"] == (
+        "env.PUSH == 'true' && needs.changes.outputs[matrix.image] != 'true'"
+    )
+
+
+def tunnel_workflow_matches(path):
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/tunnel-compatibility.yml").read_text()
+    )
+    # PyYAML's YAML 1.1 loader treats the unquoted GitHub key `on` as True.
+    triggers = workflow[True]["pull_request"]["paths"]
+    for pattern in triggers:
+        if "*" not in pattern:
+            if path == pattern:
+                return True
+        else:
+            prefix, suffix = pattern.split("*", 1)
+            suffix = suffix.lstrip("*")
+            if path.startswith(prefix) and path.endswith(suffix):
+                return True
+    return False
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("scripts/update-openspec.sh", False),
+        ("scripts/validate-openspec.sh", False),
+        ("scripts/deploy.sh", False),
+        ("scripts/deploy_verify.py", False),
+        ("tests/test_deploy_scripts.py", False),
+        ("tests/test_tools/test_accounting_guidance.py", False),
+        ("src/moomoo_mcp/tools/account.py", False),
+        ("src/moomoo_mcp/tools/trading.py", False),
+        ("src/moomoo_mcp/server.py", True),
+        ("src/moomoo_mcp/settings.py", True),
+        ("src/moomoo_mcp/services/health.py", True),
+        ("src/moomoo_mcp/services/execution_store.py", True),
+        ("src/moomoo_mcp/tools/offload.py", True),
+        ("Dockerfile", True),
+        (".dockerignore", True),
+        ("pyproject.toml", True),
+        ("uv.lock", True),
+        ("docker-compose.chatgpt.yml", True),
+        ("scripts/private_chatgpt_preflight.py", True),
+        ("scripts/prepare-tunnel-build-context.sh", True),
+        ("scripts/test-tunnel-container.sh", True),
+        ("deploy/tunnel-client/container/runtime.py", True),
+        ("tests/fixtures/tunnel_container_checks.py", True),
+        ("tests/fixtures/opend_stub.py", True),
+        ("tests/test_tunnel_runtime.py", True),
+        ("tests/conftest.py", True),
+        (".github/workflows/ci.yml", True),
+        (".github/workflows/tunnel-compatibility.yml", True),
+    ],
+)
+def test_tunnel_workflow_only_runs_for_relevant_inputs(path, expected):
+    assert tunnel_workflow_matches(path) is expected

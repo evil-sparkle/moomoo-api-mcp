@@ -19,7 +19,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run basedpyright
 uv run pytest
-npx -y @fission-ai/openspec@1.14.1 validate --all --strict --no-interactive
+bash scripts/validate-openspec.sh
 ```
 
 Select checks by scope:
@@ -27,10 +27,20 @@ Select checks by scope:
 | Change | Required evidence |
 | --- | --- |
 | Python behavior | Relevant tests during iteration, then full pytest, Ruff, and basedpyright |
-| Shell, Compose, deployment, or CI YAML | Relevant script/topology tests and full pytest; lint/type checks for affected Python |
+| Shell, Compose, deployment, or CI YAML | Relevant script/topology tests and full pytest; lint/type checks for affected Python. OpenSpec-only tooling uses the checks below. |
 | Container behavior | Applicable `scripts/smoke-test.sh`, `scripts/test-paper-container.sh`, or `scripts/test-tunnel-container.sh` with Docker |
 | Documentation | Review acceptance criteria, links, and consistency |
-| Specs or managed OpenSpec workflow instructions | Strict OpenSpec validation; for regeneration, confirm version, exact workflow inventory, and repeatability |
+| Specs, managed OpenSpec instructions, or OpenSpec tooling scripts | Strict OpenSpec validation and script syntax checks; for regeneration, confirm version, exact workflow inventory, and repeatability |
+
+CI selects Python checks, container smoke checks, and image builds separately.
+Known prose and OpenSpec tooling skip Python checks; unknown paths run them.
+Application source, container configuration, dependencies, and smoke/paper
+fixtures trigger container smoke checks. Image builds follow their actual
+build inputs on PRs and pushes; main still retags unchanged images and rebuilds
+if the baseline image is unavailable. Tunnel integration runs in both Docker
+contexts for tunnel inputs and shared server/transport configuration, not every
+script or test. Shared CI workflow changes remain conservative and run broad
+checks. Keep path filters current when adding build or integration dependencies.
 
 Use Conventional Commits and merge through pull requests. Install local hooks:
 
@@ -49,9 +59,9 @@ response-loss and external retry-chain acceptance remain separate evidence.
 ## OpenSpec version and managed integrations
 
 Use **`@fission-ai/openspec@1.14.1`**, matching the exact pin in
-`.github/workflows/ci.yml`. The unscoped npm package is unrelated. A machine's
+`scripts/validate-openspec.sh`. The unscoped npm package is unrelated. A machine's
 bare `openspec` executable may be older; check `openspec --version` before use or
-invoke the exact npm version above.
+invoke the validation script above.
 
 `openspec-verify-change` is an agent skill (`$openspec-verify-change` in Codex or
 `/openspec-verify-change` in slash-invoked skill interfaces), not an
