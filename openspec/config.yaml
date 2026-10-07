@@ -209,7 +209,9 @@ context: |
   - An order whose outcome is unknown must be reconciled by querying orders or
     deals, never by retrying.
 
-  Optional official tunnel: containerize-private-chatgpt-tunnel adds an explicitly
+  Optional official tunnel: the approved containerize-private-chatgpt-tunnel change
+  is archived at openspec/changes/archive/2026-10-07-containerize-private-chatgpt-tunnel.
+  Its requirements are synced to the main specifications. It adds an explicitly
   selected separate Compose container; brokerage still supervises MCP and OpenD.
   The unmodified official client uses fixed endpoints, a filtered child environment
   and authenticated READ_ONLY startup. Trust in OpenAI and the Docker host includes
@@ -225,5 +227,4 @@ context: |
   integration is required. Retired diagnostic runners and dated reports remain
   only in earlier Git commits. Site migration instructions stay outside this
   repository; perform migration after PR merge with available permissions/credentials.
-  Archive/sync this OpenSpec change only after final owner approval in chat.
   Live OpenAI/ChatGPT/iPad milestones remain separate.
