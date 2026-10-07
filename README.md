@@ -55,6 +55,47 @@ This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/m
 - `get_cash_flow`: Retrieve historical cash flow records.
 - `unlock_trade`: Unlock trading access for REAL accounts.
 
+#### Accounting interpretation
+
+`get_positions` and the positions in `get_account_summary` return broker-reported
+position data, not an independently reconciled accounting ledger. Preserve the
+field names and accounting basis when presenting costs and P/L.
+
+For securities accounts, `cost_price` is diluted cost and `pl_ratio` is the
+diluted-cost P/L percentage. Do not label these as average purchase cost
+or unrealized return.
+
+Additional position fields, when reported:
+
+| Field | Broker-reported meaning |
+| --- | --- |
+| `average_cost` | Average cost price. |
+| `diluted_cost` | Diluted cost price. |
+| `pl_ratio_avg_cost` | P/L percentage using average cost. |
+| `unrealized_pl` | Unrealized P/L amount. |
+| `realized_pl` | Realized P/L amount. |
+
+`average_cost`, `pl_ratio_avg_cost`, `unrealized_pl` and `realized_pl` are not
+applicable to SIMULATE securities accounts. In universal securities accounts,
+`unrealized_pl` and `realized_pl` use the average-cost basis. For futures accounts,
+`cost_price` is average cost; `diluted_cost`, `pl_ratio` and `pl_ratio_avg_cost` are
+not applicable. Preserve unavailable fields as reported; do not reconstruct them.
+These definitions do not prove a suspected upstream accounting mechanism.
+See the official [position field definitions](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-position-list.html)
+and [account-type applicability](https://openapi.moomoo.com/moomoo-api-doc/trade/get-position-list.html).
+
+Do not treat a current position row as lifetime P/L for the underlying
+and all its derivatives. Do not infer the inclusion of option premiums,
+fees, dividends or closed positions without establishing the scope.
+
+A reported app/API discrepancy must remain explicitly unresolved until
+verified. Do not replace broker fields with reconstructed values or
+present disputed P/L as verified portfolio performance.
+
+Different average and diluted costs, or an unusually large percentage,
+do not alone prove an error. Internal arithmetic consistency and provider
+validity flags are not independent financial reconciliation.
+
 ### Market Data
 
 - `get_stock_quote`: Get real-time stock quotes.
@@ -82,6 +123,38 @@ This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/m
 - `get_deals`: Get list of executed trades (deals) for the current day.
 - `get_history_orders`: Search historical orders.
 - `get_history_deals`: Search historical deals.
+
+#### History coverage and executions
+
+For both history tools, omit dates with empty strings. The installed
+`moomoo-api 10.10.7008` uses these rules, consistent with the official
+[historical orders](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-history-order-list.html)
+and [historical deals](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-history-order-fill-list.html)
+documentation:
+
+| `start` | `end` | Requested period |
+| --- | --- | --- |
+| Omitted | Omitted | 90 days before today through today, using the SDK host's current date. |
+| Omitted | Supplied | 90 days before `end` through `end`. |
+| Supplied | Omitted | `start` through 90 days after `start`, not necessarily today. |
+| Supplied | Supplied | The explicit range, without a 90-day cap imposed by the SDK. |
+
+Date-only bounds expand to `00:00:00` for `start` and `23:59:59` for `end`;
+`YYYY-MM-DD HH:MM:SS` timestamps retain their supplied times. Broker availability
+and filters still apply to explicit ranges. To investigate earlier activity,
+request explicit ranges covering the intended period and all relevant instruments.
+A successful response, including an empty list, does not establish lifetime
+completeness: dates, account, code and order-status filters limit scope, and broker
+history availability has not been independently established. A code filter does
+not automatically include that underlying's derivatives. The provider documents
+historical deals for REAL accounts; SIMULATE availability must not be assumed.
+
+Order `qty` and `price` describe the request. `dealt_qty` and `dealt_avg_price`
+report the executed quantity and average fill price; deal `qty` and `price`
+describe individual actual fills. A `CANCELLED_PART` order retains its partial
+fills after the unfilled remainder is cancelled. Do not discard those executions
+or treat the full requested quantity as filled. These are broker-reported fields,
+not independently verified accounting results.
 
 ## Installation
 

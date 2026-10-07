@@ -637,6 +637,32 @@ async def get_history_orders(
 ) -> list[dict]:
     """Get historical orders.
 
+    HISTORY COVERAGE
+    Omit dates with empty strings. The installed SDK applies these defaults:
+    - Both start and end omitted: start is 90 days before today, end is today
+      (using the SDK host's current date).
+    - Only end supplied: start is 90 days before end.
+    - Only start supplied: end is 90 days after start, not necessarily today.
+    - Both start and end supplied: request the explicit range; the SDK does
+      not cap it at 90 days. Broker availability and filters still apply.
+    Date-only bounds expand to 00:00:00 for start and 23:59:59 for end;
+    explicit YYYY-MM-DD HH:MM:SS timestamps retain their supplied times.
+
+    For earlier activity, request explicit ranges covering the intended period
+    and all relevant instruments. Successful retrieval, including an empty
+    list, does not establish lifetime completeness: dates, account and code
+    filters limit scope, and broker history availability has not been
+    independently established. A code filter does not include all derivatives
+    of that underlying automatically.
+
+    ORDER REQUESTS AND EXECUTIONS
+    Order qty and price are the requested quantity and order price, not actual
+    executions. dealt_qty and dealt_avg_price are the broker-reported executed
+    quantity and average fill price. A CANCELLED_PART order has partial fills
+    even though the remainder was cancelled; do not discard its executions or
+    count the full requested qty as filled. Use get_history_deals for individual
+    fills. Status filters can also exclude orders with executions.
+
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
@@ -649,8 +675,10 @@ async def get_history_orders(
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.
         status_filter_list: Filter by order statuses (see get_orders for options).
-        start: Start date in 'YYYY-MM-DD' format. Empty for max range.
-        end: End date in 'YYYY-MM-DD' format. Empty for today.
+        start: Start date (YYYY-MM-DD) or timestamp (YYYY-MM-DD HH:MM:SS).
+            Empty uses the omitted-date rules above, not the maximum history.
+        end: End date (YYYY-MM-DD) or timestamp (YYYY-MM-DD HH:MM:SS).
+            Empty uses the omitted-date rules above, not always today.
         trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
         acc_id: Account ID from get_accounts().
 
@@ -683,6 +711,33 @@ async def get_history_deals(
 ) -> list[dict]:
     """Get historical deals (executed trades).
 
+    HISTORY COVERAGE
+    Omit dates with empty strings. The installed SDK applies these defaults:
+    - Both start and end omitted: start is 90 days before today, end is today
+      (using the SDK host's current date).
+    - Only end supplied: start is 90 days before end.
+    - Only start supplied: end is 90 days after start, not necessarily today.
+    - Both start and end supplied: request the explicit range; the SDK does
+      not cap it at 90 days. Broker availability and filters still apply.
+    Date-only bounds expand to 00:00:00 for start and 23:59:59 for end;
+    explicit YYYY-MM-DD HH:MM:SS timestamps retain their supplied times.
+
+    For earlier activity, request explicit ranges covering the intended period
+    and all relevant instruments. Successful retrieval, including an empty
+    list, does not establish lifetime completeness: dates, account and code
+    filters limit scope, and broker history availability has not been
+    independently established. A code filter does not include all derivatives
+    of that underlying automatically.
+
+    EXECUTIONS
+    Deal qty and price are the broker-reported actual fill quantity and fill
+    price, not requested order quantities/prices. An order's dealt_qty and
+    dealt_avg_price summarize executions; a CANCELLED_PART order still has
+    partial fills after its unfilled remainder is cancelled. Do not exclude
+    those executions just because the order was cancelled. The provider
+    documents historical deals for REAL accounts; SIMULATE availability must
+    not be assumed.
+
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
@@ -694,8 +749,10 @@ async def get_history_deals(
 
     Args:
         code: Filter by stock code (e.g., 'US.AAPL'). Empty string for all.
-        start: Start date in 'YYYY-MM-DD' format. Empty for max range.
-        end: End date in 'YYYY-MM-DD' format. Empty for today.
+        start: Start date (YYYY-MM-DD) or timestamp (YYYY-MM-DD HH:MM:SS).
+            Empty uses the omitted-date rules above, not the maximum history.
+        end: End date (YYYY-MM-DD) or timestamp (YYYY-MM-DD HH:MM:SS).
+            Empty uses the omitted-date rules above, not always today.
         trd_env: Trading environment - 'REAL' or 'SIMULATE'. Default REAL.
         acc_id: Account ID from get_accounts().
 
