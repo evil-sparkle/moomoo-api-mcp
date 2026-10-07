@@ -355,7 +355,7 @@ non-read-only phase, no REAL-order path).
 - [x] 8.2 Update the documentation:
   - `docs/deploy-vps.md`: the migration steps from design.md, the rollback with no
     `.env` edit, and the crash-loop signal.
-  - `docs/state-and-restarts.md`: the unlock lifecycle, the `ARMED`/`HALTED`
+  - [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference): the unlock lifecycle, the `ARMED`/`HALTED`
     transitions, and `lock_trade` recovery.
   - `README.md`: the configuration table.
   - The `openspec/config.yaml` context: remove startup auto-unlock and

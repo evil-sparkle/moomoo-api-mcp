@@ -50,7 +50,7 @@ from the obvious one.
 
 The simple policy — *if either required process exits, stop the other and exit
 the container, letting Docker restart the unit* — is easy to reason about and
-easy to get right. It is also a regression here. `docs/state-and-restarts.md`
+easy to get right. It is also a regression here. [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference)
 records the current cost of an OpenD restart to a connected client: nothing. The
 MCP endpoint keeps answering, the SDK reconnects every six seconds, replays its
 quote subscriptions, re-asserts the gateway lock, and `check_health` reports

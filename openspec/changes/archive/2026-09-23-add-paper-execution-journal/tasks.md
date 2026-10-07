@@ -352,7 +352,7 @@ Task 1.4 (after-close retention) moved, uncompleted, to
   version 1 limitation. Verify docs. (`C04`)
 - [x] 9.5 Document the journal lifecycle, two-phase dispatch, recovery review gate,
   operator acknowledgement runbook, and restore limitations in
-  `docs/paper-execution.md`, linked from `docs/state-and-restarts.md`,
+  [Paper execution and recovery](../../../../docs/deploy-vps.md#paper-execution-and-recovery), linked from [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference),
   `docs/deploy-vps.md` and `README.md`, and update `openspec/config.yaml`.
   Environment files are excluded by the workspace secret-file constraint. Verify docs.
 

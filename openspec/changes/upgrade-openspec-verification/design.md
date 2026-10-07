@@ -21,12 +21,14 @@ archived history, or introduce agentic GitHub Actions in this change.
    `init --tools` refreshes all four integrations, including Antigravity after its
    workflow-based detection disappears. The exact 1.14.1 version matches CI. Personal
    global profile edits would be less reproducible and affect unrelated projects.
-2. Keep the full completion policy in `AGENTS.md`; config and the development
-   guide reference it. The policy distinguishes a selected OpenSpec change from
+2. Keep the full completion policy in `AGENTS.md`; config and the README contributor
+   section reference it. The policy distinguishes a selected OpenSpec change from
    ordinary maintenance. Generated files remain upstream output, so regeneration
    cannot erase local policy.
-3. Preserve the former context's detailed content in `docs/project-guide.md` and
-   move checks into `docs/development.md`; route readers through `docs/README.md`.
+3. Keep architectural requirements in `openspec/specs/`, checks in
+   [README contributor guidance](../../../README.md#contributing), and operator
+   procedures in [the deployment runbook](../../../docs/deploy-vps.md). The
+   documentation consolidation supersedes the earlier separate guide/index layout.
 4. Keep each long requirement's concise opening and insert a named scenario with
    a specific trigger before its detailed obligations. Preserve original wording,
    requirement names, and existing scenarios. Strict-mode relaxation or deleting

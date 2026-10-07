@@ -245,5 +245,5 @@ specs describe today's behaviour without endorsing it. See `tasks.md` §§
   to the log only. The policy layer makes it harmless to writes, but an operator
   cannot see it without reading logs.
 - **Is OpenD's unlock gateway-wide or per connection?** Still unconfirmed
-  (`docs/state-and-restarts.md` § Known gaps). It determines whether the
+  ([State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference) § Known gaps). It determines whether the
   quote connection or another client could observe a REAL unlock.

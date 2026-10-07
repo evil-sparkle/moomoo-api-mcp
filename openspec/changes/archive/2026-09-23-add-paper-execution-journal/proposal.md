@@ -285,7 +285,7 @@ a real paper account (task group 1).
   scenario-to-test traceability table.
 - **Configuration and operations**: a new operator credential, distinct from
   `MCP_AUTH_TOKEN` and never given to the agent; `.env.example`, `docker-compose.yml`,
-  `Dockerfile`, `docs/state-and-restarts.md`, `docs/deploy-vps.md`, and the
+  `Dockerfile`, [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference), `docs/deploy-vps.md`, and the
   `openspec/config.yaml` context.
 - **Agent (ZeroClaw)**: paper write tool calls must carry a stable `operation_id`
   and active `admission_epoch` that survive a retry, and prices as decimal strings.

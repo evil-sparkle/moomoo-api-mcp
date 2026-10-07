@@ -6,7 +6,7 @@
       corrections, all to match the code:
       - Notifications: the draft said they ride the call's response. Since
         `dd066e7` (`json_response=True`) the SDK drops them. Now specified as
-        dropped, by decision; the README, `docs/state-and-restarts.md` and the
+        dropped, by decision; the README, [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference) and the
         `server.py` comment said the same wrong thing and are fixed too.
       - Authentication: now conditional on `MCP_AUTH_TOKEN`, as the middleware is.
       - Process-owned connections open on the first request served, not "the

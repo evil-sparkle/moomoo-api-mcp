@@ -1,11 +1,12 @@
 schema: spec-driven
 
-# Always-loaded invariants only. Read indexed docs on demand.
+# Always-loaded invariants only. Read relevant README and runbook sections on demand.
 context: |
   Moomoo MCP server (Python >=3.10, uv, FastMCP) with process-owned OpenD
   connections. This fork ships containers; upstream owns PyPI publishing.
-  Requirements: openspec/specs/. Documentation index: docs/README.md.
-  Runtime/module map: docs/project-guide.md. Checks: docs/development.md.
+  Requirements: openspec/specs/. Usage and checks: README.md (Contributing).
+  Production operations and recovery: docs/deploy-vps.md.
+  Implementation details and exact versions: source, tests and build configuration.
   Read only the specs and documentation relevant to the change.
 
   Invariants:

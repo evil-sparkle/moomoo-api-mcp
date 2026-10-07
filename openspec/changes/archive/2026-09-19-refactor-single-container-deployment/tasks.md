@@ -115,11 +115,11 @@ gateway-restart requirement defers to `Paired Process Supervision` below.
      signalled both children within 5ms of SIGTERM and none needed SIGKILL, so
      the 10s supervisor bound and Docker's 10s grace period were never
      approached. The ~10s stop the two-container server showed in CI does not
-     reproduce here; its cause is still unexplained (`docs/state-and-restarts.md`
+     reproduce here; its cause is still unexplained ([State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference)
      § Known gaps). Measured, not assumed.
 
 7. **Documentation**
-   - [x] 7.1 `docs/state-and-restarts.md`: topology redrawn, the state table and
+   - [x] 7.1 [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference): topology redrawn, the state table and
      "what each restart costs" rewritten for one container, and the new cost
      stated plainly — every deploy now pays OpenD's ~30s re-login.
    - [x] 7.2 `docs/deploy-vps.md` and `README.md`: new commands for logs,

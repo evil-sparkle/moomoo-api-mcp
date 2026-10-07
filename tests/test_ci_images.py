@@ -99,7 +99,7 @@ if 'put-image' not in args:
     "path,mcp,tunnel,tests",
     [
         ("README.md", True, False, False),
-        ("docs/private-chatgpt-mcp.md", False, False, False),
+        ("docs/deploy-vps.md", False, False, False),
         ("src/moomoo_mcp/server.py", True, False, True),
         (".github/workflows/ci.yml", True, True, True),
         ("docker-compose.chatgpt.yml", False, False, True),

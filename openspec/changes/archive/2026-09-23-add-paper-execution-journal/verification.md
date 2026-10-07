@@ -76,7 +76,7 @@ requires its tokens and decimal-string price before admission. Ordinary trading
 credentials cannot claim operator authority through tool arguments.
 
 Workspace secret-file constraints excluded environment files from edits. The safe
-configuration table and recovery/backup runbook are in `docs/paper-execution.md`,
+configuration table and recovery/backup runbook are in [Paper execution and recovery](../../../../docs/deploy-vps.md#paper-execution-and-recovery),
 linked from README and the state/deployment guides. The optional Compose overlay
 uses one stable named paper volume without changing the OpenD authorization mount.
 

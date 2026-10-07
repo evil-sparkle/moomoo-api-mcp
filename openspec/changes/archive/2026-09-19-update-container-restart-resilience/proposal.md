@@ -21,7 +21,7 @@ checks.
   trading or enables REAL access, whatever the configured trading mode. The code
   has not worked that way since the trading-mode policy landed.
 - Stateless Streamable HTTP and process-owned gateway connections are
-  architectural contracts with no spec at all. `docs/state-and-restarts.md` and
+  architectural contracts with no spec at all. [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference) and
   code comments are the only record of them.
 
 This change documents existing behaviour. It adds no runtime guarantees, and it
