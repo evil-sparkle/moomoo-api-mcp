@@ -72,6 +72,28 @@ async def get_account_summary(
     This is the recommended tool for getting a full view of an account's status.
     It combines get_assets and get_positions into a single response.
 
+    ACCOUNTING INTERPRETATION
+
+    Returns broker-reported position data, not an independently reconciled
+    accounting ledger. Preserve the field names and accounting basis when
+    presenting costs and P/L.
+
+    For securities accounts, cost_price is diluted cost and pl_ratio is the
+    diluted-cost P/L percentage. Do not label these as average purchase cost
+    or unrealized return.
+
+    Do not treat a current position row as lifetime P/L for the underlying
+    and all its derivatives. Do not infer the inclusion of option premiums,
+    fees, dividends or closed positions without establishing the scope.
+
+    A reported app/API discrepancy must remain explicitly unresolved until
+    verified. Do not replace broker fields with reconstructed values or
+    present disputed P/L as verified portfolio performance.
+
+    Different average and diluted costs, or an unusually large percentage,
+    do not alone prove an error. Internal arithmetic consistency and provider
+    validity flags are not independent financial reconciliation.
+
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
@@ -172,6 +194,28 @@ async def get_positions(
 ) -> list[dict]:
     """Get current positions.
 
+    ACCOUNTING INTERPRETATION
+
+    Returns broker-reported position data, not an independently reconciled
+    accounting ledger. Preserve the field names and accounting basis when
+    presenting costs and P/L.
+
+    For securities accounts, cost_price is diluted cost and pl_ratio is the
+    diluted-cost P/L percentage. Do not label these as average purchase cost
+    or unrealized return.
+
+    Do not treat a current position row as lifetime P/L for the underlying
+    and all its derivatives. Do not infer the inclusion of option premiums,
+    fees, dividends or closed positions without establishing the scope.
+
+    A reported app/API discrepancy must remain explicitly unresolved until
+    verified. Do not replace broker fields with reconstructed values or
+    present disputed P/L as verified portfolio performance.
+
+    Different average and diluted costs, or an unusually large percentage,
+    do not alone prove an error. Internal arithmetic consistency and provider
+    validity flags are not independent financial reconciliation.
+
     IMPORTANT FOR AI AGENTS:
     - Default is REAL account. You MUST notify the user clearly that you are
       accessing their REAL trading account before proceeding.
@@ -189,8 +233,10 @@ async def get_positions(
     Args:
         code: Filter by stock code (e.g., 'US.AAPL').
         market: Filter by market (e.g., 'US', 'HK', 'CN', 'SG', 'JP').
-        pl_ratio_min: Minimum profit/loss ratio filter.
-        pl_ratio_max: Maximum profit/loss ratio filter.
+        pl_ratio_min: Minimum broker-reported pl_ratio percentage filter
+            (diluted-cost P/L for securities accounts).
+        pl_ratio_max: Maximum broker-reported pl_ratio percentage filter
+            (diluted-cost P/L for securities accounts).
         trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
             testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().

@@ -55,6 +55,28 @@ This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/m
 - `get_cash_flow`: Retrieve historical cash flow records.
 - `unlock_trade`: Unlock trading access for REAL accounts.
 
+#### Accounting interpretation
+
+`get_positions` and the positions in `get_account_summary` return broker-reported
+position data, not an independently reconciled accounting ledger. Preserve the
+field names and accounting basis when presenting costs and P/L.
+
+For securities accounts, `cost_price` is diluted cost and `pl_ratio` is the
+diluted-cost P/L percentage. Do not label these as average purchase cost
+or unrealized return.
+
+Do not treat a current position row as lifetime P/L for the underlying
+and all its derivatives. Do not infer the inclusion of option premiums,
+fees, dividends or closed positions without establishing the scope.
+
+A reported app/API discrepancy must remain explicitly unresolved until
+verified. Do not replace broker fields with reconstructed values or
+present disputed P/L as verified portfolio performance.
+
+Different average and diluted costs, or an unusually large percentage,
+do not alone prove an error. Internal arithmetic consistency and provider
+validity flags are not independent financial reconciliation.
+
 ### Market Data
 
 - `get_stock_quote`: Get real-time stock quotes.
