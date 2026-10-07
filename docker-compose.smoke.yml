@@ -24,12 +24,10 @@ services:
       # A stubbed gateway that dies is a test scenario, not a broken deployment:
       # keep restarts quick so the assertions do not wait out a backoff.
       - OPEND_RESTART_WINDOW_SECONDS=60
-      # Not secrets, and not real: the stub ignores them. They exist because the
-      # supervisor refuses to start a gateway it has no way to log in, and this
-      # run needs the headless branch the deployment actually takes. The hash is
-      # also the smoke test's tripwire for credential leakage -- it asserts this
-      # value never appears in the container's logs.
-      - MOOMOO_LOGIN_ACCOUNT=00000000
-      - MOOMOO_LOGIN_PWD_MD5=smoketestnotarealhash00000000000
+      # The stub does not contact a broker or prompt for credentials. Explicit
+      # interactive mode starts it without fabricating remembered login state.
+      # Its synthetic account is a tripwire for identifier leakage in logs.
+      - MOOMOO_LOGIN_ACCOUNT=smoketest-account-do-not-log
+      - OPEND_INTERACTIVE=1
     volumes:
       - ./tests/fixtures/opend_stub.py:/opt/opend-stub:ro

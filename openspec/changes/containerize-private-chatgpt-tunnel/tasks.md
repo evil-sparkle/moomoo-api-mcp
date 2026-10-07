@@ -25,6 +25,12 @@ The current plan reflects the owner's final deployment requirements. Original di
 
 - [x] 4.1 Update actual-client rootful/rootless fixtures for environment credentials and both rotations; verify normal/negative forwarding, restart retaining old environment, recreation adopting new values, isolation and recovery.
 - [x] 4.2 Run required unit/deployment, lint/format/types, workflow and strict OpenSpec checks; push/update PR #38 with actual results and any remaining live-acceptance limits.
-- [x] 4.3 Verify existing server container/project/state access read-only and deliver the migration Markdown in chat plus a file outside the repository; retain the existing container until post-merge deployment.
+- [x] 4.3 Verify existing server container/project/state access read-only and deliver the migration Markdown in chat plus a file outside the repository; preserve project/state during any separately authorized pre-merge trial and the post-merge deployment.
+
+## 5. Retire OpenD password-MD5 startup
+
+- [x] 5.1 Remove the retired gateway login setting from the public template, Compose and supervisor argument selection; preserve interactive and remembered login and separate trade-unlock credentials.
+- [x] 5.2 Reconcile deployment runbooks, startup errors, comments and project context with the supported login flow; keep migration details outside Git and OpenSpec active until final approval.
+- [x] 5.3 Verify obsolete hash values cannot override remembered login or start a gateway without remembered state; update synthetic fixtures and run focused supervisor/topology checks, lint/types and strict OpenSpec validation without retrying live brokerage login.
 
 After final PR approval in chat, archive/sync this OpenSpec change. After merge and CI image publication, perform the external migration guide with existing permissions/credentials, escalating only missing credentials or permissions. These post-approval actions are not claimed complete by repository implementation or synthetic CI.

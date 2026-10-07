@@ -49,6 +49,11 @@ Missing credentials fail before startup. A missing tunnel image fails before
 checkout or service changes. `--prepare --chatgpt` validates and pulls without
 starting services; ordinary deployments keep the tunnel off unless selected.
 
+Brokerage reads also require OpenD login. Complete the
+[one-time interactive login](deploy-vps.md#7-prepare-image-then-perform-interactive-opend-login),
+remember the password and preserve the OpenD volume. Later starts use remembered
+login; no brokerage login password or hash is configured through Compose.
+
 The application and tunnel run as separate containers. OpenD remains on brokerage
 container loopback `127.0.0.1:11111`, unpublished. Host MCP remains
 `127.0.0.1:8000:8000`; the tunnel reaches exactly `http://moomoo-mcp:8000/mcp`

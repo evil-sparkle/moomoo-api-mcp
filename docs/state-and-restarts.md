@@ -248,7 +248,7 @@ interleaving.
 
 | Secret | Where | Notes |
 | --- | --- | --- |
-| Moomoo login password | **nowhere** | `MOOMOO_LOGIN_BY_REMEMBER=1` uses OpenD's remembered token instead |
+| Moomoo login password | operator's one-time terminal input | not stored in deployment configuration; OpenD manages remembered state |
 | OpenD device token | `opend-data` volume | written by OpenD, which describes it as encrypted |
 | Trade PIN (MD5) | `.env`, passed to the container as an env var | MD5 of six digits is obfuscation, not protection |
 | MCP bearer token | `.env`, passed to the container as an env var | checked per request, see below |
@@ -260,7 +260,8 @@ in constant time. Stateless mode changed nothing about this.
 ### What protects them
 
 
-- The login password is never stored, which is the strongest measure here.
+- The deployment does not store or pass an OpenD login password/hash in its
+  environment or command line. Unattended starts reuse remembered state.
 - OpenD runs as an unprivileged user (uid 10001), so its files are not
   root-owned.
 - Rootless Docker runs the whole daemon as the deploy user, so the volume lives
@@ -268,9 +269,10 @@ in constant time. Stateless mode changed nothing about this.
 - Port 11111 is published nowhere.
 - `.env` is mode 0600, git-ignored, and a `gitleaks` pre-commit hook scans for
   secrets heading into a commit.
-- The supervisor redacts `-login_pwd_md5` and `-login_account` from the command
-  line it logs, so the trade PIN hash does not end up in `docker logs` or
-  anything shipping them. `scripts/smoke-test.sh` asserts it stays that way.
+- The supervisor redacts `-login_account` from the command line it logs;
+  `scripts/smoke-test.sh` checks that the identifier stays out of logs. It also
+  retains defensive redaction of the retired login-password flag, which startup
+  no longer generates. Trade-unlock credentials are not OpenD startup arguments.
 
 ### What does not
 

@@ -123,9 +123,9 @@ Create `$HOME/moomoo/.env` (mode 0600, not committed). See `.env.example` for th
 ```ini
 # Login identity
 MOOMOO_LOGIN_ACCOUNT=                          # your Moomoo login identity
-MOOMOO_LOGIN_PWD_MD5=                          # leave blank (first run uses console)
-MOOMOO_LOGIN_BY_REMEMBER=1                     # set after the first interactive login lands a token
+MOOMOO_LOGIN_BY_REMEMBER=1                     # reuse state from the first interactive login
 MOOMOO_LOGIN_REGION=sg                         # match your account region
+OPEND_INTERACTIVE=0                           # interactive mode is only for one-time setup
 
 # Trading safety
 MOOMOO_TRADING_MODE=READ_ONLY
@@ -226,27 +226,38 @@ an older published commit: `./scripts/deploy.sh --prepare <commit>`.
 Every Compose command below uses `compose-prod.sh`, which loads `.env` and
 `.deploy.env` explicitly. The same wrapper is used by systemd.
 
-This is the one non-mechanical step. The Linux OpenD build has no password flag, so unattended `-login_pwd_md5` does not work. The only headless path is `login_by_remember`, which needs a token written by a previous **interactive** session that also cleared the device-verification code. Without `OPEND_INTERACTIVE=1`, a headless start without a remembered token now exits with an error instead of hanging.
+This is the one non-mechanical step. Follow the documented
+[OpenD 10.10 startup flow](https://openapi.moomoo.com/moomoo-api-doc/en/opend/opend-cmd.html):
+log in interactively once, complete device verification and remember the password.
+Unattended starts then use `login_by_remember` with the persistent OpenD volume.
+The unverified `MOOMOO_LOGIN_PWD_MD5` startup option has been retired from this
+deployment; an old environment value is ignored. If remembered state is missing,
+the supervisor reports the required setup and keeps MCP diagnostics available
+without starting OpenD.
 
 ```sh
 cd "$HOME/moomoo"
-./scripts/compose-prod.sh run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp
+./scripts/compose-prod.sh run --rm --no-deps -it \
+  -e OPEND_INTERACTIVE=1 -e OPEND_MAX_RESTARTS=0 moomoo-mcp
 ```
 
-This runs the supervisor with the gateway in interactive mode; OpenD prints its banner, then asks for the device-verification code. Check the Moomoo app on your phone, enter the 6-digit code. It then prompts:
+This runs OpenD interactively with supervisor retries disabled. Follow its account,
+password and device-verification prompts directly in your terminal. If login fails
+or OpenD reports a cooldown, stop with Ctrl-C rather than retrying. When asked:
 
 > Remember the password? (Y/n)
 
 Type `Y`. OpenD logs in, the token file appears under `/home/opend/.com.moomoo.OpenD/F3CNN/`, and the container exits when you Ctrl-C.
 
-Verify the token:
+Check that remembered state exists without printing credential files or account
+identifiers:
 
 ```sh
-./scripts/compose-prod.sh run --rm --entrypoint /bin/sh moomoo-mcp -c \
-  'ls -la "$HOME/.com.moomoo.OpenD/F3CNN/"'
-# Inspect UserAccMap/ and ftnet/auth_acc_list inside the mounted volume.
-# Presence alone does not prove login; also confirm a successful OpenD login.
+./scripts/compose-prod.sh run --rm --no-deps --entrypoint python moomoo-mcp -c \
+  'from moomoo_mcp.supervisor import has_remembered_token; print(has_remembered_token("/home/opend"))'
 ```
+
+`True` confirms state is present; also confirm OpenD reported successful login.
 
 You only do this once per account-region. Subsequent restarts use `login_by_remember=1` and complete unattended. If you ever wipe `opend-data` or change region, the same interactive flow must happen again.
 

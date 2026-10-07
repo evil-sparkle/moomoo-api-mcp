@@ -145,7 +145,7 @@ fixture = {
             "container_name": None,
             "environment": {
                 "MOOMOO_LOGIN_ACCOUNT": "synthetic",
-                "MOOMOO_LOGIN_PWD_MD5": "synthetic",
+                "OPEND_INTERACTIVE": "1",
                 "MCP_AUTH_TOKEN": "synthetic-mcp-token",
                 "MCP_ALLOW_CHATGPT_TUNNEL_HOST": "1",
                 "PYTHONPATH": "/fixture-src",

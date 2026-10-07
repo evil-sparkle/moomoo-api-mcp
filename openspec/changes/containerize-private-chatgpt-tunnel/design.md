@@ -30,6 +30,12 @@ UID/GID 10002, read-only root, dropped capabilities, no-new-privileges and priva
 
 Required rootful/rootless tests use the actual official image and fresh brokerage image, synthetic environment credentials, isolated control-plane fixtures, unique projects and random host ports. Cover forwarding, negative auth, environment rotation, proxy filtering, isolation, DNS recovery, state preservation, child recovery/signals and fatal/deadline startup refusal. Lint, types, unit/deployment tests, workflow validation and strict OpenSpec also apply. Removed direct-client diagnostic suites/reports remain only in Git history.
 
+### Pinned OpenD login
+
+Use the documented OpenD 10.10 startup flow: the operator logs in interactively once with `OPEND_INTERACTIVE=1`, completes any device verification and chooses to remember the password. Unattended starts use the configured account and `MOOMOO_LOGIN_BY_REMEMBER=1` with the existing persistent OpenD volume. Retire `MOOMOO_LOGIN_PWD_MD5` from Compose, the template and startup argument selection; an old environment value must not override remembered login or become a password argument. This deployment does not offer the unverified MD5 startup path. Trade-unlock credentials are a separate SDK feature and remain unchanged.
+
+If remembered state is absent, keep the authenticated MCP diagnostics available without starting a gateway that cannot log in. Synthetic gateway fixtures explicitly select interactive mode without contacting a broker; they must not depend on a fake MD5 password to reach the supervisor's gateway branch. Retain defensive redaction of legacy credential arguments without treating them as supported configuration.
+
 ## Risks / Trade-offs
 
 - Environment credentials are visible to Docker/host administrators: explicitly accepted; supply only the ordinary MCP token and limited Read + Use tunnel key.
@@ -39,4 +45,4 @@ Required rootful/rootless tests use the actual official image and fresh brokerag
 
 ## Deployment handoff
 
-Keep the site-specific migration guide outside Git, attach/link it in chat and save it on the server. After PR merge and main image publication, perform its steps with existing permissions/credentials; escalate only missing credentials or permissions. The known missing OpenAI runtime key must be supplied through the owner's protected environment procedure before live enablement. Archive/sync OpenSpec after final PR approval in chat, not during implementation.
+Keep the site-specific migration guide outside Git, attach/link it in chat and save it on the server. After PR merge and main image publication, perform its steps with existing permissions/credentials; escalate only missing credentials or permissions. Enabled deployments require an OpenAI runtime key supplied through the owner's protected environment procedure. Separately authorized pre-merge trials must preserve the existing project and persistent state; record their live acceptance in the PR and external server guide. Archive/sync OpenSpec after final PR approval in chat, not during implementation.

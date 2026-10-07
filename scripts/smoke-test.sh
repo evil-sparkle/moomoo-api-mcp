@@ -291,15 +291,14 @@ session="$(session_id_from "${handshake}")"
 mcp_request "${session}" '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   > /dev/null
 
-# The supervisor builds OpenD's command line, and that line carries the trade
-# PIN hash when a deployment uses one. docker-compose.smoke.yml hands it a fake
-# hash for exactly this assertion: nothing that builds a gateway command may put
-# a credential where `docker logs` will keep it.
+# The supervisor's gateway command carries the login account identifier.
+# docker-compose.smoke.yml supplies a synthetic identifier for this assertion:
+# it must not appear in the container's logs.
 echo "==> credentials do not reach the logs"
-if logs | grep -q 'smoketestnotarealhash'; then
-  echo "FAILED: the gateway's login hash was written to the container log." \
+if logs | grep -q 'smoketest-account-do-not-log'; then
+  echo "FAILED: the gateway's login account was written to the container log." \
     "Redact it in moomoo_mcp.supervisor before this ships." >&2
-  logs | grep 'smoketestnotarealhash' | head -3 >&2
+  logs | grep 'smoketest-account-do-not-log' | head -3 >&2
   exit 1
 fi
 

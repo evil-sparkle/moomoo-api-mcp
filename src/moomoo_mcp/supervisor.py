@@ -79,9 +79,9 @@ class SupervisorConfigError(Exception):
     """A tunable was set to something the policy cannot be run under."""
 
 
-# Arguments that must never reach a log. The PIN hash is a credential — MD5 of
-# six digits is obfuscation, not protection — and the account number is an
-# identifier this repository keeps out of code and history by policy.
+# Arguments that must never reach a log. The account is a private identifier.
+# Keep defensive redaction for the retired password flag even though gateway
+# startup no longer generates it.
 SENSITIVE_FLAGS = ("-login_pwd_md5", "-login_account")
 
 
@@ -149,9 +149,9 @@ def has_remembered_token(home: str = DEFAULT_OPEND_HOME) -> bool:
 def gateway_spec(environ: dict[str, str] | None = None) -> ChildSpec:
     """Build OpenD's command line, or refuse to start it.
 
-    This was shell inside docker-compose.yml, which is the only reason it was
-    ever written in shell. The branches are unchanged, minus `-api_ip`, which
-    is no longer an operator's to widen.
+    OpenD is either started interactively or uses previously remembered state.
+    No login password is accepted or passed on the command line. The API
+    listener remains pinned to container loopback.
 
     Raises:
         GatewayLoginError: if no branch yields a login that can actually
@@ -162,7 +162,6 @@ def gateway_spec(environ: dict[str, str] | None = None) -> ChildSpec:
     binary = env.get("OPEND_BINARY", DEFAULT_OPEND_BINARY)
     home = env.get("HOME", DEFAULT_OPEND_HOME)
     account = env.get("MOOMOO_LOGIN_ACCOUNT", "").strip()
-    pwd_md5 = env.get("MOOMOO_LOGIN_PWD_MD5", "").strip()
     region = env.get("MOOMOO_LOGIN_REGION", "sg").strip() or "sg"
     interactive = env.get("OPEND_INTERACTIVE", "0").strip() == "1"
     by_remember = env.get("MOOMOO_LOGIN_BY_REMEMBER", "1").strip() == "1"
@@ -184,16 +183,15 @@ def gateway_spec(environ: dict[str, str] | None = None) -> ChildSpec:
         # The one-time device login. OpenD prompts on stdin and a human answers,
         # so an absent account is fine here and only here.
         return spec(f"-login_account={account}") if account else spec()
-    if pwd_md5:
-        return spec(f"-login_account={account}", f"-login_pwd_md5={pwd_md5}")
     if by_remember and account and has_remembered_token(home):
         return spec(f"-login_account={account}", "-login_by_remember=1")
     if account:
         raise GatewayLoginError(
-            f"No usable headless login for {account}: set MOOMOO_LOGIN_BY_REMEMBER=1 "
+            "No usable headless login: set MOOMOO_LOGIN_BY_REMEMBER=1 "
             "and perform the one-time interactive login so OpenD has a remembered "
-            "token, or supply MOOMOO_LOGIN_PWD_MD5. One-time login: "
-            "docker compose run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp"
+            "token. One-time login: "
+            "docker compose run --rm --no-deps -it -e OPEND_INTERACTIVE=1 "
+            "-e OPEND_MAX_RESTARTS=0 moomoo-mcp"
         )
     # Without an account OpenD prompts on stdin forever, which under `up -d`
     # looks "Up" while never logging in. Fail loudly instead of hanging.

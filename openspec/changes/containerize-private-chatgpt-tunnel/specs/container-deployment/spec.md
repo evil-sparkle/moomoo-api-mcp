@@ -58,6 +58,36 @@ execution-journal volume, or existing local-client path.
 
 ## ADDED Requirements
 
+### Requirement: Interactive and remembered OpenD login
+
+The pinned OpenD deployment SHALL support one-time interactive login through
+`OPEND_INTERACTIVE=1` and unattended login through the configured account,
+`MOOMOO_LOGIN_BY_REMEMBER=1` and remembered state in the existing persistent
+volume. The supervisor SHALL NOT use `MOOMOO_LOGIN_PWD_MD5` or emit
+`-login_pwd_md5`; Compose SHALL NOT inject that retired setting. The public
+template and runbooks SHALL describe the interactive/remembered flow without
+offering password-MD5 startup. Trade-unlock credentials SHALL remain independent.
+
+#### Scenario: First login is interactive
+
+- **WHEN** the operator explicitly selects interactive OpenD login
+- **THEN** the gateway SHALL prompt through the attached terminal without a password argument
+- **AND** choosing to remember the login SHALL store state in the existing OpenD volume
+
+#### Scenario: Legacy hash does not override remembered login
+
+- **GIVEN** an account and remembered state are configured
+- **AND** an obsolete `MOOMOO_LOGIN_PWD_MD5` value remains in the environment
+- **WHEN** the gateway starts unattended with remembered login enabled
+- **THEN** it SHALL use `-login_by_remember=1` and SHALL NOT pass a password argument
+
+#### Scenario: No remembered state is available
+
+- **WHEN** an unattended gateway start has no usable remembered state
+- **THEN** the supervisor SHALL report the required interactive setup without starting OpenD
+- **AND** the authenticated MCP server SHALL remain available for diagnostics
+- **AND** an obsolete password-MD5 value SHALL NOT provide an alternative login path
+
 ### Requirement: CI-published tunnel deployment
 
 The existing GitHub Actions image pipeline SHALL build the tunnel from enumerated public inputs and publish it to the existing ECR repository only on main pushes, using distinct `tunnel-<commit>` tags. PR builds SHALL NOT publish. Every main commit SHALL have a matching tunnel tag through rebuilding or retagging a verified baseline image, with a build fallback if that image is absent. Operators SHALL NOT need to build an image on the production host.

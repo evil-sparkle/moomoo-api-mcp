@@ -114,6 +114,10 @@ context: |
   - The MCP endpoint is published on host loopback, `127.0.0.1:8000`.
   - The `opend-data` volume (`/home/opend/.com.moomoo.OpenD`, uid 10001) holds the
     device authorization and survives container restarts and recreation.
+  - OpenD login is interactive once, then unattended through the configured
+    account and remembered state. The retired login-password MD5 setting is
+    neither injected by Compose nor read by the supervisor. Missing remembered
+    state leaves MCP diagnostics available without starting OpenD.
   - The optional `docker-compose.paper.yml` overlay adds `execution-data` at
     `/var/lib/moomoo-mcp/data`, owned by uid 10001, for paper execution. Keep its
     volume identity across SIMULATE/REAL mode changes. One executor holds the

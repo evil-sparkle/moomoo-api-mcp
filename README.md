@@ -203,9 +203,13 @@ docker compose build
 OpenD requires an interactive verification code (SMS/2FA) on initial device registration:
 
 ```bash
-docker compose run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp
+docker compose run --rm --no-deps -it \
+  -e OPEND_INTERACTIVE=1 -e OPEND_MAX_RESTARTS=0 moomoo-mcp
 ```
-Without `OPEND_INTERACTIVE=1`, a headless start without a remembered token exits with an error instead of hanging.
+The pinned OpenD deployment uses interactive login once, then remembered login
+for unattended starts. If remembered state is missing, the supervisor keeps MCP
+diagnostics available without starting OpenD. The command above disables gateway
+retries for the interactive attempt; stop if login fails instead of retrying.
 
 Follow the prompts in your terminal:
 1. **Account**: Enter your Moomoo ID, email, or phone number.
@@ -226,6 +230,8 @@ Set your account number so OpenD knows which saved session to load:
 ```env
 MOOMOO_LOGIN_ACCOUNT=12345678
 MOOMOO_LOGIN_REGION=sg        # sg (Singapore), us, hk, etc.
+MOOMOO_LOGIN_BY_REMEMBER=1    # reuse the login saved in opend-data
+OPEND_INTERACTIVE=0          # normal background operation
 MOOMOO_SECURITY_FIRM=FUTUSG   # FUTUSG (Singapore), FUTUINC (US), etc.
 MOOMOO_TRADING_MODE=READ_ONLY  # READ_ONLY (default), SIMULATE, or REAL
 MOOMOO_TRADING_MARKET=NONE     # NONE (all securities markets) or HK, US, CN, HKCC, SG, AU, JP, MY, CA
