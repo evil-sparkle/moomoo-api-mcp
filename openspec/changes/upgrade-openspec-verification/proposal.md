@@ -9,7 +9,8 @@ The workflow lacks verify and loads a large repository handbook for every change
 
 - Pin CLI use and CI validation to 1.14.1 and regenerate existing integrations.
 - Track a reproducible skills-only custom profile containing the six core workflows plus verify.
-- Require autonomous test/fix/retest followed by OpenSpec verify and strict validation.
+- Centralize the scope-aware completion policy in AGENTS.md, with short references
+  from config and the development guide.
 - Reduce always-loaded context to invariants and pointers; index deeper docs.
 - Reformat 43 long requirement bodies in 13 canonical specs for 1.14.1 strict
   validation, retaining every original word and existing scenario.

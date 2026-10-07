@@ -20,14 +20,4 @@ context: |
   - Never read or commit secrets; use .env.example and operator-run auth steps.
   - Do not use regex in code; use explicit string methods or conditionals.
 
-  Completion contract (also in AGENTS.md): after apply, autonomously run relevant
-  tests/checks, inspect failures, fix them, and repeat. Then run the installed
-  OpenSpec verify workflow against the change and strict CLI validation, fixing
-  actionable findings and rechecking. Return only when verified, genuinely
-  blocked, or a decision needs human judgment. Checked tasks alone are not proof.
-  Local/mock/container checks do not establish live broker or ChatGPT acceptance.
-
-rules:
-  tasks:
-    - Include relevant automated checks and OpenSpec verify in the completion tasks.
-    - Keep unavailable live acceptance explicit and separate from local evidence.
+  Follow the Completion policy in AGENTS.md.

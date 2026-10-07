@@ -8,7 +8,7 @@
 
 ## 2. Context and completion contract
 
-- [x] 2.1 Put autonomous tests, repairs, verify, and strict validation in durable repository instructions; review completion and blocker semantics.
+- [x] 2.1 Centralize the completion policy in AGENTS.md with short references elsewhere; check selected-change and ordinary-maintenance paths, evidence, and blocker semantics.
 - [x] 2.2 Slim config to invariants and pointers, preserve detailed knowledge in indexed docs, and check all new local links.
 - [x] 2.3 Reformat overlong canonical requirements, verify original wording/scenarios remain intact, and pass 1.14.1 strict validation.
 

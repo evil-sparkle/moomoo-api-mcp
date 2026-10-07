@@ -21,9 +21,10 @@ archived history, or introduce agentic GitHub Actions in this change.
    `init --tools` refreshes all four integrations, including Antigravity after its
    workflow-based detection disappears. The exact 1.14.1 version matches CI. Personal
    global profile edits would be less reproducible and affect unrelated projects.
-2. Keep completion instructions in `AGENTS.md` and the concise OpenSpec context.
-   Generated files remain upstream output, so regeneration cannot erase local
-   policy. Agent verify and CLI validate have distinct purposes; require both.
+2. Keep the full completion policy in `AGENTS.md`; config and the development
+   guide reference it. The policy distinguishes a selected OpenSpec change from
+   ordinary maintenance. Generated files remain upstream output, so regeneration
+   cannot erase local policy.
 3. Preserve the former context's detailed content in `docs/project-guide.md` and
    move checks into `docs/development.md`; route readers through `docs/README.md`.
 4. Keep each long requirement's concise opening and insert a named scenario with

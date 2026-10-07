@@ -9,9 +9,9 @@ on PATH for the test command. The tests execute `bash` from PATH.
 
 ## Checks and completion
 
-After apply, continue autonomously through the relevant checks. Inspect failures,
-fix their causes, and repeat affected checks until passing. Do not weaken tests,
-patch installed dependencies, or count skipped checks as passing to reach green.
+Follow the [completion policy](../AGENTS.md#completion-policy).
+Select the relevant checks below; this is a command reference, not a requirement
+to run every command for every task.
 
 ```bash
 uv sync --all-extras --dev
@@ -29,27 +29,8 @@ Select checks by scope:
 | Python behavior | Relevant tests during iteration, then full pytest, Ruff, and basedpyright |
 | Shell, Compose, deployment, or CI YAML | Relevant script/topology tests and full pytest; lint/type checks for affected Python |
 | Container behavior | Applicable `scripts/smoke-test.sh`, `scripts/test-paper-container.sh`, or `scripts/test-tunnel-container.sh` with Docker |
-| Docs, specs, or managed workflow instructions | Review links and requirements; strict OpenSpec validation; for regeneration, confirm version, exact workflow inventory, and repeatability |
-
-After tests pass, execute `openspec-verify-change` for the same change
-(`$openspec-verify-change` in Codex or `/openspec-verify-change` where slash-invoked
-skills are supported). Review completeness,
-correctness, and coherence against its tasks, specs, design, code, and test
-evidence. Fix actionable findings, rerun affected checks, and repeat verification.
-Run strict validation as well. **Verify is an agent workflow, not an
-`openspec verify` CLI subcommand.** `validate` checks structure, not implementation.
-For maintenance without a change artifact, explicitly verify the requested
-acceptance criteria and report that artifact-based verification was unavailable;
-do not select an unrelated active change.
-
-Return only when verified, genuinely blocked, or a decision requires human
-judgment. Report checks and evidence, unresolved findings, and exact blockers.
-Checked tasks do not prove completion. Keep any required live acceptance open:
-stub-based container checks prove topology/recovery, not broker login, provider
-response-loss handling, or ChatGPT/iPad acceptance. Do not archive incomplete work.
-
-Keep verification reports in the PR description or comments and CI evidence;
-do not add a `verification.md` artifact to each change.
+| Documentation | Review acceptance criteria, links, and consistency |
+| Specs or managed OpenSpec workflow instructions | Strict OpenSpec validation; for regeneration, confirm version, exact workflow inventory, and repeatability |
 
 Use Conventional Commits and merge through pull requests. Install local hooks:
 
@@ -71,6 +52,11 @@ Use **`@fission-ai/openspec@1.14.1`**, matching the exact pin in
 `.github/workflows/ci.yml`. The unscoped npm package is unrelated. A machine's
 bare `openspec` executable may be older; check `openspec --version` before use or
 invoke the exact npm version above.
+
+`openspec-verify-change` is an agent skill (`$openspec-verify-change` in Codex or
+`/openspec-verify-change` in slash-invoked skill interfaces), not an
+`openspec verify` CLI subcommand. It reviews completeness, correctness, and
+coherence against change artifacts. CLI `validate` checks structure.
 
 The repository profile in `openspec/profile.json` is **core + verify**:
 `propose`, `explore`, `apply`, `update`, `sync`, `archive`, `verify`. Delivery is
@@ -95,8 +81,8 @@ profile and can remove verify; use the script for this repository.
 
 Review the generated diff, confirm skill metadata says `generatedBy: "1.14.1"`,
 check that only the seven selected workflows exist, and regenerate
-again to ensure no further changes. Keep repository-specific completion rules in
-`AGENTS.md` and `openspec/config.yaml`, since generated files are overwritten.
+again to ensure no further changes. The [completion policy](../AGENTS.md#completion-policy)
+lives outside generated files so regeneration preserves it.
 
 Keep `openspec/config.yaml` limited to invariants and pointers. Add deeper
 explanations to the appropriate indexed document. This uses the same on-demand
