@@ -82,6 +82,21 @@ async def get_account_summary(
     diluted-cost P/L percentage. Do not label these as average purchase cost
     or unrealized return.
 
+    Additional position fields, when reported:
+    - average_cost: broker-reported average cost price.
+    - diluted_cost: broker-reported diluted cost price.
+    - pl_ratio_avg_cost: broker-reported P/L percentage using average cost.
+    - unrealized_pl: broker-reported unrealized P/L amount.
+    - realized_pl: broker-reported realized P/L amount.
+
+    average_cost, pl_ratio_avg_cost, unrealized_pl and realized_pl are not
+    applicable to SIMULATE securities accounts. In universal securities
+    accounts, unrealized_pl and realized_pl use the average-cost basis.
+    For futures accounts, cost_price is average cost; diluted_cost, pl_ratio
+    and pl_ratio_avg_cost are not applicable. Preserve unavailable fields as
+    reported; do not reconstruct them. These definitions do not prove a
+    suspected upstream accounting mechanism.
+
     Do not treat a current position row as lifetime P/L for the underlying
     and all its derivatives. Do not infer the inclusion of option premiums,
     fees, dividends or closed positions without establishing the scope.
@@ -203,6 +218,21 @@ async def get_positions(
     For securities accounts, cost_price is diluted cost and pl_ratio is the
     diluted-cost P/L percentage. Do not label these as average purchase cost
     or unrealized return.
+
+    Additional position fields, when reported:
+    - average_cost: broker-reported average cost price.
+    - diluted_cost: broker-reported diluted cost price.
+    - pl_ratio_avg_cost: broker-reported P/L percentage using average cost.
+    - unrealized_pl: broker-reported unrealized P/L amount.
+    - realized_pl: broker-reported realized P/L amount.
+
+    average_cost, pl_ratio_avg_cost, unrealized_pl and realized_pl are not
+    applicable to SIMULATE securities accounts. In universal securities
+    accounts, unrealized_pl and realized_pl use the average-cost basis.
+    For futures accounts, cost_price is average cost; diluted_cost, pl_ratio
+    and pl_ratio_avg_cost are not applicable. Preserve unavailable fields as
+    reported; do not reconstruct them. These definitions do not prove a
+    suspected upstream accounting mechanism.
 
     Do not treat a current position row as lifetime P/L for the underlying
     and all its derivatives. Do not infer the inclusion of option premiums,
