@@ -310,7 +310,21 @@ finish_deploy() {
     if python3 "$verify_helper" verify \
       --url "${DEPLOY_VERIFY_URL:-http://127.0.0.1:8000/mcp}" \
       --timeout "${DEPLOY_VERIFY_TIMEOUT:-90}"; then
-      echo "Deploy verified: ${short} as ${image_tag}" >&2
+      echo "MCP deployment verified: ${short} as ${image_tag}" >&2
+      # Readiness is separate from deployment verification: missing login state,
+      # broker outages and health diagnostics cannot be fixed by image rollback.
+      if python3 "$verify_helper" gateway-readiness \
+        --url "${DEPLOY_VERIFY_URL:-http://127.0.0.1:8000/mcp}" \
+        --timeout "${DEPLOY_GATEWAY_TIMEOUT:-60}"; then
+        :
+      else
+        local gateway_status=$?
+        if [ "$gateway_status" -ge 128 ]; then
+          echo 'Readiness check interrupted; the verified deployment remains running.' >&2
+          return "$gateway_status"
+        fi
+        echo 'OpenD readiness not confirmed; the verified deployment remains running.' >&2
+      fi
       ./scripts/compose-prod.sh logs --tail=200 moomoo-mcp \
         || echo 'Could not collect the moomoo-mcp logs.' >&2
       cleanup_images

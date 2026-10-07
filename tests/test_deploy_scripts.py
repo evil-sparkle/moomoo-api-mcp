@@ -199,8 +199,26 @@ if name == "curl":
         sys.stdout.write("\\n000\\n")
         sys.exit(7)
     else:
-        body = os.environ.get("CURL_TEST_BODY", VALID_INIT_RESULT)
-        status = os.environ.get("CURL_TEST_STATUS", "200")
+        request = json.loads(args[args.index("--data-binary") + 1])
+        if request.get("method") == "tools/call":
+            if os.environ.get("CURL_TEST_HEALTH_INTERRUPT") == "1":
+                import signal
+                os.kill(os.getppid(), signal.SIGTERM)
+                sys.exit(0)
+            default_health = json.dumps({{
+                "jsonrpc": "2.0", "id": request["id"], "result": {{
+                    "isError": False, "structuredContent": {{
+                        "status": "connected",
+                        "quote": {{"status": "ok", "logged_in": True}},
+                        "trade": {{"status": "ok", "account_count": 1}},
+                    }}
+                }}
+            }})
+            body = os.environ.get("CURL_TEST_HEALTH_BODY", default_health)
+            status = os.environ.get("CURL_TEST_HEALTH_STATUS", "200")
+        else:
+            body = os.environ.get("CURL_TEST_BODY", VALID_INIT_RESULT)
+            status = os.environ.get("CURL_TEST_STATUS", "200")
         sys.stdout.write(body + "\\n" + status + "\\napplication/json")
 """
         for name in ("aws", "docker", "curl"):
@@ -218,6 +236,7 @@ if name == "curl":
             IMAGE_TAG="stale-shell-tag",
             CALL_LOG=str(self.log),
             DEPLOY_VERIFY_TIMEOUT="0",
+            DEPLOY_GATEWAY_TIMEOUT="0",
             TMPDIR=str(self.tmpdir),
         )
 
@@ -541,7 +560,7 @@ if name == "curl":
                 with mock.patch.dict(self.env, {f"DOCKER_TEST_FAIL_{failure}": "1"}):
                     result = self.deploy()
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("Deploy verified", result.stderr)
+                self.assertIn("MCP deployment verified", result.stderr)
                 if failure == "RM":
                     self.assertEqual(
                         self.image_removals(), [f"{repo}:old", f"{repo}:older"]
@@ -652,11 +671,12 @@ if name == "curl":
         self.env.pop("ECR_REGISTRY")
         result = self.deploy(self.commit)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Deploy verified", result.stderr)
+        self.assertIn("MCP deployment verified", result.stderr)
         # Configuration is resolved before the pull, and again by verify,
         # which reads it from nowhere else.
         self.assertEqual(
-            self.compose_commands(), ["config", "pull", "up", "config", "logs"]
+            self.compose_commands(),
+            ["config", "pull", "up", "config", "config", "logs"],
         )
         docker = [
             args
@@ -664,7 +684,7 @@ if name == "curl":
             if name == "docker" and "compose" in args
         ]
         self.assertEqual(docker[2][-3:], ["up", "-d", "--remove-orphans"])
-        self.assertIn("moomoo-mcp", docker[4])
+        self.assertIn("moomoo-mcp", docker[5])
 
     def test_verification_probes_as_an_authenticated_mcp_client(self):
         """The probe sends Compose's resolved token and an MCP initialize.
@@ -678,7 +698,7 @@ if name == "curl":
         result = self.deploy(self.commit)
         self.assertEqual(result.returncode, 0, result.stderr)
         curls = [args for name, args, _ in self.calls() if name == "curl"]
-        self.assertEqual(len(curls), 1)
+        self.assertEqual(len(curls), 2)
         args = curls[0]
         self.assertIn("Content-Type: application/json", args)
         self.assertIn("Accept: application/json, text/event-stream", args)
@@ -694,8 +714,63 @@ if name == "curl":
         self.assertNotIn("resolved by compose", json.dumps(commands))
         self.assertNotIn("resolved by compose", result.stdout + result.stderr)
         headers = [c[1] for c in self.calls() if c[0] == "curl-header"]
-        self.assertEqual(headers, [["Authorization: Bearer resolved by compose\n"]])
+        self.assertEqual(headers, [["Authorization: Bearer resolved by compose\n"]] * 2)
         self.assertEqual(list(self.tmpdir.iterdir()), [])
+
+    def test_gateway_warning_preserves_verified_deployment_without_rollback(self):
+        self.save_previous_deploy()
+        target = self.add_newer_commit()
+        self.env["CURL_TEST_HEALTH_BODY"] = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": "deploy-gateway-readiness",
+                "result": {
+                    "structuredContent": {
+                        "status": "connected",
+                        "quote": {"status": "ok", "logged_in": False},
+                        "trade": {"status": "ok"},
+                    }
+                },
+            }
+        )
+        result = self.deploy(target)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), target)
+        self.assertEqual(self.compose_commands().count("up"), 1)
+        self.assertIn("MCP deployment verified", result.stderr)
+        self.assertIn("OpenD login required", result.stderr)
+        self.assertIn("verified deployment remains running", result.stderr)
+        self.assertIn("OPEND_INTERACTIVE=1", result.stderr)
+        self.assertNotIn("Rolled back", result.stderr)
+        self.assertNotIn("OpenD ready:", result.stderr)
+
+    def test_invalid_or_refused_gateway_check_is_a_warning_after_mcp_verification(self):
+        for key, value in (
+            ("CURL_TEST_HEALTH_BODY", '{"id":"wrong","result":{}}'),
+            ("CURL_TEST_HEALTH_STATUS", "401"),
+            ("DEPLOY_GATEWAY_TIMEOUT", "invalid"),
+        ):
+            with self.subTest(key=key), mock.patch.dict(self.env, {key: value}):
+                self.log.unlink(missing_ok=True)
+                result = self.deploy(self.commit)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("MCP deployment verified", result.stderr)
+            self.assertIn("OpenD readiness not confirmed", result.stderr)
+            self.assertNotIn("Rolled back", result.stderr)
+            self.assertEqual(self.compose_commands().count("up"), 1)
+
+    def test_interrupted_gateway_check_stops_without_rollback_or_cleanup(self):
+        self.save_previous_deploy()
+        target = self.add_newer_commit()
+        self.env["CURL_TEST_HEALTH_INTERRUPT"] = "1"
+        result = self.deploy(target)
+        self.assertEqual(result.returncode, 143, result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), target)
+        self.assertEqual(self.compose_commands().count("up"), 1)
+        self.assertIn("Readiness check interrupted", result.stderr)
+        self.assertNotIn("Rolled back", result.stderr)
+        self.assertNotIn("logs", self.compose_commands())
+        self.assertFalse(any(call[1][2:4] == ["image", "ls"] for call in self.calls()))
 
     def test_empty_resolved_token_probes_without_authorization(self):
         self.env["DOCKER_TEST_TOKEN"] = ""
@@ -736,10 +811,10 @@ if name == "curl":
                 self.assertNotEqual(result.returncode, 0, body)
                 self.assertIn("Deploy verification failed", result.stderr)
                 self.assertIn("initialize", result.stderr)
-                self.assertNotIn("Deploy verified", result.stderr)
+                self.assertNotIn("MCP deployment verified", result.stderr)
 
     def test_auth_refusal_fails_the_deploy_instead_of_passing(self):
-        """A 401 from the endpoint must not print "Deploy verified".
+        """A 401 from the endpoint must not print "MCP deployment verified".
 
         The server is up but refusing the token clients will send; the deploy
         names MCP_AUTH_TOKEN as the thing to check and rolls back.
@@ -750,7 +825,7 @@ if name == "curl":
         self.assertIn("Deploy verification failed", result.stderr)
         self.assertIn("Authentication refused", result.stderr)
         self.assertIn("MCP_AUTH_TOKEN", result.stderr)
-        self.assertNotIn("Deploy verified", result.stderr)
+        self.assertNotIn("MCP deployment verified", result.stderr)
         self.assertEqual(list(self.tmpdir.iterdir()), [])
 
     def test_failed_log_collection_does_not_prevent_rollback(self):
@@ -952,7 +1027,7 @@ if name == "curl":
         self.env["CURL_TEST_FAIL"] = "1"
         result = self.deploy(self.commit)
         self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("Deploy verified", result.stderr)
+        self.assertNotIn("MCP deployment verified", result.stderr)
 
     def test_reexec_when_deploy_script_differs_in_target_commit(self):
         """Re-execute target deploy.sh when it differs in the target commit."""
@@ -972,7 +1047,7 @@ if name == "curl":
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("re-executing latest deploy script", result.stderr)
         self.assertIn("REEXEC_MARKER_TEST_OK", result.stderr)
-        self.assertIn(f"Deploy verified: {newer_commit[:7]}", result.stderr)
+        self.assertIn(f"MCP deployment verified: {newer_commit[:7]}", result.stderr)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), newer_commit)
         reexec_leftovers = list((self.repo / "scripts").glob(".deploy.reexec*"))
         self.assertEqual(reexec_leftovers, [])
@@ -1035,13 +1110,14 @@ if name == "curl":
         result = self.deploy()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("re-executing latest deploy script", result.stderr)
-        self.assertIn(f"Deploy verified: {target[:7]}", result.stderr)
+        self.assertIn(f"MCP deployment verified: {target[:7]}", result.stderr)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), target)
         self.assertEqual(
-            self.compose_commands(), ["config", "pull", "up", "config", "logs"]
+            self.compose_commands(),
+            ["config", "pull", "up", "config", "config", "logs"],
         )
         headers = [c[1] for c in self.calls() if c[0] == "curl-header"]
-        self.assertEqual(headers, [["Authorization: Bearer test-only\n"]])
+        self.assertEqual(headers, [["Authorization: Bearer test-only\n"]] * 2)
 
     def test_reexec_runs_the_target_helper_not_the_old_one(self):
         """A helper already on the host is the old commit's, and stays unused."""
@@ -1054,7 +1130,7 @@ if name == "curl":
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("re-executing latest deploy script", result.stderr)
         self.assertNotIn("STALE HELPER", result.stderr)
-        self.assertIn(f"Deploy verified: {target[:7]}", result.stderr)
+        self.assertIn(f"MCP deployment verified: {target[:7]}", result.stderr)
 
     def test_no_reexec_when_deploy_script_identical(self):
         """When deploy.sh is identical, deployment proceeds without re-execution."""
