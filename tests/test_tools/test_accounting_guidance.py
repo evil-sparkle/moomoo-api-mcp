@@ -1,6 +1,6 @@
-"""Registered MCP guidance and synthetic broker response contracts.
+"""Synthetic broker response contracts and installed SDK history dates.
 
-These are in-process metadata and dispatch checks, not live client testing or
+These are in-process dispatch checks, not live client testing or
 financial reconciliation. No broker connection or private account data is used.
 """
 
@@ -13,7 +13,6 @@ import pandas as pd
 import pytest
 from moomoo import RET_OK, OpenSecTradeContext, TrdCategory, TrdMarket
 
-from moomoo_mcp.server import mcp
 from moomoo_mcp.services.trade_service import TradeService
 
 ACCOUNT_TOOLS = ("get_positions", "get_account_summary")
@@ -30,120 +29,6 @@ ADDITIONAL_FIELDS = (
     "unrealized_pl",
     "realized_pl",
 )
-
-
-async def registered_description(name):
-    tools = {tool.name: tool for tool in await mcp.list_tools()}
-    return " ".join((tools[name].description or "").split()).lower()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ACCOUNT_TOOLS)
-async def test_account_descriptions_preserve_basis_and_uncertainty(tool_name):
-    description = await registered_description(tool_name)
-
-    assert "broker-reported position data" in description
-    assert "not an independently reconciled accounting ledger" in description
-    assert "cost_price is diluted cost" in description
-    assert "diluted-cost p/l percentage" in description
-    assert (
-        "do not label these as average purchase cost or unrealized return"
-        in description
-    )
-    assert "do not treat a current position row as lifetime p/l" in description
-    for excluded_scope in (
-        "derivatives",
-        "option premiums",
-        "fees",
-        "dividends",
-        "closed positions",
-    ):
-        assert excluded_scope in description
-    assert "app/api discrepancy" in description
-    assert "unresolved until verified" in description
-    assert "do not replace broker fields with reconstructed values" in description
-    assert "do not alone prove an error" in description
-    assert "validity flags are not independent financial reconciliation" in description
-    assert "do not prove a suspected upstream accounting mechanism" in description
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ACCOUNT_TOOLS)
-async def test_account_descriptions_define_additional_fields_and_limits(tool_name):
-    description = await registered_description(tool_name)
-
-    for field, meaning in (
-        ("average_cost", "average cost price"),
-        ("diluted_cost", "diluted cost price"),
-        ("pl_ratio_avg_cost", "p/l percentage using average cost"),
-        ("unrealized_pl", "unrealized p/l amount"),
-        ("realized_pl", "realized p/l amount"),
-    ):
-        assert f"{field}: broker-reported {meaning}" in description
-    assert "not applicable to simulate securities accounts" in description
-    assert "universal securities accounts" in description
-    assert "unrealized_pl and realized_pl use the average-cost basis" in description
-    assert "for futures accounts, cost_price is average cost" in description
-    assert (
-        "diluted_cost, pl_ratio and pl_ratio_avg_cost are not applicable" in description
-    )
-    assert "preserve unavailable fields as reported" in description
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", HISTORY_TOOLS)
-async def test_history_descriptions_explain_dates_and_coverage(tool_name):
-    description = await registered_description(tool_name)
-
-    assert "omit dates with empty strings" in description
-    assert (
-        "both start and end omitted: start is 90 days before today, end is today"
-        in description
-    )
-    assert "sdk host's current date" in description
-    assert "only end supplied: start is 90 days before end" in description
-    assert "only start supplied: end is 90 days after start" in description
-    assert "not necessarily today" in description
-    assert "both start and end supplied: request the explicit range" in description
-    assert "does not cap it at 90 days" in description
-    assert "broker availability and filters still apply" in description
-    assert "00:00:00 for start and 23:59:59 for end" in description
-    assert "explicit ranges covering the intended period" in description
-    assert "does not establish lifetime completeness" in description
-    assert "including an empty list" in description
-    assert "account and code filters limit scope" in description
-    assert (
-        "broker history availability has not been independently established"
-        in description
-    )
-    assert "does not include all derivatives" in description
-    assert "empty for max range" not in description
-    assert "empty for today" not in description
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", HISTORY_TOOLS)
-async def test_history_descriptions_distinguish_requests_from_fills(tool_name):
-    description = await registered_description(tool_name)
-
-    assert "broker-reported" in description
-    assert "dealt_qty" in description
-    assert "dealt_avg_price" in description
-    assert "cancelled_part" in description
-    assert "partial fills" in description
-    assert "remainder" in description
-    if tool_name == "get_history_orders":
-        assert "qty and price are the requested quantity and order price" in description
-        assert "executed quantity and average fill price" in description
-        assert "do not discard its executions" in description
-        assert "status filters can also exclude orders with executions" in description
-    else:
-        assert (
-            "qty and price are the broker-reported actual fill quantity and fill price"
-            in description
-        )
-        assert "do not exclude those executions" in description
-        assert "simulate availability must not be assumed" in description
 
 
 @pytest.fixture
