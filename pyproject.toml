@@ -29,8 +29,8 @@ classifiers = [
 
     "Topic :: Office/Business :: Financial :: Investment",
 ]
-urls.Repository = "https://github.com/Litash/moomoo-api-mcp"
-urls.Issues = "https://github.com/Litash/moomoo-api-mcp/issues"
+urls.Repository = "https://github.com/evil-sparkle/moomoo-api-mcp"
+urls.Issues = "https://github.com/evil-sparkle/moomoo-api-mcp/issues"
 dependencies = [
     "anyio>=4.0.0",
     # <2 because the server is built on FastMCP: mcp 2.x renamed it to

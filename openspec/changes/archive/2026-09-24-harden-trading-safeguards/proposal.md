@@ -160,7 +160,7 @@ None.
   - `tests/test_tools/test_account.py`
 - **Configuration and operations**:
   - `.env.example`, `docker-compose.yml` (new variables), `docs/deploy-vps.md`,
-    `docs/state-and-restarts.md`, `README.md`, and the `openspec/config.yaml`
+    [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference), `README.md`, and the `openspec/config.yaml`
     context (auto-unlock and "HTTP currently runs unauthenticated").
   - The live VPS `.env` must gain `MOOMOO_REAL_ACC_IDS`, and
     `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` if a cap is used, before upgrading.

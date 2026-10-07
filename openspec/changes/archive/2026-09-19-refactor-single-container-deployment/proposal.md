@@ -10,7 +10,7 @@ bridge" — a property of the compose file, not of the network stack. Nothing in
 the stack enforces it, and a future sidecar, a `docker run --network`, or a
 debug container added by a tired operator quietly crosses it.
 
-Two facts in `docs/state-and-restarts.md` sharpen this. The gateway is reachable
+Two facts in [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference) sharpen this. The gateway is reachable
 across namespaces only because OpenD is told `-api_ip=0.0.0.0`, and that flag
 has never been exercised against a real OpenD build — the smoke test replaces
 the binary with a stand-in, and the unit test asserts the flag's text. So the
@@ -60,7 +60,7 @@ a dead OpenD in place rather than cycling the whole container.
   `docker-compose.prod.yml`, `docker-compose.smoke.yml`,
   `tests/test_compose_topology.py`, `scripts/smoke-test.sh`,
   `scripts/deploy.sh`, `.github/workflows/ci.yml` (two image builds become one),
-  `docs/deploy-vps.md`, `docs/state-and-restarts.md`, `README.md`, `.env.example`
+  `docs/deploy-vps.md`, [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference), `README.md`, `.env.example`
 - Unaffected: `system-health` — `check_health` already reports `degraded` while
   the gateway is away, which is exactly the signal the supervisor must not act on.
 - Not addressed here: reconciling account and order state after a restart, which

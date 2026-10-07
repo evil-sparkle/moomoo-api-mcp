@@ -1,21 +1,34 @@
 # Deploy moomoo-api-mcp to an Ubuntu server
 
+[Host setup](#one-time-provision-the-host) ·
+[First deployment](#one-time-deploy-the-application) ·
+[Upgrade and rollback](#everyday-deploy-a-new-image) ·
+[Restarts](#everyday-restart-the-container) ·
+[State](#state-and-restart-reference) ·
+[ChatGPT](#optional-chatgpt-access) ·
+[Paper recovery](#paper-execution-and-recovery)
+
 The GitHub Actions workflow builds and pushes the `moomoo-api-mcp` image to
 ECR on every `main` push. This runbook covers everything from pulling that image
 to having a running, logged-in stack on a fresh Ubuntu server (VPS or
 otherwise). Tested on Ubuntu 24.04 LTS; other Linux distributions with rootless
 Docker should work but are untested.
 
-For what state the stack holds and what each restart costs, see
-[`state-and-restarts.md`](state-and-restarts.md). For persistent paper execution
-in SIMULATE or REAL mode, follow [paper-execution.md](paper-execution.md), including
-the optional `docker-compose.paper.yml` overlay, explicit initialization and
-recovery review. Preserve the same dedicated paper volume when switching modes;
-the base deployment below remains READ_ONLY by default.
+Use `scripts/deploy.sh` for every manual deployment, including upgrades and
+rollback. `compose-prod.sh` is the shared internal wrapper for diagnostics,
+interactive login and service management; it is not an alternative image-selection
+workflow.
 
-**One image, two runtime constraints.** The image carries both the OpenD gateway and the MCP server, started by a supervisor that owns them (`src/moomoo_mcp/supervisor.py`). The server half is ordinary — pull and run. OpenD is not: the first start must happen interactively so you can answer the device-verification prompt and "remember the password". Until that token lands in `opend-data`, no unattended start can complete login.
+The brokerage image runs OpenD and MCP under one supervisor. OpenD listens only
+on container loopback; MCP is published at host `127.0.0.1:8000`. First login is
+interactive; later starts reuse remembered state in the `opend-data` volume.
+The base deployment is READ_ONLY. See [state and restarts](#state-and-restart-reference)
+for storage and process behavior, and [private ChatGPT access](#optional-chatgpt-access)
+for the optional tunnel enabled through this same deployment entrypoint.
 
-**Upgrading from the two-container deployment.** The `opend-data` volume carries over untouched — same mount path, same owning uid — so no interactive re-login is needed. `docker compose up -d` replaces both old containers with the one new one; `--remove-orphans` (which `deploy.sh` already passes) clears the leftover `opend` container. The `moomoo-opend` ECR repository stops being written to: leave it until the last two-container image is past being a rollback target, then delete the repository.
+**Paper execution is not integrated into this deployment path yet.** The script
+does not select `docker-compose.paper.yml`; setting SIMULATE in the environment
+alone is insufficient. See [the paper support boundary](#deployment-support-boundary).
 
 ---
 
@@ -134,7 +147,6 @@ MOOMOO_TRADE_PASSWORD_MD5=                     # blank until you intend to place
 MOOMOO_REAL_ACC_IDS=                           # required once MOOMOO_TRADING_MODE=REAL
 MOOMOO_MAX_ORDER_QTY=1000
 MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:10000
-MOOMOO_MAX_ORDER_NOTIONAL=10000                # legacy, rollback-only; see below
 
 # MCP transport
 MCP_TRANSPORT=streamable-http
@@ -145,66 +157,21 @@ MCP_AUTH_TOKEN=                                # generate: openssl rand -hex 32
 without it, because an unauthenticated HTTP endpoint exposes every tool,
 including the order-mutating ones, to anything that can reach the port.
 
-`MOOMOO_MAX_ORDER_NOTIONAL` is **legacy and rollback-only**. This image never
-applies it as a limit; the previous image does. Keeping it here beside
-`MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` is what lets one `.env` serve both, so
-a rollback needs no edit under pressure. Set on its own it is a startup error.
+`MOOMOO_LOGIN_ACCOUNT` is required for unattended remembered login. Without an
+account or usable remembered state, the supervisor logs the setup problem and
+keeps MCP diagnostics running without OpenD. This differs from invalid MCP or
+trading settings, which refuse server startup.
 
-`MOOMOO_LOGIN_ACCOUNT` is required even with `MOOMOO_LOGIN_BY_REMEMBER=1`: the
-remembered-token path passes `-login_account` alongside `-login_by_remember=1`.
-Leaving it blank now exits the container with an explicit error rather than
-leaving OpenD waiting on a console prompt that never arrives under `up -d`.
+For account-bound reads, discover accounts with `get_accounts` and copy the
+returned string ID exactly. `acc_id="0"` works only when one account matches the
+requested environment. Login region, securities firm, trading market and trading
+environment are separate settings.
 
-### Migrating an existing deployment
-
-Configuration is validated at startup, before anything listens, so a variable
-this version rejects stops the process rather than failing requests one at a
-time. Edit `.env` **before** deploying the new image:
-
-1. Set `MOOMOO_REAL_ACC_IDS` to the REAL account identifiers writes may target.
-   Get them from `get_accounts`. Required in `REAL` mode.
-2. `MOOMOO_TRADING_MARKET` now defaults to `NONE`, which discovers every
-   securities market returned for this login and firm. Set it to `HK` if you
-   need the former HK-only discovery scope. The filter does not authorize writes.
-3. Store exact account IDs from `get_accounts(market="US", trd_env="SIMULATE")`
-   and pass them unchanged to later reads. An `acc_id="0"` read now fails when
-   more than one account matches its environment.
-4. Add `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:<amount>`, plus any other
-   currency you trade, if you use a notional cap. Leave the legacy
-   `MOOMOO_MAX_ORDER_NOTIONAL` in place.
-5. Confirm `MCP_AUTH_TOKEN` is set.
-6. Deploy through the normal path, then call `check_health` and confirm
-   `execution_halted: false` and the expected `trade_market`.
-7. Place and cancel a SIMULATE order.
-
-**The crash-loop signal.** If `.env` was not migrated, the MCP process exits,
-the supervisor stops OpenD, and `restart: unless-stopped` restarts the
-container repeatedly. The log line names the variable:
-
-```
-Refusing to start: MOOMOO_REAL_ACC_IDS is required when MOOMOO_TRADING_MODE is REAL...
-```
-
-Read that line rather than the restart count; it says exactly what to add.
-
-**Rollback needs no `.env` edit.** Redeploy the previous image tag. It ignores
-`MOOMOO_REAL_ACC_IDS` and `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`, and enforces
-its own unit-less `MOOMOO_MAX_ORDER_NOTIONAL` as before. It also restores
-startup auto-unlock, which is that version's behaviour.
-
-Two tool-facing changes the agent needs to know about: the write tools now
-require `trd_env`, and `modify_order`/`cancel_order` resolve the account before
-dispatch, so a call that relied on the gateway's own default for `acc_id="0"`
-must name an account when more than one is eligible.
-
-Account-bound reads now resolve `acc_id="0"` only when one account matches the
-requested `trd_env`; otherwise they fail before the account query and ask for an
-explicit ID. `get_accounts` accepts independent response filters, for example
-`get_accounts(market="US", trd_env="SIMULATE")`. Copy the returned string ID
-exactly into `get_assets`, `get_positions`, `get_orders`, or another read. The
-broker region (`MOOMOO_LOGIN_REGION=sg`), securities firm
-(`MOOMOO_SECURITY_FIRM=FUTUSG`), market (`US`), and trading environment
-(`SIMULATE` or `REAL`) are separate settings.
+`MOOMOO_MAX_ORDER_NOTIONAL` is a retired, rollback-only setting. The current
+server uses `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`; the legacy value alone is a
+startup error. If rolling back across a configuration or journal schema change,
+check that target version's requirements before deployment. Do not assume an
+older image preserves current trading safeguards.
 
 ### 7. Prepare image, then perform interactive OpenD login
 
@@ -265,14 +232,17 @@ You only do this once per account-region. Subsequent restarts use `login_by_reme
 
 ```sh
 cd "$HOME/moomoo"
-./scripts/compose-prod.sh up -d
+./scripts/deploy.sh HEAD
 ./scripts/compose-prod.sh ps
 ./scripts/compose-prod.sh logs -f --tail=200
 ```
 
 One log stream carries both processes. OpenD should reach "TRC login OK" within ~30s, and the server reports `MCP server listening on 0.0.0.0:8000`; lines prefixed `[supervisor]` are the process policy itself, including any gateway restart. Hit `http://localhost:8000/mcp` from the host (the port is bound to `127.0.0.1` only) with the `Authorization: Bearer $MCP_AUTH_TOKEN` header.
 
-The deploy script verifies the same way a client would: it sends an MCP `initialize` request authenticated with the `MCP_AUTH_TOKEN` Compose resolves for the service, so a healthy deploy logs `POST /mcp 200`. The reply must also be a JSON-RPC `initialize` result, not merely any 200 — a URL that answers 200 without speaking MCP fails the deploy. Docker Compose resolves the deployment configuration — the same env files and compose files `scripts/compose-prod.sh` starts the container with — and `scripts/deploy_verify.py` (host Python 3.10+, standard library only) reads the resolved service environment; it never parses dotenv files itself. The one translation it makes is Compose's own output escaping: `config` prints values as compose input, where a literal `$` appears as `$$`, so the printed pairs are decoded back to what the container received. The resolved configuration stays in the helper's memory — it is never printed or written anywhere, and it can carry credentials besides the token. The token is handed to curl on stdin, never a command line or file. A bare unauthenticated `GET /mcp` still answers 401 by design — that only means the endpoint is up with auth enabled. The probe also requires the HTTP transfer itself to complete: curl's exit status is evaluated independently of the response content, so a partial transfer (curl exit 18) — even one whose captured bytes would parse as a complete, valid initialize result — fails the attempt, and a timeout or interrupted attempt never verifies either. Verification confirms the endpoint accepts the configured authentication and returns a valid initialize result over a completed transfer; it does not confirm broker login or trading readiness. If the probe is refused (401/403), the deploy fails and names `MCP_AUTH_TOKEN` as the thing to check.
+`deploy.sh HEAD` starts the prepared commit and runs authenticated MCP
+verification followed by the separate gateway readiness check. See
+[deployment verification and rollback](#everyday-deploy-a-new-image) below for
+success criteria. A listening endpoint alone does not prove broker login.
 
 ### 9. systemd unit, so the stack survives reboots
 
@@ -351,7 +321,7 @@ image as `moomoo-api-mcp:tunnel-<commit>`. The deploy script confirms that tag
 before checkout, saves its immutable ECR digest in `.chatgpt-deploy.json`, and
 pulls both selected images. The VPS needs no separate image build. Default
 deployment still checks and pulls only the application image. Follow the
-[private ChatGPT runbook](private-chatgpt-mcp.md): add the two OpenAI settings
+[private ChatGPT runbook](#optional-chatgpt-access): add the two OpenAI settings
 to `.env` and enable with `scripts/deploy.sh --chatgpt`; subsequent deployments
 retain that selection.
 
@@ -434,86 +404,37 @@ Do not remove this volume during ordinary deployments: it holds device tokens.
 
 ## Everyday: restart the container
 
-One container holds both processes, and the supervisor inside it — not Compose —
-decides what a restart means.
+For a restart with unchanged configuration:
 
 ```sh
 cd "$HOME/moomoo"
 ./scripts/compose-prod.sh restart moomoo-mcp
 ```
 
-There is deliberately no command to restart the gateway on its own. The
-supervisor does that by itself whenever OpenD dies, without disturbing anything
-a client can see, and what an operator restarts is the container.
+A restart reuses the container's existing environment. After editing settings,
+run `./scripts/deploy.sh HEAD` to apply them to the currently checked-out commit;
+Compose recreates affected containers. `./scripts/deploy.sh` without a commit
+also selects the latest `origin/main`.
 
-**When the gateway process dies**, the supervisor restarts it in place and MCP
-clients are not disturbed: the stateless Streamable HTTP endpoint keeps serving calls across it. The
-moomoo SDK reconnects on its own, retrying every six seconds for as long as it
-takes, and on reconnect it replays the quote subscriptions it was holding and
-re-asserts the gateway lock at rest — in `READ_ONLY`, and in `REAL` with a
-stored trade credential. Nothing unlocks on that path: an order's just-in-time
-unlock is not replayed, because the order re-locks when it finishes, and the
-re-lock clears the SDK's cached unlock. If a write is in flight and holding the
-gateway unlocked, the reconnect skips its lock request rather than locking
-underneath it. Tool calls made during the gap fail
-with a connect timeout and the next call succeeds; `check_health` reports
-`disconnected` or `degraded` until it is back. OpenD still needs ~30s to log in,
-so expect that long before health goes green. Look for `[supervisor]` lines in
-the log to see it happen. If OpenD fails repeatedly — five times in five
-minutes, by default — the supervisor stops the server and exits instead, and
-Docker replaces the whole container.
-
-**Restarting the container** costs clients one failed call. The endpoint is
-served statelessly, so there is no session for the restart to invalidate: a call
-in flight fails and the next one succeeds. OpenD does *not* keep its login
-across this — the process is replaced — so expect the same ~30s before health
-goes green. No interactive step is needed: the device token is on the volume.
-
-**If the gateway cannot start at all** — no account set, or no remembered token
-yet — the container does *not* exit. The supervisor logs the reason and runs the
-MCP server without a gateway, so `check_health` still answers and tells you the
-gateway is unavailable. Fix `.env`, then restart the container. A malformed
-supervision setting (`OPEND_MAX_RESTARTS`, `OPEND_RESTART_WINDOW_SECONDS`,
-`SUPERVISOR_STOP_TIMEOUT_SECONDS`) is treated the other way and refuses to
-start, naming the setting, rather than running under a default you did not
-choose.
-
-That is also the cost of the single container, and it is worth stating plainly:
-**every deploy restarts OpenD**, because there is no longer a way to update the
-server without replacing the container. Two containers could be upgraded
-independently; this one cannot.
-
-Do not publish OpenD's port 11111 to get around a problem. Its API has no
-authentication; it listens on container loopback by design, and nothing outside
-the container is meant to reach it.
+OpenD reuses its remembered authorization but must log in again. Requests can
+fail while processes restart or reconnect; stateless HTTP does not require
+recreating a session. An uncertain order outcome must be reconciled, not retried
+as a new order. See [state and restarts](#state-and-restart-reference) for supervision,
+recovery and persistence details.
 
 ## Everyday: rotate `MCP_AUTH_TOKEN`
 
-Rotate whenever the token has been displayed, shared, or copied into a client
-you no longer control. The MCP server and enabled tunnel reuse it; OpenD retains its persisted session
-and no interactive login is needed.
+Generate a replacement with `openssl rand -hex 32`, update `MCP_AUTH_TOKEN` in
+the deployment environment through your normal secret-editing process, and update
+authorized clients. Apply it with `./scripts/deploy.sh HEAD`; restarting an
+existing container does not load the edited environment. Verify an authenticated
+MCP initialize succeeds with the new token and the old token returns 401.
+Do not put the token in shell command arguments or commit it.
 
-```sh
-cd "$HOME/moomoo"
-NEW_TOKEN="$(openssl rand -hex 32)"
-sed -i "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=${NEW_TOKEN}|" .env
-./scripts/deploy.sh
-echo "$NEW_TOKEN"
-```
-
-When the tunnel is enabled, follow the coordinated rotation sequence in
-[the tunnel runbook](private-chatgpt-mcp.md). Paste the printed value into every client config's `Authorization: Bearer …`
-header, then confirm the old token is refused and the new one is accepted:
-
-```sh
-curl -si -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/mcp \
-  -H "Authorization: Bearer ${NEW_TOKEN}"
-```
-
-Clients keep working across the restart itself — the endpoint is stateless, so
-there is no session to lose — but the token they present must be the new one.
-A client still sending the old token is refused with 401 until its configuration
-is updated.
+If the tunnel is enabled, use the coordinated disable/update/enable sequence in
+[the tunnel credential procedure](#credentials-and-restarts).
+OpenD authorization remains on its volume, so this does not require another
+interactive device login.
 
 ## Stop the deployment
 
@@ -527,21 +448,365 @@ This retains the named volume. Account changes and deliberate token removal
 require a separate, explicit storage-cleanup procedure; deleting a similarly
 named directory in the checkout does not remove the Docker volume.
 
+## State and restart reference
 
-### Optional official ChatGPT tunnel
+| State | Persistence and operator consequence |
+| --- | --- |
+| OpenD device authorization and remembered login | Stored in `opend-data`; preserve across recreation and rollback. Deleting it requires interactive login again. |
+| OpenD live login | Process memory; gateway or container restart requires broker login again, commonly around 30 seconds but not a downtime guarantee. |
+| MCP HTTP session | Streamable HTTP is stateless; interrupted requests can fail, but there is no session to recreate. SSE has different session behavior. |
+| Gateway connections and quote subscriptions | Process-owned; SDK reconnects after gateway failure. Container replacement loses subscriptions. |
+| Trade halt (`ARMED`/`HALTED`) | MCP process memory; container replacement starts a new process. Restarting is not evidence an uncertain order was reconciled. |
+| Paper execution journal and recovery audit | Separate `execution-data` volume when configured; preserve it and its identity through mode changes, upgrades and restores. |
+| Container environment | Restart reuses existing values; use deployment to recreate containers after settings change. |
 
-CI publishes both images to the existing ECR repository. Set
-`CHATGPT_TUNNEL_API_KEY` and `CHATGPT_TUNNEL_ID` in the deployment `.env`, alongside
-its existing `MCP_AUTH_TOKEN` and `MOOMOO_TRADING_MODE=READ_ONLY`, then run
-`./scripts/deploy.sh --chatgpt`. Later deployments retain the selection;
-`./scripts/deploy.sh --no-chatgpt` disables it. The script selects the matching
-immutable image and preserves the existing Compose project and persistent volumes.
-No separate host build or credential-staging command is needed. Normal restarts
-reuse credentials; deliberate rotations recreate affected containers.
+When OpenD exits, the supervisor restarts it with bounded retries while MCP
+keeps diagnostics available. Repeated gateway exits or an MCP exit stop the
+container for Docker to restart. A running gateway with a broker connectivity
+problem does not trigger a restart. Missing login state leaves MCP available
+without a gateway; malformed supervision settings fail startup.
 
-The official client uses fixed endpoints and a filtered child environment, with
-accepted upstream redirect limitations under trust in OpenAI and the Docker host.
-ChatGPT access is read-only; disable the tunnel before changing the trading mode.
-The separate container publishes no ports and cannot reach OpenD over the bridge.
-See [the tunnel deployment runbook](private-chatgpt-mcp.md) for configuration, diagnostics and rollback.
-Live OpenAI, ChatGPT web and iPad acceptance are separate checks.
+A REAL deployment with a stored trade credential locks at rest, unlocks for one
+write and re-locks afterward. A failed re-lock sets `HALTED`. Inspect
+`check_health` and reconcile the order before recovery: a receipt can coexist
+with `gateway_relock_error` and `execution_halted: true`. Successful explicit
+`lock_trade` clears the halt; reconnect locking does not. Risk-increasing REAL
+writes are blocked while halted, while permitted cancellation and reduction
+operations remain available. Paper recovery gates are separate and durable.
+
+The OpenD volume name depends on the saved Compose project. Inspect only mount
+metadata to locate it without exposing container credentials:
+
+```sh
+docker --context rootless container inspect moomoo-api-mcp \
+  --format '{{range .Mounts}}{{if eq .Destination "/home/opend/.com.moomoo.OpenD"}}{{.Name}} {{.Source}}{{end}}{{end}}'
+```
+
+OpenD state is mounted at `/home/opend/.com.moomoo.OpenD`, owned by UID 10001.
+An `OPEND_DATA_DIR` path selects a bind mount instead. Preserve the same storage
+and project; never use `down -v` for normal operations.
+
+The repository does not encrypt volumes. Protect the deploy user's account,
+backups and host filesystem. Runtime credentials are visible to trusted Docker
+administrators; do not display complete container environments or resolved
+Compose configuration. Rootless Docker limits daemon privileges, while the
+application's UID 10001 controls privileges inside its container.
+
+See the [container deployment](../openspec/specs/container-deployment/spec.md),
+[transport sessions](../openspec/specs/transport-sessions/spec.md) and
+[trade unlock](../openspec/specs/trade-unlock/spec.md) specs for detailed contracts.
+
+## Optional ChatGPT access
+
+The optional Compose service runs the unmodified OpenAI tunnel client. ChatGPT
+access requires server-enforced `READ_ONLY`; order placement, modification,
+cancellation, trade unlocking and operator recovery are refused. The ordinary
+MCP bearer is not a permanently read-only credential: disable the tunnel before
+changing the deployment to SIMULATE or REAL.
+
+### Configure and deploy
+
+Use `scripts/deploy.sh` for manual deployment. GitHub Actions builds both images
+and publishes them to the existing `moomoo-api-mcp` ECR repository on main pushes.
+There is no CD. PR image builds do not publish. Application tags are seven-character
+commit IDs; tunnel tags are `tunnel-<commit>`. Unchanged images are retagged for each
+main commit, with a build fallback if the baseline is unavailable. Wait for both
+image jobs to succeed. Production hosts need no separate image build or secret
+provisioning script.
+
+Add these settings to the deployment `.env`, using `.env.example` as the template:
+
+```dotenv
+MOOMOO_TRADING_MODE=READ_ONLY
+MCP_AUTH_TOKEN=<existing ordinary MCP token>
+CHATGPT_TUNNEL_API_KEY=<OpenAI tunnel runtime key with Tunnels Read and Use>
+CHATGPT_TUNNEL_ID=<selected tunnel identifier beginning tunnel_>
+```
+
+The launcher derives the MCP Authorization header automatically. Supply a limited
+OpenAI runtime key, never an admin key, brokerage login, trade password or operator
+token. The tunnel receives only the three named tunnel inputs; the deployment
+`.env` is not loaded wholesale into that container. Protect the host file and
+avoid displaying resolved Compose configuration or container environments.
+Credentials are visible to trusted Docker/host administrators through the
+container and child-process environment; this is an accepted deployment trade-off.
+
+Enable once, after main CI publishes the images:
+
+```bash
+./scripts/deploy.sh --chatgpt
+```
+
+Subsequent `./scripts/deploy.sh [commit]` deployments retain the selection. The
+script confirms both ECR tags before checkout, saves the immutable tunnel digest,
+pulls both images, validates authentication and READ_ONLY settings, then starts
+the stack. First enablement detects the running container's Compose project and
+saves that project for subsequent enabled and disabled deployments, preserving
+its named volumes. A new host uses the checkout directory's default project.
+Missing credentials fail before startup. A missing tunnel image fails before
+checkout or service changes. `--prepare --chatgpt` validates and pulls without
+starting services; ordinary deployments keep the tunnel off unless selected.
+
+Brokerage reads also require OpenD login. Complete the
+[one-time interactive login](#7-prepare-image-then-perform-interactive-opend-login),
+remember the password and preserve the OpenD volume. Later starts use remembered
+login; no brokerage login password or hash is configured through Compose.
+
+The tunnel reaches authenticated MCP over Docker DNS and cannot reach OpenD's
+container-loopback listener. It publishes no ports. The deployment trusts OpenAI
+and the Docker host, including the official client's upstream redirect behavior.
+Architecture and trust requirements live in the
+[private ChatGPT access spec](../openspec/specs/private-chatgpt-access/spec.md);
+exact client pins live in [the release manifest](../deploy/tunnel-client/release.json).
+See [OpenAI's private MCP tunnel guide](https://platform.openai.com/docs/guides/developer-mode/private-mcp-tunnels)
+for organization/workspace eligibility and setup.
+
+### Startup, checks and recovery
+
+Before launching the client, the manager performs authenticated MCP initialize,
+tool discovery and `check_health`, requiring READ_ONLY. Transient MCP failures
+retry within a 90-second deadline; invalid credentials, mode or results fail
+closed. Every client launch repeats the gate. Degraded broker connectivity can
+still pass when MCP itself is available and READ_ONLY; that does not prove broker
+login or data access.
+
+The manager suppresses raw official-client output and prints bounded status
+messages without secrets or account data. It forwards stop signals, reaps the
+client and exits nonzero on client exit or sustained failed local liveness. Docker
+restarts only the optional tunnel. Local `/healthz` proves process liveness and
+`/readyz` proves client startup; neither proves live OpenAI forwarding. An upstream
+outage does not trigger a restart loop merely because forwarding is unavailable.
+
+Safe local diagnostics, after deployment:
+
+```bash
+./scripts/compose-prod.sh ps
+./scripts/compose-prod.sh logs --tail=100 chatgpt-tunnel
+./scripts/compose-prod.sh exec -T chatgpt-tunnel python /opt/tunnel/runtime.py diagnostics
+```
+
+`compose-prod.sh` is the internal wrapper used by deployment and service management;
+it resolves the same files, rootless context, saved project and immutable image.
+`build-tunnel-image.sh` is a developer/CI fixture helper. Neither is an additional
+operator provisioning entrypoint.
+
+### Credentials and restarts
+
+A normal process/container restart reuses its configured credentials. It does not
+require a new token or editing the ChatGPT connection. A deliberate environment
+change requires container recreation; `docker restart` retains the old values.
+
+For an OpenAI key rotation, update `CHATGPT_TUNNEL_API_KEY` in `.env` and run
+`./scripts/deploy.sh`. Compose recreates the affected tunnel with the new value.
+Verify actual forwarding with the replacement key, then confirm the revoked key
+is refused. Rotating this key does not rotate the ordinary MCP bearer.
+
+For an MCP bearer rotation, disable the tunnel with the command below, update
+`MCP_AUTH_TOKEN` and authorized local client settings, then run
+`./scripts/deploy.sh` to recreate MCP. Verify the new bearer is accepted and the
+old bearer returns 401. Enable again with `./scripts/deploy.sh --chatgpt`; it
+receives the same new value automatically. Verify forwarded MCP traffic. Update
+any ChatGPT connection that separately stores the ordinary bearer; the official
+client's configured local header alone supplies it in this integration.
+
+### Disable and rollback
+
+```bash
+./scripts/deploy.sh --no-chatgpt
+```
+
+This stops/removes only the optional tunnel service and clears its selection while
+continuing the ordinary application deployment. It preserves the saved project
+and persistent state. It does not require Compose down or volume deletion. Do not
+combine disablement with `--prepare`, which promises not to start/stop services.
+
+The deploy script restores the previous image selection, checkout and deployment
+metadata if a deployment fails. Failed first enablement removes the new optional
+selection and tunnel. Failure after disablement restores the previous selection
+and restarts the former stack. This rollback does not restore deliberately edited
+credentials in `.env`. A target predating tunnel support requires disablement first:
+disable on the current supported commit, then deploy the older application commit.
+
+### Tunnel acceptance
+
+Local diagnostics and synthetic CI checks do not prove OpenAI eligibility or
+forwarded calls. Verify actual read-only tool access from ChatGPT web and any
+native clients you use, and confirm broker login separately. Keep dated evidence
+in PRs or CI rather than treating it as permanent deployment status.
+
+## Paper execution and recovery
+
+Paper execution persists SIMULATE operations in a dedicated SQLite journal. When
+configured in SIMULATE or REAL mode, it uses the **same paper journal**. REAL mode
+permits real trading without disabling paper trading. Real orders are not
+journaled; a separate REAL journal is deferred. Do not share a database between
+paper and real execution.
+
+### Deployment support boundary
+
+**The production `scripts/deploy.sh` path does not currently enable paper
+execution.** Its `compose-prod.sh` wrapper selects the base and production files,
+plus the optional ChatGPT overlay; it never selects `docker-compose.paper.yml`.
+Adding journal settings to the host environment alone does not mount the journal
+or pass the paper settings into the service. SIMULATE startup requires them.
+
+The Compose examples below describe the standalone development/test topology.
+Do not apply them to the production checkout as an alternative deployment path:
+future deployments and systemd would not retain that overlay. Production paper
+support needs an explicit integration change in the deployment scripts first,
+including persistent selection, verification and rollback. Disable ChatGPT before
+using any trading mode other than READ_ONLY.
+
+### Standalone paper topology
+
+Add `docker-compose.paper.yml` to the existing Compose file list when enabling
+paper execution. Preserve the Compose project name across restarts, upgrades and
+mode changes: it determines the named volume's identity. The overlay adds
+`execution-data` at `/var/lib/moomoo-mcp/data`; it retains the existing OpenD
+`opend-data` mount and uid 10001 ownership at `/home/opend/.com.moomoo.OpenD`.
+The image prepares the journal directory for uid 10001, and a new named volume
+inherits that ownership. Use a local POSIX filesystem honoring fsync and advisory
+locks. Network filesystems without these guarantees are unsupported.
+
+Supply the following values through your deployment's existing settings mechanism:
+
+| Setting | Meaning |
+| --- | --- |
+| `MOOMOO_TRADING_MODE` | `SIMULATE` or `REAL`; neither changes paper storage identity |
+| `MOOMOO_SIMULATED_ACC_IDS` | Explicit positive paper account IDs; the allowlist cannot contain 0 |
+| `MOOMOO_JOURNAL_PATH` | Overlay fixes this to `/var/lib/moomoo-mcp/data/execution.sqlite3` |
+| `MOOMOO_CREATE_JOURNAL` | `1` only for explicitly authorized first initialization; normally `0` |
+| `MOOMOO_JOURNAL_LOCK_WAIT_MS` | Bounded SQLite wait, 1–60000 milliseconds; default 5000 |
+| `MCP_AUTH_TOKEN` | Normal authenticated tool access |
+| `MCP_OPERATOR_TOKEN` | Separate operator credential, different from the normal token |
+
+Existing REAL trading credentials and account allowlists still apply to REAL
+orders. Paper journaling adds no authority to trade REAL accounts. Use the US or
+NONE market filter for the supported paper execution scope.
+
+For example, pass the same project, overlays and explicit operator settings file
+to every deployment command (substitute your existing settings file path):
+
+```sh
+docker compose --project-name moomoo --env-file /path/to/operator-settings \
+  -f docker-compose.yml -f docker-compose.paper.yml up -d
+```
+
+If using the production image overlay, include `docker-compose.prod.yml` before
+the paper overlay and supply its required image settings as usual. Set
+`MOOMOO_CREATE_JOURNAL=1` only when intentionally provisioning the first empty
+journal. Once created, return it to `0` before normal operation so a missing mount
+fails closed. Never use initialization to erase or bypass an unresolved outcome.
+Do not run `down --volumes` against this deployment.
+
+READ_ONLY deployments omit the paper overlay and need no journal volume. Switching
+an existing executor temporarily to READ_ONLY must retain its original volume for
+later use; READ_ONLY does not open the database even if journal settings exist.
+
+Exactly one executor may hold a journal at a time. A second process or container
+fails closed on `execution.lock`. Scaling the executor horizontally against a
+shared journal is unsupported. Each process start creates a new admission epoch;
+startup review must complete before new mutations can proceed. Retain each
+operation ID **and its admission epoch** across client/network retries. Never
+refresh either merely because a response was lost.
+
+### Backup and restore
+
+Prefer SQLite's online backup API. It produces a consistent, self-contained
+snapshot while the executor remains active; copying the live main database file
+alone does not. A simple backup executed as the image's normal uid 10001 is:
+
+```sh
+docker compose --project-name moomoo --env-file /path/to/operator-settings \
+  -f docker-compose.yml -f docker-compose.paper.yml exec -T moomoo-mcp python - <<'PY'
+import os
+import sqlite3
+from pathlib import Path
+
+source = Path('/var/lib/moomoo-mcp/data/execution.sqlite3')
+backup = source.with_name('execution-backup.sqlite3')
+# Exclusive creation refuses an existing backup and restricts it to this uid.
+fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+os.close(fd)
+with sqlite3.connect(source.as_uri() + '?mode=ro', uri=True) as live:
+    with sqlite3.connect(backup) as snapshot:
+        live.backup(snapshot)
+        assert snapshot.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+PY
+```
+
+Retain backups outside the running volume according to your own retention policy.
+Treat execution records as sensitive operational data. Confirm the copied backup
+passes `PRAGMA integrity_check` before relying on it.
+
+For an offline main-file copy, prevent **all** executor starts for the entire copy
+and restore interval, acquire the process lock, and require a cleanly closed or
+recovered database. Conservatively refuse a database-only copy whenever a sibling
+`execution.sqlite3-journal` exists. A crash releases the process lock but can leave
+a hot rollback journal; an unheld lock alone proves nothing about copy safety.
+Recover the original database with SQLite while no executor can start, or preserve
+and restore the database **and its matching rollback journal together** as a set.
+Never discard a rollback journal to make a copy appear clean.
+
+Before restoring, stop the executor, disable automatic restarts, prevent concurrent
+starts, and preserve the current database and any sidecars for investigation.
+Restore into the original journal volume with uid 10001 ownership and retain the
+OpenD authorization volume unchanged. Restart with creation disabled. Restore
+creates a new process epoch and requires recovery review; it cannot reconstruct
+rows missing from the snapshot. Unknown tokens carrying retired epochs are refused,
+and existing uncertain/nonterminal rows gate new admissions until accounted for.
+A missing restored token is not evidence that its broker request never happened.
+
+### Recovery and operator review
+
+Use `check_health` to obtain the current admission/recovery epoch and journal
+state; use `get_execution(operation_id)` for the recorded receipt, broker status,
+reconciliation observations and any durable accounted facts. A new paper placement
+must include its caller-generated operation ID, the current admission epoch, an
+explicit SIMULATE environment, and a decimal-string limit price. Preserve its token
+and original request through every retry; a retry never changes the request or
+refreshes the epoch. Only the first admission can dispatch. ACKNOWLEDGED means the gateway accepted
+the request, not that the order filled. UNKNOWN_OUTCOME means possibly sent and
+blocks new paper mutations, including cancellations.
+
+Inspect journal health and operation status first. Use reconciliation only where
+provider evidence reliably identifies the submitted order and its outcome.
+Account explicitly for uncertain outcomes through the authenticated operator
+recovery interface, supplying the current recovery epoch, observed state, reason,
+evidence reference and verified accounted facts. Ordinary tool credentials do not
+have operator acknowledgement authority. Operator recovery is available only over
+streamable HTTP. SSE and stdio refuse recovery acknowledgement so a long-lived
+session cannot reuse another request's operator identity. Never invent broker
+evidence to clear a gate. Acknowledgement is audited and does not replay a possibly sent request.
+
+**Reinitializing, replacing or repointing the journal for the same broker account
+is not an approved recovery method.** Preserve the original journal and unresolved
+records. Continued experimentation requires a separately authorized, independently
+verified isolated paper environment. It does not reconcile the previous environment.
+An unresolved operation can block execution indefinitely; elapsed time, missing
+history and operator risk acceptance are not recovery evidence. Only
+`TERMINAL_ACCOUNTED` is supported: pass `operator_id="operator"`, the current
+recovery epoch and observed local state, a reason, `broker-order:<id>`, and facts
+for final status, filled quantity, average fill price, zero remaining executable
+quantity and resulting position. These are checked against fresh order/history
+and position data, then committed with the audit record before the gate can clear.
+Never provide the operator credential to a trading agent.
+
+A provider's “reset paper account” button is not sufficient evidence of isolation:
+verify what it does to outstanding orders, pending requests and account identity.
+
+### Paper verification boundary
+
+Container checks use an isolated mocked SDK and do not prove live provider
+response-loss recovery, retention or external retry propagation. Those remain in
+[the provider acceptance change](../openspec/changes/validate-paper-execution-provider/proposal.md).
+
+### Journal upgrades and dependent modifications
+
+Take a consistent backup before upgrading. Schema 1 journals upgrade atomically
+to schema 2; older schema-1 executors refuse the upgraded journal. Unobserved
+acknowledged modifications can block a dependent modification until fresh broker
+observations match the earlier request. A durably refused operation stays refused
+on retry; never change an uncertain operation's token to bypass recovery.
+See the [execution journal spec](../openspec/specs/execution-journal/spec.md) for
+identity, admission, observation and recovery requirements.

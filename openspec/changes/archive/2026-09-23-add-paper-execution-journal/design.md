@@ -907,7 +907,7 @@ operator capability safely.
 
 Secret-file constraints preclude modifying configuration environment files.
 The complete non-secret variable template and operator procedures are instead in
-`docs/paper-execution.md`, linked from the deployment and state guides and README.
+[Paper execution and recovery](../../../../docs/deploy-vps.md#paper-execution-and-recovery), linked from the deployment and state guides and README.
 
 ## PR review adaptation: modification visibility
 

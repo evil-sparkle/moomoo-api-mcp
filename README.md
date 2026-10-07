@@ -2,15 +2,18 @@
 
 An MCP (Model Context Protocol) server for the Moomoo trading platform. This server allows AI agents (like Claude Desktop or Gemini) to access market data, account information, and execute trades via the moomoo-api Python SDK.
 
-## 🚀 Build Your Own Trading Agent
-
-**Take your trading to the next level with AI!**
-
-This MCP server empowers developers to build custom trading skills and strategies. By integrating this tool, you can enable any compatible AI agent to interact directly with the Moomoo platform on your behalf. Whether you want an AI assistant that monitors the market, analyzes your portfolio, or automatically executes complex trading strategies, this server provides the seamless bridge between your custom AI logic and Moomoo's powerful trading infrastructure.
-
 ## About this fork
 
-This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp). The PyPI package `moomoo-api-mcp` (what `uvx moomoo-api-mcp` and `uv tool install moomoo-api-mcp` install) is published by upstream, not by this fork; this fork does not publish to PyPI, and `.github/workflows/python-publish.yml` and `manual-release.yml` are inherited from upstream and not maintained here. What this fork builds and maintains is the container deployment: CI (`.github/workflows/ci.yml`) builds the application image, carrying OpenD alongside the server, and the optional ChatGPT tunnel image. Main pushes publish both to the existing ECR repository under separate commit tags; `docs/deploy-vps.md` deploys them without a VPS build. A PyPI install therefore runs upstream's release, which can differ from this fork's code — use the Docker deployment or a local checkout (`uv run moomoo-api-mcp`) to run this fork.
+This fork maintains a container deployment with OpenD and MCP in one supervised
+container, plus an optional ChatGPT tunnel. **Rootless Docker is the recommended
+way to run it.** CI publishes images to ECR; production hosts pull those images
+through `scripts/deploy.sh`.
+
+Forked from [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp)
+and maintained for personal use. This fork is distributed through container
+images and source checkouts; it does not publish to PyPI. Its trading safeguards,
+configuration and tool contracts have diverged, so compatibility with upstream
+is not guaranteed. The instructions below run this repository's code.
 
 ## Features
 
@@ -20,6 +23,88 @@ This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/m
   orders, gated by an explicitly configured trading mode.
 - **System Health**: Active, bounded health probes of the quote and trade connections to OpenD.
 - **Extensible Architecture**: Built on FastMCP for easy extension of trading capabilities.
+
+## Run the server
+
+### Recommended: rootless Docker
+
+The container includes both OpenD and MCP, runs their processes as UID 10001,
+and persists OpenD device authorization in a named volume. The rootless daemon
+runs under the deploy user's account. OpenD stays on container loopback;
+authenticated MCP is published on host `127.0.0.1:8000`. The default trading mode
+is READ_ONLY.
+
+**For an Ubuntu VPS, follow [the deployment runbook](docs/deploy-vps.md).** It
+covers rootless Docker, ECR access, configuration, one-time interactive OpenD
+login, systemd and recovery. After that setup, routine deployments use:
+
+```bash
+cd "$HOME/moomoo"
+./scripts/deploy.sh                 # current origin/main; wait for its CI images
+./scripts/deploy.sh <commit>        # a specific published commit or rollback
+```
+
+`deploy.sh` is the sole manual production deployment entrypoint. It selects
+images, applies the saved Compose configuration, verifies authenticated MCP and
+reports gateway readiness. Broker login and trading readiness are separate from
+MCP availability. Do not run a separate OpenD application on the host for this
+container deployment.
+
+- **Optional ChatGPT access:** follow [the tunnel runbook](docs/deploy-vps.md#optional-chatgpt-access)
+  and enable it with `./scripts/deploy.sh --chatgpt`. It requires READ_ONLY.
+- **Local macOS development:** [the rootless Lima setup](README.md#local-rootless-docker-on-macos)
+  provides a Linux Docker daemon for local image builds and container checks.
+- **Paper execution:** [the paper runbook](docs/deploy-vps.md#paper-execution-and-recovery) covers its
+  standalone Compose overlay, persistence and recovery. The production deployment
+  script does not yet integrate that overlay.
+
+### Alternative: local Docker with a rootful daemon
+
+The same image and base Compose file can be used with an existing rootful Docker
+daemon for local development. Application processes still run as UID 10001;
+this does not make the Docker daemon rootless. Select the intended Docker context
+and build with:
+
+```bash
+docker compose build
+```
+
+Use `.env.example` for configuration, including READ_ONLY and an MCP bearer token,
+before starting the base stack with `docker compose up -d`. A new OpenD volume
+needs interactive login; use the login sequence in the
+[VPS runbook](docs/deploy-vps.md#7-prepare-image-then-perform-interactive-opend-login)
+with `docker compose` in place of the production wrapper for this local setup.
+Preserve the volume and never publish port 11111.
+
+Production `deploy.sh` and its Compose wrapper explicitly use the `rootless`
+context; they do not switch to a rootful daemon based on the active context.
+
+### Alternative: run this fork from source
+
+Use this when developing the MCP server or connecting it to an OpenD gateway you
+already run. Python 3.12 is the local development interpreter.
+
+```bash
+git clone https://github.com/evil-sparkle/moomoo-api-mcp.git
+cd moomoo-api-mcp
+uv sync
+uv run moomoo-api-mcp
+```
+
+Set up the separate gateway and environment as described under
+[configuration](#configuration). For stdio, set `MCP_TRANSPORT=stdio` in the
+client's process environment. See [contributor guidance](#contributing) for
+checks, hooks and OpenSpec workflows.
+
+## Documentation
+
+- [Production runbook](docs/deploy-vps.md): deployment, login, diagnostics,
+  restarts, ChatGPT access and persistent-state recovery.
+- [Contributing](#contributing): development checks and OpenSpec regeneration.
+- [OpenSpec requirements](openspec/specs/): current architecture and behavioral
+  contracts. Active changes track proposed work; archived changes record history.
+- Implementation details and exact versions live in source, tests,
+  `pyproject.toml`, `uv.lock`, `Dockerfile` and CI.
 
 ## Tools
 
@@ -156,235 +241,15 @@ fills after the unfilled remainder is cancelled. Do not discard those executions
 or treat the full requested quantity as filled. These are broker-reported fields,
 not independently verified accounting results.
 
-## Installation
-
-### Quick Start (Recommended)
-
-You can run the server directly using `uvx` (part of the [uv](https://github.com/astral-sh/uv) toolkit).
-Using `--refresh` ensures you are always running the latest version. Note that this installs upstream's PyPI release (see [About this fork](#about-this-fork)):
-
-```bash
-# Optional: Set these environment variables for REAL trading access.
-# If omitted, the server will safely run in SIMULATE-only (paper trading) mode.
-export MOOMOO_TRADE_PASSWORD="your_trading_password"
-export MOOMOO_SECURITY_FIRM="FUTUSG" # e.g. FUTUSG, FUTUINC, etc.
-
-uvx --refresh moomoo-api-mcp
-```
-
-### Permanent Installation
-
-To install it as a persistent tool available in your shell (this installs upstream's PyPI release — see [About this fork](#about-this-fork)):
-
-```bash
-uv tool install moomoo-api-mcp
-
-# Optional: Set these environment variables for REAL trading access.
-# If omitted, the server will safely run in SIMULATE-only (paper trading) mode.
-export MOOMOO_TRADE_PASSWORD="your_trading_password"
-export MOOMOO_SECURITY_FIRM="FUTUSG" # e.g. FUTUSG, FUTUINC, etc.
-
-# Then run:
-moomoo-api-mcp
-```
-
-> **Note**: The `moomoo-api` Python SDK and other dependencies will be installed automatically.
-
-### Development Setup
-
-1. **Clone the repository**:
-
-   ```bash
-   git clone https://github.com/evil-sparkle/moomoo-api-mcp.git
-   cd moomoo-api-mcp
-   ```
-
-2. **Install dependencies**:
-
-   ```bash
-   uv sync
-   ```
-
-3. **Run locally**:
-   ```bash
-   uv run moomoo-api-mcp
-   ```
-
-4. **Run tests, linter and type checker**:
-   ```bash
-   uv sync --extra dev
-   uv run ruff check .
-   uv run basedpyright
-   uv run pytest
-   ```
-
-   Install the git pre-commit hook so gitleaks, ruff, basedpyright and pytest
-   run on every commit:
-   ```bash
-   uv run pre-commit install
-   ```
-
-   basedpyright compares against `.basedpyright/baseline.json`, which records
-   type errors that predate the checker, so only new errors fail. After fixing
-   baselined errors, shrink the file with `uv run basedpyright --writebaseline`.
-
-5. **Release Tagging & Versioning**:
-   This project follows [Semantic Versioning](https://semver.org/) (`vMAJOR.MINOR.PATCH`). To publish a new version:
-   ```bash
-   # 1. Bump the version in pyproject.toml (e.g. from 0.1.8 to 0.2.0)
-   uv lock
-   # 2. Stage the version files and any intended release changes, including new files
-   git add pyproject.toml uv.lock
-   git commit -m "chore: release v0.2.0"
-
-   # 3. Create an annotated git tag
-   git tag -a v0.2.0 -m "Release v0.2.0: Multi-leg options, market discovery, trading policy, container deployment"
-
-   # 4. Push commit and tag to remote
-   git push origin main --follow-tags
-   ```
-
----
-
-## 🐳 Containerized Deployment (Docker Compose)
-
-Running OpenD and the MCP server via Docker keeps the OpenD gateway off every network, protects trading credentials, and persists device authorization across restarts.
-
-Both run in one container, started by a supervisor (`src/moomoo_mcp/supervisor.py`) that owns them. OpenD listens on `127.0.0.1:11111` *inside* that container, so only the MCP server sharing it can reach an API that has no authentication of its own; the server publishes its endpoint on `127.0.0.1:8000`, which is the only port the deployment exposes. The supervisor is what keeps a dead gateway from costing clients anything: it restarts OpenD in place, and takes the container down only when the server dies or the gateway cannot be recovered.
-
-For persistent paper execution in SIMULATE or REAL deployments, see
-[`docs/paper-execution.md`](docs/paper-execution.md). It covers the optional journal
-volume, initialization, retry identity, operator recovery and consistent backups.
-The same paper journal survives deployment mode changes; REAL-order journaling
-is deferred. Live provider acceptance is tracked separately from automated development.
-
-For the optional outbound-only OpenAI Secure MCP Tunnel integration, including
-its read-only boundary, pinned client, owner prerequisites, staged acceptance,
-and rollback, see [`docs/private-chatgpt-mcp.md`](docs/private-chatgpt-mcp.md).
-
-For what state the stack holds, where each piece of it lives, what survives which restart, and how exposed the stored credentials are, see [`docs/state-and-restarts.md`](docs/state-and-restarts.md).
-
-### 1. Build the Images
-
-```bash
-docker compose build
-```
-*(OpenD is automatically downloaded and installed for `linux/amd64` via Rosetta/emulation on Apple Silicon or natively on x86_64 servers.)*
-
-### 2. Initial Device Activation (Interactive Login)
-
-OpenD requires an interactive verification code (SMS/2FA) on initial device registration:
-
-```bash
-docker compose run --rm --no-deps -it \
-  -e OPEND_INTERACTIVE=1 -e OPEND_MAX_RESTARTS=0 moomoo-mcp
-```
-The pinned OpenD deployment uses interactive login once, then remembered login
-for unattended starts. If remembered state is missing, the supervisor keeps MCP
-diagnostics available without starting OpenD. The command above disables gateway
-retries for the interactive attempt; stop if login fails instead of retrying.
-
-Follow the prompts in your terminal:
-1. **Account**: Enter your Moomoo ID, email, or phone number.
-2. **Password**: Enter your login password.
-3. **Remember Password? `[Y/N]`**: Enter **`Y`** *(Crucial: saves encrypted session token in the persistent `opend-data` Docker volume)*.
-4. **Verification Code**: Enter the SMS code sent to your phone.
-
-Once OpenD reports that login succeeded, exit or terminate the process (`Ctrl+C`). Your device credentials and session tokens are preserved in the named Docker volume `opend-data`.
-
-### 3. Configure `.env` for Headless Operation
-
-Copy the sample environment file:
-```bash
-cp .env.example .env
-```
-
-Set your account number so OpenD knows which saved session to load:
-```env
-MOOMOO_LOGIN_ACCOUNT=12345678
-MOOMOO_LOGIN_REGION=sg        # sg (Singapore), us, hk, etc.
-MOOMOO_LOGIN_BY_REMEMBER=1    # reuse the login saved in opend-data
-OPEND_INTERACTIVE=0          # normal background operation
-MOOMOO_SECURITY_FIRM=FUTUSG   # FUTUSG (Singapore), FUTUINC (US), etc.
-MOOMOO_TRADING_MODE=READ_ONLY  # READ_ONLY (default), SIMULATE, or REAL
-MOOMOO_TRADING_MARKET=NONE     # NONE (all securities markets) or HK, US, CN, HKCC, SG, AU, JP, MY, CA
-```
-
-> **Security Note**: You **do not need to store your login password** in `.env`. When `MOOMOO_LOGIN_BY_REMEMBER=1` (default), OpenD authenticates headlessly using the encrypted token stored in `opend-data`.
-
-### 4. Start the Stack
-
-```bash
-# Start the gateway and MCP server in background
-docker compose up -d
-
-# Both processes log to one stream; [supervisor] lines are the process policy
-docker compose logs -f moomoo-mcp
-```
-
-### 5. Restarting
-
-**Neither kind of restart requires you to touch your client.**
-
-```bash
-docker compose restart moomoo-mcp  # clients keep working
-```
-
-There is no separate command for the gateway: when OpenD dies the supervisor
-restarts it by itself, bounded by `OPEND_MAX_RESTARTS` within
-`OPEND_RESTART_WINDOW_SECONDS`, and gives up into a whole-container restart only
-if it keeps failing.
-
-**When OpenD restarts**, no client has to reconnect or re-initialize: the
-endpoint keeps answering, so `tools/list` and `check_health` keep working, while
-anything that needs the gateway is unavailable until it is back. The MCP server
-stays up and the moomoo SDK reconnects by
-itself — every six seconds, for as long as it takes — reusing the same context
-objects. On reconnect it replays the quote subscriptions it held, this server
-re-asserts the gateway lock in `READ_ONLY` mode, and a REAL deployment's startup
-unlock is replayed by the SDK. Tool calls issued while the gateway is away fail
-with a connect timeout instead of hanging (bounded at 3s), and `check_health`
-reports `disconnected` or `degraded` until OpenD answers again — it usually needs
-~30s to log back in.
-
-**When the container restarts** — a deploy, a settings change, or the MCP
-server process dying — the Streamable HTTP endpoint runs in
-stateless mode: it issues no session id, ignores any a client still holds, and treats
-each request as initialized. There is therefore no session for a restart to
-invalidate. A call in flight during the restart fails and the next one succeeds;
-nothing needs reconfiguring. (A stateful server answers the next call with 404
-instead, and while the MCP spec requires clients to re-initialize on that, not
-every client does — which is the interruption this avoids.) The cost is state this
-server does not keep: no resumable event stream, and no server-initiated
-notifications outside a request. Each call is also answered with a single JSON
-response, for clients that only read JSON, so logging notifications a tool emits
-during a call are not delivered; everything a caller needs is in the result.
-
-`scripts/smoke-test.sh` runs both restarts against a stand-in gateway and asserts
-a client keeps working across each — CI runs it on every pull request, and you can
-run it locally with Docker available. It uses its own Compose project, so it never
-touches a running stack or the `opend-data` volume.
-
-Worth knowing when reading logs: the gateway connections belong to the server
-process and are opened on first use, so a server no client has called yet has not
-dialled OpenD at all. All requests share that one pair of connections.
-
-### 6. Stop the Stack
-
-```bash
-docker compose down
-```
-*(Your login state remains safely preserved in the `opend-data` volume.)*
-
----
-
 ## Configuration
 
 ### 1. Prerequisites
 
-#### Moomoo OpenD (Required)
+#### Separate OpenD gateway (source installations)
 
-The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local gateway application. You **MUST** install and run this first.
+The recommended container deployment already includes OpenD; configure it through
+[the VPS runbook](docs/deploy-vps.md). The steps below apply when running the MCP
+server outside that container and connecting it to a separate gateway.
 
 1. **Download OpenD**:
    - Visit the [Moomoo Open API Download Page](https://www.moomoo.com/download/opend).
@@ -407,7 +272,10 @@ The MCP server communicates with the Moomoo API via **Moomoo OpenD**, a local ga
 
 ### 2. Environment Variables
 
-To enable **REAL account** access, you must securely provide your credentials.
+For this fork, `.env.example` is the configuration template. READ_ONLY permits
+account and market reads but refuses order mutations and trading unlocks. A trade
+password alone never enables REAL writes. Container operators should use the
+[VPS configuration procedure](docs/deploy-vps.md#6-write-env).
 
 | Variable                    | Description                                                           | Example       |
 | --------------------------- | --------------------------------------------------------------------- | ------------- |
@@ -467,16 +335,16 @@ layer, before any request reaches OpenD.
 | --------------------- | -------------------------- | --------------------------- | ----------------------- | -------------- |
 | `READ_ONLY` (default) | Allowed                    | Denied                      | Denied                  | Denied         |
 | `SIMULATE`            | Allowed                    | Allowed                     | Denied                  | Denied         |
-| `REAL`                | Allowed                    | Allowed                     | Allowed                 | Allowed        |
+| `REAL`                | Allowed                    | Allowed                     | Allowed                 | Only without a stored credential, with an explicit password |
 
 - "Writes" means placing an order, placing a combo order, modifying an order,
   and cancelling an order. `READ_ONLY` blocks all four — including cancelling an
   order placed elsewhere.
 - A denied request returns an explicit policy error. It is never rerouted into a
   different account environment.
-- Configuring `MOOMOO_TRADE_PASSWORD` does **not** change the mode. Only `REAL`
-  mode unlocks trading at startup, and a failed unlock leaves the mode as it was
-  without retrying or placing anything.
+- Configuring `MOOMOO_TRADE_PASSWORD` does **not** change the mode. Nothing
+  unlocks at startup. In REAL mode with a stored credential, the server unlocks
+  only around an authorized write and re-locks afterward.
 - An unrecognized value fails startup rather than falling back to a permissive
   mode.
 - Reads are still subject to your broker's own permissions and to `unlock_trade`
@@ -516,46 +384,56 @@ account matches `trd_env`; zero or several matches fail before the account
 query. An explicit ID must still belong to that environment. The resolver for
 reads does not use the REAL write allowlist.
 
-### 3. Configure Claude Desktop
+### 3. Connect an MCP client
 
-Add the server to your `claude_desktop_config.json`:
+#### Container endpoint: Claude Code and other HTTP clients
 
-#### Option A: Using PyPI Package (Recommended)
+The recommended container deployment serves authenticated Streamable HTTP at
+`http://127.0.0.1:8000/mcp`. That address refers to the Docker host; a client on
+another machine needs an authorized private route or port forward to it. Do not
+publish OpenD's port 11111. The token must match the deployed `MCP_AUTH_TOKEN`.
 
-```json
-{
-  "mcpServers": {
-    "moomoo": {
-      "command": "uvx",
-      "args": ["--refresh", "moomoo-api-mcp"],
-      "env": {
-        "MOOMOO_TRADING_MODE": "REAL",
-        "MOOMOO_TRADE_PASSWORD": "your_trading_password",
-        "MOOMOO_SECURITY_FIRM": "FUTUSG"
-      }
-    }
-  }
-}
+For Claude Code, the [official MCP configuration guide](https://code.claude.com/docs/en/mcp)
+documents HTTP transport and bearer headers:
+
+```bash
+claude mcp add --transport http --scope user moomoo http://127.0.0.1:8000/mcp --header "Authorization: Bearer <token>"
 ```
 
-> **Note**: The `--refresh` flag ensures you always have the latest version but may increase startup time due to version checking. You can remove it once you have the correct version installed.
+The token above is a placeholder; configure actual credentials privately through
+your client's supported credential mechanism. For other clients, choose
+Streamable HTTP, the reachable `/mcp` endpoint and its bearer header using that
+client's configuration format. A shared protocol does not establish that every
+client supports the same JSON configuration or authentication options.
 
-#### Option B: Local Development
+SSE remains available through `MCP_TRANSPORT=sse` at `/sse` for clients that
+require it. Prefer Streamable HTTP for the container deployment.
+
+#### Claude Desktop: local source checkout over stdio
+
+For a client that launches a local stdio server, use this fork's checkout rather
+than a package-registry command. Run `uv sync --frozen` in that checkout first.
+The [MCP local-server guide](https://modelcontextprotocol.io/docs/develop/connect-local-servers)
+describes Claude Desktop's command/arguments configuration. Use absolute paths
+for both `uv` and this repository in `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "moomoo": {
-      "command": "uv",
+      "command": "/absolute/path/to/uv",
       "args": [
         "--directory",
-        "C:\\path\\to\\moomoo-api-mcp",
+        "/absolute/path/to/moomoo-api-mcp",
         "run",
+        "--frozen",
         "moomoo-api-mcp"
       ],
       "env": {
-        "MOOMOO_TRADING_MODE": "REAL",
-        "MOOMOO_TRADE_PASSWORD": "your_trading_password",
+        "MCP_TRANSPORT": "stdio",
+        "MOOMOO_TRADING_MODE": "READ_ONLY",
+        "MOOMOO_OPEND_HOST": "127.0.0.1",
+        "MOOMOO_OPEND_PORT": "11111",
         "MOOMOO_SECURITY_FIRM": "FUTUSG"
       }
     }
@@ -563,45 +441,24 @@ Add the server to your `claude_desktop_config.json`:
 }
 ```
 
-#### Option C: Containerized Deployment (Streamable HTTP — stateless, JSON responses)
+Use your broker's securities firm. This launches a separate local MCP process
+and requires a separately running, logged-in OpenD gateway. It does not connect
+to the container's private OpenD listener or reuse the container's MCP process.
+Do not add trade credentials just to configure a client; READ_ONLY is the default.
 
-When running the server via Docker Compose (`MCP_TRANSPORT=streamable-http`), the server uses MCP Streamable HTTP in stateless mode and returns JSON responses at `http://127.0.0.1:8000/mcp`.
+Claude's [remote connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)
+connect from Anthropic infrastructure. A host-loopback URL is not reachable by
+that path; this repository does not provide a ready-to-use Claude remote connector
+or a stdio-to-HTTP bridge for its private container endpoint. Do not assume a
+`url`/`headers` entry in Desktop's local process configuration creates one.
 
-If `MCP_AUTH_TOKEN` is configured, client requests must provide the bearer token in the `Authorization` header:
+#### ChatGPT
 
-##### Claude Code CLI
-
-```bash
-claude mcp add --transport http -s user moomoo http://127.0.0.1:8000/mcp --header "Authorization: Bearer <token>"
-```
-
-##### Claude Desktop (`claude_desktop_config.json`)
-
-```json
-{
-  "mcpServers": {
-    "moomoo": {
-      "url": "http://127.0.0.1:8000/mcp",
-      "headers": {
-        "Authorization": "Bearer <token>"
-      }
-    }
-  }
-}
-```
-
-##### Cursor / ZeroClaw / Other HTTP Clients
-
-For MCP clients that support HTTP / stateless endpoints:
-- **Transport**: HTTP
-- **URL**: `http://127.0.0.1:8000/mcp`
-- **Headers**: `Authorization: Bearer <token>`
-
-> **SSE Alternative**: Server-Sent Events (SSE) remains supported via `MCP_TRANSPORT=sse` at `http://127.0.0.1:8000/sse` (`claude mcp add --transport sse -s user moomoo http://127.0.0.1:8000/sse --header "Authorization: Bearer <token>"`).
-
-> **Generating `MCP_AUTH_TOKEN`**: Generate a secure random token with `openssl rand -hex 32` and set it in your `.env` file (`MCP_AUTH_TOKEN=...`). If left unset, authentication is disabled (suitable for local-only STDIO).
-
-> **Security**: Never commit your password to version control. The `env` block in the config file remains local.
+Use the [optional official tunnel](docs/deploy-vps.md#optional-chatgpt-access)
+through `deploy.sh --chatgpt`. It connects to this fork's existing container and
+requires READ_ONLY. Local stdio, HTTP-client configuration and the ChatGPT tunnel
+are distinct connection paths; validate tool discovery and `check_health` in the
+actual client before relying on the integration.
 
 ## AI Agent Guidance
 
@@ -625,8 +482,11 @@ When using this MCP server, AI agents **MUST**:
    have succeeded into a policy error.
    - Call the read you want (`get_account_summary`, `get_positions`, …) with
      `trd_env='REAL'`.
-   - Only if it fails asking for trading to be unlocked, call `unlock_trade`
-     (it uses the env vars automatically, or takes a password), then retry.
+   - If it reports a locked gateway, inspect the configured mode and credential
+     policy. Manual `unlock_trade` requires REAL mode, no stored trade credential,
+     and an explicitly supplied password/hash. With a stored credential, manual
+     unlock is refused; writes use just-in-time unlocking. Do not change modes
+     or request a trade password merely to bypass a failed read.
 
 3. **Only use SIMULATE accounts when explicitly requested** by the user. To use simulation:
    - Pass `trd_env='SIMULATE'` parameter explicitly.
@@ -648,8 +508,8 @@ Agent Response:
 "I'm accessing your REAL trading account to show your portfolio.
 If you prefer to use a simulation account instead, please let me know."
 
-[Proceeds to get_account_summary; only if that reports trading is locked
- does it call unlock_trade and retry]
+[Calls get_account_summary; if access fails, reports the error and checks
+ the configured policy before considering an authorized recovery action]
 ```
 
 ### Managing Subscriptions
@@ -776,6 +636,150 @@ is rejected with an explicit error rather than emitted as a plausible id: the
 precision was already lost upstream, and a silent replacement would send a
 request against the wrong account or position.
 
+## Contributing
+
+Use Python 3.12 locally and preserve Python 3.10 compatibility. `pyproject.toml`
+defines the supported syntax and type target; `uv.lock` pins dependencies.
+Tests mock the SDK and do not need a live OpenD gateway.
+On macOS, the CI script tests need Bash 4 or newer (`mapfile` is unavailable in
+Apple's Bash 3.2). Install `bash` with Homebrew and put its `bin` directory first
+on PATH for the test command. The tests execute `bash` from PATH.
+
+### Checks and completion
+
+Follow the [completion policy](AGENTS.md#completion-policy).
+Select the relevant checks below; this is a command reference, not a requirement
+to run every command for every task.
+
+```bash
+uv sync --all-extras --dev
+uv run ruff check .
+uv run ruff format --check .
+uv run basedpyright
+uv run pytest
+bash scripts/validate-openspec.sh
+```
+
+Select checks by scope:
+
+| Change | Required evidence |
+| --- | --- |
+| Python behavior | Relevant tests during iteration, then full pytest, Ruff, and basedpyright |
+| Shell, Compose, deployment, or CI YAML | Relevant script/topology tests and full pytest; lint/type checks for affected Python. OpenSpec-only tooling uses the checks below. |
+| Container behavior | Applicable `scripts/smoke-test.sh`, `scripts/test-paper-container.sh`, or `scripts/test-tunnel-container.sh` with Docker |
+| Documentation | Review acceptance criteria, links, and consistency |
+| Specs, managed OpenSpec instructions, or OpenSpec tooling scripts | Strict OpenSpec validation and script syntax checks; for regeneration, confirm version, exact workflow inventory, and repeatability |
+
+CI selects Python checks, container smoke checks, and image builds separately.
+Known prose and OpenSpec tooling skip Python checks; unknown paths run them.
+Application source, container configuration, dependencies, and smoke/paper
+fixtures trigger container smoke checks. Image builds follow their actual
+build inputs on PRs and pushes; main still retags unchanged images and rebuilds
+if the baseline image is unavailable. Tunnel integration runs in both Docker
+contexts for tunnel inputs and shared server/transport configuration, not every
+script or test. Shared CI workflow changes remain conservative and run broad
+checks. Keep path filters current when adding build or integration dependencies.
+
+Use Conventional Commits and merge through pull requests. Install local hooks:
+
+```bash
+uv run pre-commit install
+uv run pre-commit install --hook-type commit-msg
+```
+
+Ruff uses an 88-character line length. Tool docstrings are the descriptions agents
+read, so include preconditions and failure modes as well as arguments.
+The container smoke test substitutes `tests/fixtures/opend_stub.py` for OpenD.
+The paper container checks cover persistence, process locking, backup/restore,
+dirty rollback journals, and READ_ONLY without journal storage. Live provider
+response-loss and external retry-chain acceptance remain separate evidence.
+
+### OpenSpec integrations
+
+Use **`@fission-ai/openspec@1.14.1`**, matching the exact pin in
+`scripts/validate-openspec.sh`. The unscoped npm package is unrelated. A machine's
+bare `openspec` executable may be older; check `openspec --version` before use or
+invoke the validation script above.
+
+`openspec-verify-change` is an agent skill (`$openspec-verify-change` in Codex or
+`/openspec-verify-change` in slash-invoked skill interfaces), not an
+`openspec verify` CLI subcommand. It reviews completeness, correctness, and
+coherence against change artifacts. CLI `validate` checks structure.
+
+The repository profile in `openspec/profile.json` is **core + verify**:
+`propose`, `explore`, `apply`, `update`, `sync`, `archive`, `verify`. Delivery is
+skills only for the existing Codex, Antigravity, Claude, and OpenCode
+integrations. Duplicate `/opsx:*` commands and Antigravity workflow files are not
+installed. No other expanded workflows are installed.
+
+Regenerate from the repository root with:
+
+```bash
+./scripts/update-openspec.sh
+```
+
+Use the repository script rather than bare `openspec update`: it supplies the
+tracked profile in isolated temporary configuration and refreshes all four tool
+integrations. Review the generated diff, confirm `generatedBy: "1.14.1"` and the
+seven selected workflows, then regenerate again to confirm no further changes.
+Do not hand-edit managed integrations. Keep `openspec/config.yaml` limited to
+invariants and pointers; architectural requirements belong in `openspec/specs/`.
+
+### Local rootless Docker on macOS
+
+Docker Engine needs Linux. On this Apple Silicon Mac, Lima runs an ARM Linux
+VM with a rootless Docker daemon; Rosetta executes the x86_64 image binaries.
+The Compose service targets `linux/amd64`, matching the remote x86_64 server.
+The VM itself remains ARM64, so this is not a native x86_64 runtime test.
+
+#### Initial setup
+
+Install the host tools:
+
+```sh
+brew install lima docker docker-compose docker-buildx
+```
+
+Add `/opt/homebrew/lib/docker/cli-plugins` to `cliPluginsExtraDirs` in
+`~/.docker/config.json`, preserving any existing settings.
+
+Create the VM and Docker context:
+
+```sh
+limactl start --name=moomoo-rootless --vm-type=vz --rosetta \
+  --cpus=4 --memory=6 --disk=40 --mount-none -y template:docker
+docker context create lima-moomoo-rootless \
+  --docker "host=unix://$HOME/.lima/moomoo-rootless/sock/docker.sock"
+docker context use lima-moomoo-rootless
+```
+
+No host directories are mounted into the VM. Docker sends the build context
+through its socket; Compose's default named volume stores OpenD state inside
+the VM. A macOS path in `OPEND_DATA_DIR` would require a separately configured
+VM mount. Avoid deleting the VM if it holds session data you need.
+
+#### Everyday use
+
+```sh
+limactl start moomoo-rootless
+docker context use lima-moomoo-rootless
+docker info --format '{{json .SecurityOptions}}'
+# Must include name=rootless.
+docker compose build
+```
+
+To release VM resources:
+
+```sh
+limactl stop moomoo-rootless
+```
+
+Building does not start the application or log into Moomoo. Start the stack
+separately once its runtime configuration is ready.
+
+This VM is for local development. Production `deploy.sh` uses the Linux host's
+`rootless` context and CI-published images; local builds are not copied there.
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
@@ -786,22 +790,3 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 - **Use at your own risk**: Trading involves financial risk. The authors provide this software "as is" without warranty of any kind.
 - **Test First**: Always test your agents and tools in the **Simulation (Paper Trading)** environment before using real funds.
-
-
-### Optional official ChatGPT tunnel
-
-CI publishes both images to the existing ECR repository. Set
-`CHATGPT_TUNNEL_API_KEY` and `CHATGPT_TUNNEL_ID` in the deployment `.env`, alongside
-its existing `MCP_AUTH_TOKEN` and `MOOMOO_TRADING_MODE=READ_ONLY`, then run
-`./scripts/deploy.sh --chatgpt`. Later deployments retain the selection;
-`./scripts/deploy.sh --no-chatgpt` disables it. The script selects the matching
-immutable image and preserves the existing Compose project and persistent volumes.
-No separate host build or credential-staging command is needed. Normal restarts
-reuse credentials; deliberate rotations recreate affected containers.
-
-The official client uses fixed endpoints and a filtered child environment, with
-accepted upstream redirect limitations under trust in OpenAI and the Docker host.
-ChatGPT access is read-only; disable the tunnel before changing the trading mode.
-The separate container publishes no ports and cannot reach OpenD over the bridge.
-See [the tunnel deployment runbook](docs/private-chatgpt-mcp.md) for configuration, diagnostics and rollback.
-Live OpenAI, ChatGPT web and iPad acceptance are separate checks.

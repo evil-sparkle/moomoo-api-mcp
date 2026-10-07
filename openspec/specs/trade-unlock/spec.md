@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines trading authorization policies and mechanisms for unlocking and locking the OpenD gateway, including startup auto-unlocking, explicit locking tools, and ephemeral Just-In-Time (JIT) order execution locks.
+Defines trading authorization policies and mechanisms for unlocking and locking the OpenD gateway, including lock-at-rest behavior, explicit locking tools, and ephemeral Just-In-Time (JIT) order execution locks. Startup never unlocks trading.
 
 ## Requirements
 
