@@ -5,8 +5,7 @@
 ### Requirement: Optional Tunnel Service Isolation
 
 An optional private ChatGPT tunnel SHALL run as a separate optional Compose container outside the
-single supervised OpenD + MCP brokerage container; legacy host service assets
-SHALL remain a documented rollback path. Adding, restarting, failing, disabling,
+single supervised OpenD + MCP brokerage container. Adding, restarting, failing, disabling,
 or removing the tunnel service SHALL NOT change the container's process
 supervision, published ports, restart policy, OpenD state volume, optional
 execution-journal volume, or existing local-client path.
@@ -59,6 +58,59 @@ execution-journal volume, or existing local-client path.
 
 ## ADDED Requirements
 
+### Requirement: Interactive and remembered OpenD login
+
+The pinned OpenD deployment SHALL support one-time interactive login through
+`OPEND_INTERACTIVE=1` and unattended login through the configured account,
+`MOOMOO_LOGIN_BY_REMEMBER=1` and remembered state in the existing persistent
+volume. The supervisor SHALL NOT use `MOOMOO_LOGIN_PWD_MD5` or emit
+`-login_pwd_md5`; Compose SHALL NOT inject that retired setting. The public
+template and runbooks SHALL describe the interactive/remembered flow without
+offering password-MD5 startup. Trade-unlock credentials SHALL remain independent.
+
+#### Scenario: First login is interactive
+
+- **WHEN** the operator explicitly selects interactive OpenD login
+- **THEN** the gateway SHALL prompt through the attached terminal without a password argument
+- **AND** choosing to remember the login SHALL store state in the existing OpenD volume
+
+#### Scenario: Legacy hash does not override remembered login
+
+- **GIVEN** an account and remembered state are configured
+- **AND** an obsolete `MOOMOO_LOGIN_PWD_MD5` value remains in the environment
+- **WHEN** the gateway starts unattended with remembered login enabled
+- **THEN** it SHALL use `-login_by_remember=1` and SHALL NOT pass a password argument
+
+#### Scenario: No remembered state is available
+
+- **WHEN** an unattended gateway start has no usable remembered state
+- **THEN** the supervisor SHALL report the required interactive setup without starting OpenD
+- **AND** the authenticated MCP server SHALL remain available for diagnostics
+- **AND** an obsolete password-MD5 value SHALL NOT provide an alternative login path
+
+### Requirement: CI-published tunnel deployment
+
+The existing GitHub Actions image pipeline SHALL build the tunnel from enumerated public inputs and publish it to the existing ECR repository only on main pushes, using distinct `tunnel-<commit>` tags. PR builds SHALL NOT publish. Every main commit SHALL have a matching tunnel tag through rebuilding or retagging a verified baseline image, with a build fallback if that image is absent. Operators SHALL NOT need to build an image on the production host.
+
+#### Scenario: Enabled deployment consumes CI images
+
+- **WHEN** an operator deploys a commit with the tunnel selected
+- **THEN** deployment SHALL confirm both application and tunnel commit tags before checkout or service changes
+- **AND** it SHALL save the tunnel's resolved immutable ECR digest and pull both images through the existing deployment workflow
+- **AND** subsequent restart or recreation SHALL reuse that saved digest
+
+#### Scenario: Tunnel image is unavailable
+
+- **WHEN** the matching tunnel commit tag is missing or its ECR lookup fails
+- **THEN** enabled deployment SHALL abort before changing the checkout, selection or running services
+- **AND** default tunnel-free deployment SHALL require only the application image
+
+#### Scenario: Deployment fails after selecting a new image
+
+- **WHEN** an enabled deployment fails after updating its tunnel image selection
+- **THEN** rollback SHALL restore the previous tunnel selection and immutable image alongside the application deployment state
+- **AND** application image cleanup SHALL preserve tunnel tags and persistent volumes
+
 ### Requirement: Reproducible hardened tunnel image
 
 The tunnel SHALL use a dedicated small image containing the official reviewed release and minimal startup/diagnostic support, with immutable image inputs and archive integrity verification before binary execution. The reviewed release manifest SHALL remain the release source of truth. Runtime startup SHALL NOT download latest or upgrade the client. The container SHALL run as a numeric non-root UID/GID with a read-only root filesystem, dropped capabilities, no-new-privileges, and narrowly scoped writable runtime storage. It SHALL preserve signal handling, bounded shutdown and independent restart behavior.
@@ -71,7 +123,7 @@ The tunnel SHALL use a dedicated small image containing the official reviewed re
 #### Scenario: Hardened runtime works with real release
 
 - **WHEN** the pinned image runs as its declared identity
-- **THEN** the verified client, entrypoint, configuration and mounted secrets SHALL work under the declared filesystem and capability restrictions
+- **THEN** the verified client, entrypoint, configuration and injected credentials SHALL work under the declared filesystem and capability restrictions
 - **AND** the image SHALL contain no brokerage SDK, OpenD binary or deployment secrets
 
 #### Scenario: Runtime exits or receives termination
@@ -94,3 +146,31 @@ CI SHALL exercise the actual tunnel image, entrypoint, runtime permissions and p
 
 - **WHEN** only synthetic container and simulated control-plane checks passed
 - **THEN** VPS deployment, credentialed OpenAI access, ChatGPT web invocation and native iPad acceptance SHALL remain pending
+
+
+#### Scenario: Fixtures remain separate from live deployment
+
+- **WHEN** current container integration is exercised
+- **THEN** tests SHALL use synthetic credential sources and disposable resources with enforced fixture-only destinations and no real OpenAI traffic
+- **AND** managed image, explicit credential environment, Compose and lifecycle results SHALL be reported independently of preserved historical upstream findings
+- **AND** successful synthetic tests SHALL NOT be reported as live OpenAI or ChatGPT acceptance
+
+### Requirement: Single manual deployment entrypoint
+
+Operators SHALL enable, update and disable the optional tunnel through the existing manual deployment script, using CI-published images and deployment environment configuration. First enablement SHALL NOT require a separate image-build, credential-staging or image-selection command. Existing Compose project and persistent volume identities SHALL be preserved automatically. Site-specific migration instructions SHALL be delivered outside the repository.
+
+#### Scenario: First enablement
+
+- **WHEN** the operator enables the tunnel with valid deployment settings
+- **THEN** the deploy script SHALL resolve its CI image and preserve the existing Compose project without an additional setup script
+- **AND** missing required credentials or images SHALL fail before service changes
+
+#### Scenario: Disable through the deployment script
+
+- **WHEN** the operator requests tunnel disablement
+- **THEN** the deploy script SHALL remove only the optional service and save the disabled selection without deleting brokerage state
+
+#### Scenario: Newly enabled deployment fails
+
+- **WHEN** deployment fails after adding the optional selection
+- **THEN** rollback SHALL restore the previous default-off selection as well as prior checkout/images without leaving a newly enabled tunnel running

@@ -88,6 +88,7 @@ class Settings:
     create_journal: bool = False
     journal_lock_wait_ms: int = 5000
     operator_token: str | None = None
+    allow_chatgpt_tunnel_host: bool = False
 
     @property
     def has_trade_credential(self) -> bool:
@@ -162,6 +163,14 @@ def _load_transport(environ: Mapping[str, str]) -> str:
             f"{', '.join(VALID_TRANSPORTS)}."
         )
     return raw
+
+
+def load_chatgpt_tunnel_host(environ: Mapping[str, str]) -> bool:
+    """Opt in to one Docker service Host."""
+    value = environ.get("MCP_ALLOW_CHATGPT_TUNNEL_HOST", "").strip()
+    if value not in {"", "0", "1"}:
+        raise TradingModeConfigError("MCP_ALLOW_CHATGPT_TUNNEL_HOST must be 0 or 1")
+    return value == "1"
 
 
 def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
@@ -270,6 +279,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         create_journal=create_journal,
         journal_lock_wait_ms=lock_wait,
         operator_token=operator_token,
+        allow_chatgpt_tunnel_host=load_chatgpt_tunnel_host(env),
     )
 
 

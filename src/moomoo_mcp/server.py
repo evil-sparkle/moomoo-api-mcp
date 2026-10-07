@@ -24,6 +24,7 @@ from moomoo_mcp.services.trading_policy import TradingModeConfigError
 from moomoo_mcp.settings import (
     Settings,
     check_transport_authentication,
+    load_chatgpt_tunnel_host,
     load_settings,
 )
 
@@ -45,8 +46,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         self.operator_token = operator_token
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
+        headers = request.headers.getlist("Authorization")
+        auth_header = headers[0] if len(headers) == 1 else ""
+        if auth_header.startswith("Bearer ") and auth_header.isascii():
             token = auth_header[7:].strip()
             is_operator = bool(self.operator_token) and hmac.compare_digest(
                 token, self.operator_token or ""
@@ -301,9 +303,27 @@ def create_sse_app(auth_token: str | None = None):
 
 
 def create_streamable_http_app(
-    auth_token: str | None = None, operator_token: str | None = None
+    auth_token: str | None = None,
+    operator_token: str | None = None,
+    *,
+    allow_chatgpt_tunnel_host: bool | None = None,
 ):
     """Build the Starlette Streamable HTTP application with optional bearer auth."""
+    enabled = (
+        load_chatgpt_tunnel_host(os.environ)
+        if allow_chatgpt_tunnel_host is None
+        else allow_chatgpt_tunnel_host
+    )
+    security = mcp.settings.transport_security
+    assert security is not None
+    mcp.settings.transport_security = security.model_copy(
+        update={
+            "allowed_hosts": [
+                h for h in security.allowed_hosts if h != "moomoo-mcp:8000"
+            ]
+            + (["moomoo-mcp:8000"] if enabled else []),
+        }
+    )
     app = mcp.streamable_http_app()
     raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
     token = raw.strip()
@@ -370,7 +390,9 @@ def main():
 
         if transport == "streamable-http":
             app = create_streamable_http_app(
-                auth_token=settings.auth_token, operator_token=settings.operator_token
+                auth_token=settings.auth_token,
+                operator_token=settings.operator_token,
+                allow_chatgpt_tunnel_host=settings.allow_chatgpt_tunnel_host,
             )
         else:
             app = create_sse_app(auth_token=settings.auth_token)

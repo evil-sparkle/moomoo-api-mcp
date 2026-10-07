@@ -1,0 +1,28 @@
+# Explicit, default-off managed official-client integration.
+# Production selects an immutable CI-published ECR digest through deploy.sh.
+services:
+  moomoo-mcp:
+    environment:
+      MCP_ALLOW_CHATGPT_TUNNEL_HOST: "1"
+  chatgpt-tunnel:
+    image: ${CHATGPT_TUNNEL_IMAGE:?select the CI-published immutable tunnel image first}
+    platform: linux/amd64
+    pull_policy: missing
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 20s
+    environment:
+      # Startup validation requires these; empty values still permit disablement.
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      CHATGPT_TUNNEL_API_KEY: ${CHATGPT_TUNNEL_API_KEY:-}
+      CHATGPT_TUNNEL_ID: ${CHATGPT_TUNNEL_ID:-}
+    tmpfs:
+      - /run/moomoo-chatgpt-tunnel:uid=10002,gid=10002,mode=0700,size=16m,noexec,nosuid,nodev
+# Compose creates a project-scoped user-defined bridge with Docker DNS and egress.
+networks:
+  default:
+    driver: bridge
+    internal: false

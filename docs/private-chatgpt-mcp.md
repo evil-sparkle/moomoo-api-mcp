@@ -1,275 +1,165 @@
-# Private ChatGPT access through OpenAI Secure MCP Tunnel
+# Private ChatGPT access through the official tunnel
 
-This optional owner-operated path connects supported OpenAI products to the
-existing private MCP deployment. It publishes no new listener. MCP stays on
-host loopback at `127.0.0.1:8000`; OpenD stays on container loopback at
-`127.0.0.1:11111` and remains unpublished. ZeroClaw and other local clients keep
-using the existing endpoint and bearer credential.
+The optional Compose service runs the unmodified OpenAI tunnel client. ChatGPT
+access requires server-enforced `READ_ONLY`; order placement, modification,
+cancellation, trade unlocking and operator recovery are refused. The ordinary
+MCP bearer is not a permanently read-only credential: disable the tunnel before
+changing the deployment to SIMULATE or REAL.
 
-The accepted deployment is valid only while the MCP server reports
-`MOOMOO_TRADING_MODE=READ_ONLY`. Stop and disable the tunnel before changing
-that mode. Enabling SIMULATE or REAL while the tunnel exists requires a separate
-reviewed change. Tool annotations and ChatGPT confirmation behavior do not
-authorize calls or contain broker risk.
+## Configure and deploy
 
-## Reviewed sources and version
+Use `scripts/deploy.sh` for manual deployment. GitHub Actions builds both images
+and publishes them to the existing `moomoo-api-mcp` ECR repository on main pushes.
+There is no CD. PR image builds do not publish. Application tags are seven-character
+commit IDs; tunnel tags are `tunnel-<commit>`. Unchanged images are retagged for each
+main commit, with a build fallback if the baseline is unavailable. Wait for both
+image jobs to succeed. Production hosts need no separate image build or secret
+provisioning script.
 
-These official sources were checked on 2026-09-24:
+Add these settings to the deployment `.env`, using `.env.example` as the template:
 
-- [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels),
-  an unversioned OpenAI guide retrieved on that date.
-- [Connect and test your plugin](https://developers.openai.com/plugins/deploy/connect-chatgpt),
-  an unversioned OpenAI guide retrieved on that date.
-- [`openai/tunnel-client`](https://github.com/openai/tunnel-client) stable tag
-  `v0.0.14`, published 2026-09-01, tag commit
-  `0f870e50a973fa820d4c409000059e181e8d242b`.
-- The tag's `configuration.md`, `architecture.md`, `connectors.md`,
-  `permissions.md`, and `deployment/systemd-vm.md`. The then-current `master`
-  documentation at `cce7a8226654c432ce53c7e05e17a9825a34b6e3` was inspected
-  for drift; this integration uses behavior present in the stable tag.
-
-The pinned Linux amd64 archive and digest are in
-`deploy/tunnel-client/release.json`. The archive includes a Cloudflare
-companion, but this configuration does not enable or start it. The daemon makes
-outbound HTTPS requests to `api.openai.com:443` under `/v1/tunnels/*`; it needs no
-inbound route, firewall opening, Tailscale Funnel, or native TLS on Python.
-
-Tunnel-client v0.0.14 sends `mcp.extra_headers` on ordinary MCP traffic and
-`mcp.discovery_extra_headers` on discovery and startup probes. Both use the same
-file-backed ordinary MCP Authorization header. Connector-forwarded headers apply
-later, so a conflicting Authorization value gets a 401. Do not retry without
-authentication.
-
-The client drops forwarded Host and derives `127.0.0.1:8000` from the configured
-URL. It can forward Origin. This server accepts no nonempty Origin, so an
-unexpected Origin fails with 403. Do not add a wildcard or disable DNS rebinding
-protection. If an eligible product test proves a stable Origin is required,
-propose one exact allowlist entry in a separate reviewed change.
-
-## Security boundary
-
-The service runs as the dedicated `moomoo-tunnel` Unix identity. It gets only:
-
-- a runtime API key restricted to Tunnels **Read** and **Use** for the intended
-  tunnel;
-- the tunnel ID associated with the intended Platform organization and ChatGPT
-  workspace; and
-- the complete ordinary local header value `Bearer <MCP_AUTH_TOKEN>`.
-
-The daemon gets no Tunnels Manage permission, OpenAI administration key,
-`MCP_OPERATOR_TOKEN`, brokerage login material, trade-unlock credential, Docker
-socket, repository write access, or OpenD access. Tunnel managers use a separate
-interactive administration path; those credentials never enter this unit.
-
-Systemd exposes the two credential copies only to the service. Their root-owned
-source files must be mode `0600`. The non-secret config directory is
-`root:moomoo-tunnel` mode `0750`, and its YAML is mode `0640`, so the service can
-traverse and read the config without gaining read access to either credential
-source. The MCP credential file contains the whole HTTP header, including the
-`Bearer ` prefix. Never put either credential in argv, an environment file, a
-tracked file, diagnostic output, terminal scrollback, or a ticket.
-
-Tool annotations help a product describe or confirm operations. They are
-advisory. No supported per-connection ChatGPT tool allowlist was found in the
-reviewed documentation. Server-enforced `READ_ONLY` is the authorization
-boundary, and tests prove mutation methods do not reach broker writes in that
-mode. `get_stock_quote` and `get_order_book` are marked mutating because they
-auto-subscribe the shared quote connection.
-
-## Local preflight
-
-The verifier reads Authorization from a protected file and never accepts it on
-argv. It prints milestone names only, never account data, response bodies, or
-credential values.
-
-Startup-safe mode validates initialize, `tools/list`, and `check_health`, and
-requires `trading_mode=READ_ONLY`. An honest `degraded` or `disconnected` OpenD
-status can pass while the supervised gateway recovers:
-
-```console
-python3 scripts/private_chatgpt_preflight.py \
-  --mode startup-safe \
-  --authorization-file /path/to/restricted/mcp-authorization
+```dotenv
+MOOMOO_TRADING_MODE=READ_ONLY
+MCP_AUTH_TOKEN=<existing ordinary MCP token>
+CHATGPT_TUNNEL_API_KEY=<OpenAI tunnel runtime key with Tunnels Read and Use>
+CHATGPT_TUNNEL_ID=<selected tunnel identifier beginning tunnel_>
 ```
 
-Full mode also discovers accounts, finds one exact owner-selected decimal-string
-ID, and requests positions. It fails if OpenD or the account is unavailable.
-Treat account IDs as private operational data and never commit them:
+The launcher derives the MCP Authorization header automatically. Supply a limited
+OpenAI runtime key, never an admin key, brokerage login, trade password or operator
+token. The tunnel receives only the three named tunnel inputs; the deployment
+`.env` is not loaded wholesale into that container. Protect the host file and
+avoid displaying resolved Compose configuration or container environments.
+Credentials are visible to trusted Docker/host administrators through the
+container and child-process environment; this is an accepted deployment trade-off.
 
-```console
-python3 scripts/private_chatgpt_preflight.py \
-  --mode full \
-  --authorization-file /path/to/restricted/mcp-authorization \
-  --trd-env SIMULATE \
-  --account-id '<OWNER_SELECTED_ACCOUNT_ID>'
+Enable once, after main CI publishes the images:
+
+```bash
+./scripts/deploy.sh --chatgpt
 ```
 
-The default URL is `http://127.0.0.1:8000/mcp`; non-loopback URLs are refused. A
-PASS proves concrete JSON-RPC results rather than merely HTTP 200.
+Subsequent `./scripts/deploy.sh [commit]` deployments retain the selection. The
+script confirms both ECR tags before checkout, saves the immutable tunnel digest,
+pulls both images, validates authentication and READ_ONLY settings, then starts
+the stack. First enablement detects the running container's Compose project and
+saves that project for subsequent enabled and disabled deployments, preserving
+its named volumes. A new host uses the checkout directory's default project.
+Missing credentials fail before startup. A missing tunnel image fails before
+checkout or service changes. `--prepare --chatgpt` validates and pulls without
+starting services; ordinary deployments keep the tunnel off unless selected.
 
-## Owner installation procedure
+Brokerage reads also require OpenD login. Complete the
+[one-time interactive login](deploy-vps.md#7-prepare-image-then-perform-interactive-opend-login),
+remember the password and preserve the OpenD volume. Later starts use remembered
+login; no brokerage login password or hash is configured through Compose.
 
-These are owner instructions. Repository automation does not run them and this
-change does not deploy anything.
+The application and tunnel run as separate containers. OpenD remains on brokerage
+container loopback `127.0.0.1:11111`, unpublished. Host MCP remains
+`127.0.0.1:8000:8000`; the tunnel reaches exactly `http://moomoo-mcp:8000/mcp`
+through Docker DNS. Enabling the overlay opts the server into only that additional
+Host. Existing bearer, Host and Origin checks still apply. The tunnel publishes
+no ports and shares no PID/network namespace, Docker socket or brokerage volumes.
+It runs as UID/GID `10002:10002`, with a read-only root, dropped capabilities,
+no-new-privileges and private runtime tmpfs. The production bridge permits egress.
 
-1. Confirm Linux amd64. Download the archive named in the release manifest, then
-   verify it without installing:
+## Trust and upstream limitations
 
-   ```console
-   python3 deploy/tunnel-client/install.py \
-     --archive /path/to/tunnel-client-v0.0.14-linux-amd64.zip \
-     --verify-only
-   ```
+This deployment trusts the genuine `https://api.openai.com` endpoint with normal
+certificate verification and its Docker host. Configuration fixes the OpenAI and
+private MCP destinations; startup verifies the configuration digest and removes
+inherited proxy, CA-bundle and endpoint overrides. The official client's upstream
+redirect behavior is accepted within this trust model; the integration does not
+patch that client. Preflight itself refuses redirects and ignores proxies.
 
-   The installer checks SHA-256 before extracting or executing the binary, then
-   requires `tunnel-client --version` to report `0.0.14`.
+[Earlier investigation results](https://github.com/evil-sparkle/moomoo-api-mcp/tree/76470318f3d9dbe3eca51ee10902580d50dfad1c/openspec/changes/containerize-private-chatgpt-tunnel)
+record conditional redirect/proxy and unauthenticated-doctor limitations. They do
+not establish a malicious OpenAI redirect or actual credential exposure. Those
+reports and diagnostic runners are removed from the current tree; Git retains the
+records. Current CI tests the managed deployment with the real pinned client on
+rootful and rootless Docker, using synthetic credentials and isolated resources.
 
-2. Create the identity and install reviewed files:
+## Startup, checks and recovery
 
-   ```console
-   sudo useradd --system --home-dir /var/lib/moomoo-chatgpt-tunnel \
-     --create-home --shell /usr/sbin/nologin moomoo-tunnel
-   sudo python3 deploy/tunnel-client/install.py \
-     --archive /path/to/tunnel-client-v0.0.14-linux-amd64.zip
-   sudo install -d -o root -g moomoo-tunnel -m 0750 \
-     /etc/moomoo-chatgpt-tunnel
-   sudo install -o root -g moomoo-tunnel -m 0640 \
-     deploy/tunnel-client/tunnel-client.yaml \
-     /etc/moomoo-chatgpt-tunnel/tunnel-client.yaml
-   sudo install -o root -g root -m 0755 \
-     scripts/private_chatgpt_preflight.py \
-     /usr/local/libexec/private_chatgpt_preflight.py
-   sudo install -o root -g root -m 0755 \
-     scripts/install_private_chatgpt_credential.py \
-     /usr/local/libexec/install_private_chatgpt_credential.py
-   sudo install -o root -g root -m 0644 \
-     deploy/tunnel-client/moomoo-chatgpt-tunnel.service \
-     /etc/systemd/system/moomoo-chatgpt-tunnel.service
-   ```
+Before launching the client, the manager performs authenticated MCP initialize,
+tool discovery and `check_health`, requiring READ_ONLY. Transient MCP failures
+retry within a 90-second deadline; invalid credentials, mode or results fail
+closed. Every client launch repeats the gate. Degraded broker connectivity can
+still pass when MCP itself is available and READ_ONLY; that does not prove broker
+login or data access.
 
-3. Write the non-secret tunnel identifier, replacing only the placeholder:
+The manager suppresses raw official-client output and prints bounded status
+messages without secrets or account data. It forwards stop signals, reaps the
+client and exits nonzero on client exit or sustained failed local liveness. Docker
+restarts only the optional tunnel. Local `/healthz` proves process liveness and
+`/readyz` proves client startup; neither proves live OpenAI forwarding. An upstream
+outage does not trigger a restart loop merely because forwarding is unavailable.
 
-   ```console
-   printf '%s\n' 'CONTROL_PLANE_TUNNEL_ID=<OWNER_TUNNEL_ID>' | \
-     sudo install -o root -g moomoo-tunnel -m 0640 /dev/stdin \
-       /etc/moomoo-chatgpt-tunnel/tunnel-id.env
-   ```
+Safe local diagnostics, after deployment:
 
-4. Create each credential through the installed helper. It requires an
-   interactive terminal, disables echo before reading one line, restores the
-   terminal on success, error, or interruption, and atomically creates a
-   `root:root` mode `0600` source file. Enter the complete MCP header, including
-   the `Bearer ` prefix. Values never appear in argv or terminal scrollback:
-
-   ```console
-   sudo /usr/local/libexec/install_private_chatgpt_credential.py \
-     control-plane-api-key
-   sudo /usr/local/libexec/install_private_chatgpt_credential.py \
-     mcp-authorization
-   ```
-
-   Verify the installed boundary without displaying either credential:
-
-   ```console
-   sudo -u moomoo-tunnel test -r \
-     /etc/moomoo-chatgpt-tunnel/tunnel-client.yaml
-   sudo -u moomoo-tunnel test ! -r \
-     /etc/moomoo-chatgpt-tunnel/control-plane-api-key
-   sudo -u moomoo-tunnel test ! -r \
-     /etc/moomoo-chatgpt-tunnel/mcp-authorization
-   ```
-
-5. Confirm the existing deployment still has one container, only loopback MCP,
-   no OpenD host port, and a passing startup-safe preflight. Then load and start
-   only the optional unit:
-
-   ```console
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now moomoo-chatgpt-tunnel.service
-   sudo systemctl status moomoo-chatgpt-tunnel.service
-   ```
-
-   The unit runs local preflight and `tunnel-client doctor --explain` first. A
-   failed prerequisite leaves this unit failed and does not stop the MCP
-   container.
-
-## Health, diagnostics, and failure matrix
-
-`http://127.0.0.1:8080/healthz` is process liveness. `/readyz` means the client
-can poll and dispatch tunnel work. Loopback `/ui` and `/metrics` are diagnostics;
-never proxy or publish them.
-
-Use this order without reading credential source files:
-
-```console
-/opt/openai/tunnel-client/v0.0.14/tunnel-client --version
-curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null
-curl --fail --silent http://127.0.0.1:8080/readyz >/dev/null
-sudo systemctl status moomoo-chatgpt-tunnel.service
-sudo journalctl -u moomoo-chatgpt-tunnel.service --since=-15m
+```bash
+./scripts/compose-prod.sh ps
+./scripts/compose-prod.sh logs --tail=100 chatgpt-tunnel
+./scripts/compose-prod.sh exec -T chatgpt-tunnel python /opt/tunnel/runtime.py diagnostics
 ```
 
-| Failure | Expected evidence | Local service impact | Coverage |
-| --- | --- | --- | --- |
-| MCP stopped/restarting | Preflight reports unreachable; tunnel calls fail | OpenD supervision is unchanged; stateless calls recover without an old session ID | Automated local-process fixture |
-| Tunnel process exits | Health/readiness disappear; systemd restarts it | Loopback MCP remains available and authenticated | Simulated tunnel-process fixture; owner systemd check PENDING |
-| OpenAI control plane unavailable | Liveness may be 200 while readiness is 503 | Loopback MCP remains available; no fabricated tunnel success | Simulated tunnel-process fixture; owner official-client check PENDING |
-| OpenD unavailable | Health says degraded/disconnected; startup-safe proves READ_ONLY; full mode fails | Existing recovery continues; no write dispatch | Automated fixture |
-| Conflicting Authorization | Local MCP returns 401 | No anonymous retry or broker call | Automated fixture |
-| Unexpected Origin | Local MCP returns 403 | Host/Origin protection remains enabled | Automated fixture plus owner web check |
-| Account/workspace ineligible | Tunnel cannot be selected or associated | Local and tunnel checks stay separate | Owner-operated, PENDING |
+`compose-prod.sh` is the internal wrapper used by deployment and service management;
+it resolves the same files, rootless context, saved project and immutable image.
+`build-tunnel-image.sh` is a developer/CI fixture helper. Neither is an additional
+operator provisioning entrypoint.
 
-## Secret rotation
+## Credentials and restarts
 
-Rotate the runtime key with the same no-echo helper command for
-`control-plane-api-key`, which atomically preserves root ownership and mode
-`0600`, then restart this unit. Failure affects only the tunnel.
+A normal process/container restart reuses its configured credentials. It does not
+require a new token or editing the ChatGPT connection. A deliberate environment
+change requires container recreation; `docker restart` retains the old values.
 
-The MCP bearer is shared with local clients. Coordinate its rotation:
+For an OpenAI key rotation, update `CHATGPT_TUNNEL_API_KEY` in `.env` and run
+`./scripts/deploy.sh`. Compose recreates the affected tunnel with the new value.
+Verify actual forwarding with the replacement key, then confirm the revoked key
+is refused. Rotating this key does not rotate the ordinary MCP bearer.
 
-1. Stop the optional tunnel unit.
-2. Rotate `MCP_AUTH_TOKEN` through the existing deployment secret procedure.
-3. Update ZeroClaw and other clients through their existing secret paths.
-4. Replace `mcp-authorization` with the complete new header through the no-echo
-   helper command above.
-5. Restart MCP, run startup-safe and full local preflight, then start the tunnel
-   and confirm readiness.
+For an MCP bearer rotation, disable the tunnel with the command below, update
+`MCP_AUTH_TOKEN` and authorized local client settings, then run
+`./scripts/deploy.sh` to recreate MCP. Verify the new bearer is accepted and the
+old bearer returns 401. Enable again with `./scripts/deploy.sh --chatgpt`; it
+receives the same new value automatically. Verify forwarded MCP traffic. Update
+any ChatGPT connection that separately stores the ordinary bearer; the official
+client's configured local header alone supplies it in this integration.
 
-Never create an unauthenticated interval. `MCP_ALLOW_UNAUTHENTICATED_HTTP` is not
-an integration workaround.
+## Disable and rollback
 
-## Staged acceptance record
-
-Repository tests complete isolated portions of stages 1 and 2. The owner records
-product checks without copying secrets or private account results.
-
-| Stage | Required observation | Status after this change |
-| --- | --- | --- |
-| 1. Local MCP | initialize, tools/list, authenticated READ_ONLY health, selected account and positions result | PENDING owner full preflight |
-| 2. Tunnel runtime | pinned version, doctor PASS, health 200, readiness 200, restart recovery | PENDING owner host run |
-| 3. OpenAI eligibility | intended Platform organization and ChatGPT workspace associated; principals have Read + Use; developer mode allowed by policy | PENDING owner/account prerequisite |
-| 4. ChatGPT web | tunnel selected, tools discovered, health and authorized positions invoked, mutation refused | PENDING owner credentialed test |
-| 5. Native iPad | same private app discovered and health plus an authorized read invoked in the native app | PENDING; support and eligibility unverified |
-
-A successful web connection completes only stage 4. It does not prove native
-iPad support. Do not assume that a developer-mode connection made on the web
-appears in the native app.
-
-## Rollback
-
-Rollback removes only the optional host integration:
-
-```console
-sudo systemctl disable --now moomoo-chatgpt-tunnel.service
-sudo systemctl reset-failed moomoo-chatgpt-tunnel.service
+```bash
+./scripts/deploy.sh --no-chatgpt
 ```
 
-After preserving needed redacted diagnostics, remove the unit, its two
-credential files, non-secret config, preflight and credential-helper copies, and
-pinned binary; then run `sudo systemctl daemon-reload`. Revoke the runtime key
-and remove the tunnel association through the owner's OpenAI administration
-process.
+This stops/removes only the optional tunnel service and clears its selection while
+continuing the ordinary application deployment. It preserves the saved project
+and persistent state. It does not require Compose down or volume deletion. Do not
+combine disablement with `--prepare`, which promises not to start/stop services.
 
-Rollback does not run Compose, remove volumes, edit Tailscale or firewall
-settings, touch OpenD state, alter the paper journal, change ZeroClaw, or modify
-the MCP bearer used by remaining local clients.
+The deploy script restores the previous image selection, checkout and deployment
+metadata if a deployment fails. Failed first enablement removes the new optional
+selection and tunnel. Failure after disablement restores the previous selection
+and restarts the former stack. This rollback does not restore deliberately edited
+credentials in `.env`. A target predating tunnel support requires disablement first:
+disable on the current supported commit, then deploy the older application commit.
+
+## Provenance and live acceptance
+
+The image uses official
+[v0.0.14](https://github.com/openai/tunnel-client/releases/tag/v0.0.14), tag commit
+`0f870e50a973fa820d4c409000059e181e8d242b`. The release manifest pins the Linux amd64
+archive SHA-256 `15bd17e805cad39d412199115bb9e10a978dd35258a114cdf25dd2ae6681c7d3`;
+image construction verifies it before execution and pins the base image by digest.
+There is no runtime client download or upgrade. Supported environment credential
+references come from the
+[pinned official configuration documentation](https://github.com/openai/tunnel-client/tree/0f870e50a973fa820d4c409000059e181e8d242b/docs).
+See [OpenAI's private MCP tunnel guide](https://platform.openai.com/docs/guides/developer-mode/private-mcp-tunnels)
+for organization/workspace eligibility and product setup. Runtime Read + Use and
+admin Manage permissions have separate purposes.
+
+Synthetic CI success does not prove real OpenAI eligibility, live VPS deployment,
+ChatGPT web invocation or native iPad support. Each remains pending until separately
+verified. Site-specific migration instructions are delivered outside this
+repository. OpenSpec planning stays active until final PR approval in chat.

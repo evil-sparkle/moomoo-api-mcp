@@ -1,0 +1,61 @@
+name: Tunnel managed integration
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/tunnel-compatibility.yml
+      - Dockerfile
+      - pyproject.toml
+      - uv.lock
+      - src/**
+      - docker-compose*.yml
+      - deploy/tunnel-client/**
+      - scripts/**
+      - tests/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  disposable-container-integration:
+    name: Synthetic container integration (${{ matrix.context }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        context: [default, rootless]
+    env:
+      DOCKER_CONTEXT: ${{ matrix.context }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install fixture dependencies
+        run: |
+          uv sync --frozen --all-extras --dev
+          sudo apt-get update
+          sudo apt-get install -y uidmap dbus-user-session
+      - name: Set up the disposable rootless daemon
+        if: matrix.context == 'rootless'
+        run: |
+          sudo install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/tunnel-test-docker.list >/dev/null
+          sudo apt-get update
+          engine_version=$(dpkg-query -W -f='${Version}' docker-ce)
+          sudo apt-get install -y "docker-ce-rootless-extras=$engine_version"
+          command -v dockerd-rootless-setuptool.sh
+          dockerd-rootless-setuptool.sh install --force
+          docker --context rootless info
+      - name: Build actual images from public inputs
+        run: |
+          docker build -t moomoo-tunnel-broker:ci .
+          ./scripts/build-tunnel-image.sh
+      - name: Exercise the pinned client, real entrypoint and environment credentials
+        run: TUNNEL_USE_IMAGE_SOURCE=1 ./scripts/test-tunnel-container.sh moomoo-tunnel-broker:ci
+      - name: Describe the acceptance boundary
+        if: always()
+        run: |
+          echo 'Required managed official-client integration with a synthetic local control plane.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No live OpenAI, VPS, trading, ChatGPT or iPad acceptance.' >> "$GITHUB_STEP_SUMMARY"

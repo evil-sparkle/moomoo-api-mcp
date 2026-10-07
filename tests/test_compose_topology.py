@@ -115,6 +115,17 @@ def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
     return json.loads(result.stdout)
 
 
+def test_retired_login_password_is_not_injected_by_compose():
+    rendered = _render(
+        "docker-compose.yml",
+        env={"MOOMOO_LOGIN_PWD_MD5": "synthetic-retired-login-password"},
+    )
+
+    environment = rendered["services"][SERVICE]["environment"]
+    assert "MOOMOO_LOGIN_PWD_MD5" not in environment
+    assert environment["MOOMOO_LOGIN_BY_REMEMBER"] == "1"
+
+
 @pytest.mark.parametrize("custom_config", [False, True])
 def test_user_plugin_survives_config_isolation(tmp_path, monkeypatch, custom_config):
     user_home = tmp_path / "user"
@@ -327,7 +338,7 @@ class ComposeTopologyTest(unittest.TestCase):
                 "OPEND_BINARY",
                 "OPEND_RESTART_WINDOW_SECONDS",
                 "MOOMOO_LOGIN_ACCOUNT",
-                "MOOMOO_LOGIN_PWD_MD5",
+                "OPEND_INTERACTIVE",
             },
             "the overlay may stand in for the gateway binary, hurry its restarts "
             "along and hand it a fake login to start with, and nothing else",

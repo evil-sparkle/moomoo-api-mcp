@@ -297,9 +297,9 @@ class TestDegradedIsNotAFailure:
 
 
 class TestCredentialsStayOutOfLogs:
-    """MD5 of six digits is obfuscation, not protection — and logs travel."""
+    """Identifiers and legacy credential arguments must stay out of logs."""
 
-    def test_the_pin_hash_is_never_rendered(self):
+    def test_the_retired_login_password_flag_is_still_redacted(self):
         line = redacted(
             [
                 "/opt/moomooOpenD/OpenD",
@@ -404,7 +404,6 @@ class TestGatewayCommandLine:
             "OPEND_BINARY": "/opt/moomooOpenD/OpenD",
             "HOME": "/nonexistent",
             "MOOMOO_LOGIN_ACCOUNT": "",
-            "MOOMOO_LOGIN_PWD_MD5": "",
             "MOOMOO_LOGIN_BY_REMEMBER": "1",
             "MOOMOO_LOGIN_REGION": "sg",
             "OPEND_INTERACTIVE": "0",
@@ -444,28 +443,37 @@ class TestGatewayCommandLine:
 
         assert "-login_account=12345678" in spec.argv
 
-    def test_a_password_hash_is_used_when_present(self):
-        spec = gateway_spec(
-            self.env(MOOMOO_LOGIN_ACCOUNT="12345678", MOOMOO_LOGIN_PWD_MD5="deadbeef")
-        )
+    def test_a_retired_password_hash_cannot_provide_headless_login(self):
+        with pytest.raises(GatewayLoginError) as excinfo:
+            gateway_spec(
+                self.env(
+                    MOOMOO_LOGIN_ACCOUNT="12345678", MOOMOO_LOGIN_PWD_MD5="deadbeef"
+                )
+            )
 
-        assert "-login_account=12345678" in spec.argv
-        assert "-login_pwd_md5=deadbeef" in spec.argv
+        assert "OPEND_INTERACTIVE=1" in str(excinfo.value)
+        assert "MOOMOO_LOGIN_PWD_MD5" not in str(excinfo.value)
 
-    def test_a_remembered_token_is_used_when_one_exists(self, tmp_path):
+    @pytest.mark.parametrize("legacy_hash", ["", "deadbeef"])
+    def test_a_remembered_token_is_used_when_one_exists(self, tmp_path, legacy_hash):
         (tmp_path / ".com.moomoo.OpenD" / "F3CNN" / "UserAccMap").mkdir(parents=True)
 
         spec = gateway_spec(
-            self.env(MOOMOO_LOGIN_ACCOUNT="12345678", HOME=str(tmp_path))
+            self.env(
+                MOOMOO_LOGIN_ACCOUNT="12345678",
+                HOME=str(tmp_path),
+                MOOMOO_LOGIN_PWD_MD5=legacy_hash,
+            )
         )
 
         assert "-login_by_remember=1" in spec.argv
+        assert not any(arg.startswith("-login_pwd") for arg in spec.argv)
 
     def test_an_account_without_any_usable_login_refuses_to_start(self):
         with pytest.raises(GatewayLoginError) as excinfo:
             gateway_spec(self.env(MOOMOO_LOGIN_ACCOUNT="12345678"))
 
-        assert "12345678" in str(excinfo.value)
+        assert "12345678" not in str(excinfo.value)
         assert "OPEND_INTERACTIVE=1" in str(excinfo.value)
 
     def test_no_account_refuses_to_start(self):

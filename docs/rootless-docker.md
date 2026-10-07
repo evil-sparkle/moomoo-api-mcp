@@ -65,3 +65,22 @@ container does not mean the Docker daemon runs as host root. (The container runs
 References: [Lima Docker template](https://github.com/lima-vm/lima/blob/master/templates/docker.yaml),
 [Lima architecture emulation](https://lima-vm.io/docs/config/multi-arch/),
 [Docker rootless mode](https://docs.docker.com/engine/security/rootless/).
+
+
+### Optional official ChatGPT tunnel
+
+CI publishes both images to the existing ECR repository. Set
+`CHATGPT_TUNNEL_API_KEY` and `CHATGPT_TUNNEL_ID` in the deployment `.env`, alongside
+its existing `MCP_AUTH_TOKEN` and `MOOMOO_TRADING_MODE=READ_ONLY`, then run
+`./scripts/deploy.sh --chatgpt`. Later deployments retain the selection;
+`./scripts/deploy.sh --no-chatgpt` disables it. The script selects the matching
+immutable image and preserves the existing Compose project and persistent volumes.
+No separate host build or credential-staging command is needed. Normal restarts
+reuse credentials; deliberate rotations recreate affected containers.
+
+The official client uses fixed endpoints and a filtered child environment, with
+accepted upstream redirect limitations under trust in OpenAI and the Docker host.
+ChatGPT access is read-only; disable the tunnel before changing the trading mode.
+The separate container publishes no ports and cannot reach OpenD over the bridge.
+See [the tunnel deployment runbook](private-chatgpt-mcp.md) for configuration, diagnostics and rollback.
+Live OpenAI, ChatGPT web and iPad acceptance are separate checks.

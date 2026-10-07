@@ -10,7 +10,7 @@ This MCP server empowers developers to build custom trading skills and strategie
 
 ## About this fork
 
-This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp). The PyPI package `moomoo-api-mcp` (what `uvx moomoo-api-mcp` and `uv tool install moomoo-api-mcp` install) is published by upstream, not by this fork; this fork does not publish to PyPI, and `.github/workflows/python-publish.yml` and `manual-release.yml` are inherited from upstream and not maintained here. What this fork builds and maintains is the container deployment — CI (`.github/workflows/ci.yml`) builds the `moomoo-api-mcp` image — which carries the OpenD gateway alongside the server — and `docs/deploy-vps.md` deploys it. A PyPI install therefore runs upstream's release, which can differ from this fork's code — use the Docker deployment or a local checkout (`uv run moomoo-api-mcp`) to run this fork.
+This repository is a fork of [Litash/moomoo-api-mcp](https://github.com/Litash/moomoo-api-mcp). The PyPI package `moomoo-api-mcp` (what `uvx moomoo-api-mcp` and `uv tool install moomoo-api-mcp` install) is published by upstream, not by this fork; this fork does not publish to PyPI, and `.github/workflows/python-publish.yml` and `manual-release.yml` are inherited from upstream and not maintained here. What this fork builds and maintains is the container deployment: CI (`.github/workflows/ci.yml`) builds the application image, carrying OpenD alongside the server, and the optional ChatGPT tunnel image. Main pushes publish both to the existing ECR repository under separate commit tags; `docs/deploy-vps.md` deploys them without a VPS build. A PyPI install therefore runs upstream's release, which can differ from this fork's code — use the Docker deployment or a local checkout (`uv run moomoo-api-mcp`) to run this fork.
 
 ## Features
 
@@ -203,9 +203,13 @@ docker compose build
 OpenD requires an interactive verification code (SMS/2FA) on initial device registration:
 
 ```bash
-docker compose run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp
+docker compose run --rm --no-deps -it \
+  -e OPEND_INTERACTIVE=1 -e OPEND_MAX_RESTARTS=0 moomoo-mcp
 ```
-Without `OPEND_INTERACTIVE=1`, a headless start without a remembered token exits with an error instead of hanging.
+The pinned OpenD deployment uses interactive login once, then remembered login
+for unattended starts. If remembered state is missing, the supervisor keeps MCP
+diagnostics available without starting OpenD. The command above disables gateway
+retries for the interactive attempt; stop if login fails instead of retrying.
 
 Follow the prompts in your terminal:
 1. **Account**: Enter your Moomoo ID, email, or phone number.
@@ -226,6 +230,8 @@ Set your account number so OpenD knows which saved session to load:
 ```env
 MOOMOO_LOGIN_ACCOUNT=12345678
 MOOMOO_LOGIN_REGION=sg        # sg (Singapore), us, hk, etc.
+MOOMOO_LOGIN_BY_REMEMBER=1    # reuse the login saved in opend-data
+OPEND_INTERACTIVE=0          # normal background operation
 MOOMOO_SECURITY_FIRM=FUTUSG   # FUTUSG (Singapore), FUTUINC (US), etc.
 MOOMOO_TRADING_MODE=READ_ONLY  # READ_ONLY (default), SIMULATE, or REAL
 MOOMOO_TRADING_MARKET=NONE     # NONE (all securities markets) or HK, US, CN, HKCC, SG, AU, JP, MY, CA
@@ -707,3 +713,22 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 - **Use at your own risk**: Trading involves financial risk. The authors provide this software "as is" without warranty of any kind.
 - **Test First**: Always test your agents and tools in the **Simulation (Paper Trading)** environment before using real funds.
+
+
+### Optional official ChatGPT tunnel
+
+CI publishes both images to the existing ECR repository. Set
+`CHATGPT_TUNNEL_API_KEY` and `CHATGPT_TUNNEL_ID` in the deployment `.env`, alongside
+its existing `MCP_AUTH_TOKEN` and `MOOMOO_TRADING_MODE=READ_ONLY`, then run
+`./scripts/deploy.sh --chatgpt`. Later deployments retain the selection;
+`./scripts/deploy.sh --no-chatgpt` disables it. The script selects the matching
+immutable image and preserves the existing Compose project and persistent volumes.
+No separate host build or credential-staging command is needed. Normal restarts
+reuse credentials; deliberate rotations recreate affected containers.
+
+The official client uses fixed endpoints and a filtered child environment, with
+accepted upstream redirect limitations under trust in OpenAI and the Docker host.
+ChatGPT access is read-only; disable the tunnel before changing the trading mode.
+The separate container publishes no ports and cannot reach OpenD over the bridge.
+See [the tunnel deployment runbook](docs/private-chatgpt-mcp.md) for configuration, diagnostics and rollback.
+Live OpenAI, ChatGPT web and iPad acceptance are separate checks.

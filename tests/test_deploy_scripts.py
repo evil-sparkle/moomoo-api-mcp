@@ -45,7 +45,12 @@ class DeployScriptsTest(unittest.TestCase):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         (self.repo / "scripts").mkdir()
-        for name in ("deploy.sh", "compose-prod.sh", "deploy_verify.py"):
+        for name in (
+            "deploy.sh",
+            "compose-prod.sh",
+            "deploy_verify.py",
+            "tunnel_deployment.py",
+        ):
             shutil.copy2(ROOT / "scripts" / name, self.repo / "scripts" / name)
         for name in (
             "docker-compose.yml",
@@ -114,6 +119,12 @@ if name == "aws":
         sys.exit(254)
     if mode == "missing" and "moomoo-api-mcp" in sys.argv:
         print("None")
+    elif any(arg.startswith("imageTag=tunnel-") for arg in args):
+        tunnel_mode = os.environ.get("AWS_TEST_TUNNEL", "ok")
+        if tunnel_mode == "denied":
+            print("AccessDeniedException: test tunnel denial", file=sys.stderr)
+            sys.exit(254)
+        print("None" if tunnel_mode == "missing" else "sha256:" + "b" * 64)
     elif mode == "only_latest":
         if "imageTag=latest" in sys.argv:
             print("sha256:latest-digest")
@@ -125,8 +136,15 @@ if name == "docker":
     if args[2:4] == ["container", "inspect"]:
         if os.environ.get("DOCKER_TEST_FAIL_INSPECT") == "1":
             sys.exit(1)
+        if "com.docker.compose.project" in " ".join(args):
+            print(os.environ.get("DOCKER_TEST_PROJECT", "existing-project"))
+            sys.exit(0)
         calls = pathlib.Path(os.environ["CALL_LOG"]).read_text().splitlines()
-        inspections = sum("container" in json.loads(line)[1] for line in calls)
+        inspections = sum(
+            "container" in json.loads(line)[1]
+            and "com.docker.compose.project" not in " ".join(json.loads(line)[1])
+            for line in calls
+        )
         if (inspections > 1
                 and os.environ.get("DOCKER_TEST_FAIL_CURRENT_INSPECT") == "1"):
             sys.exit(1)
@@ -150,7 +168,20 @@ if name == "docker":
             sys.exit(15)
         token = os.environ.get("DOCKER_TEST_TOKEN", "test-only")
         service = {{"environment": {{"MCP_AUTH_TOKEN": token}}}}
-        print(json.dumps({{"services": {{"moomoo-mcp": service}}}}))
+        services = {{"moomoo-mcp": service}}
+        if pathlib.Path('.chatgpt-deploy.json').exists():
+            service['environment']['MOOMOO_TRADING_MODE'] = 'READ_ONLY'
+            image = os.environ.get('CHATGPT_TUNNEL_IMAGE')
+            services['chatgpt-tunnel'] = {{'image': image, 'environment': {{
+                'CHATGPT_TUNNEL_API_KEY': os.environ.get(
+                    'DOCKER_TEST_TUNNEL_KEY', 'synthetic-key'),
+                'CHATGPT_TUNNEL_ID': 'tunnel_synthetic',
+            }}}}
+        print(json.dumps({{"services": services}}))
+    if "compose" in args and "config" not in args:
+        with open(os.environ["CALL_LOG"], "a") as log:
+            image = os.environ.get("CHATGPT_TUNNEL_IMAGE")
+            log.write(json.dumps(["tunnel-image", [image], None]) + "\\n")
     if os.environ.get("DOCKER_TEST_FAIL_LOGS") == "1" and "logs" in sys.argv:
         sys.exit(1)
     if os.environ.get("DOCKER_TEST_FAIL_UP_ALWAYS") == "1" and "up" in sys.argv:
@@ -215,7 +246,11 @@ if name == "curl":
     def compose_commands(self):
         """The Compose subcommand of each docker call, in order."""
         return [
-            args[args.index("docker-compose.prod.yml") + 1]
+            next(
+                arg
+                for arg in args
+                if arg in {"config", "pull", "up", "logs", "stop", "rm"}
+            )
             for name, args, _ in self.calls()
             if name == "docker" and "compose" in args
         ]
@@ -253,12 +288,215 @@ if name == "curl":
                 f"{repo} previous-alias sha256:previous",
                 f"{repo} old sha256:old",
                 f"{repo} older sha256:older",
+                f"{repo} tunnel-old sha256:tunnel-previous",
+                f"{repo} tunnel-latest sha256:tunnel-current",
                 f"{repo}-other old sha256:other",
                 "other-registry/moomoo-api-mcp old sha256:other",
                 "<none> <none> sha256:dangling",
             ]
         )
         return repo
+
+    def select_tunnel(self):
+        selection = {
+            "version": 2,
+            "image": f"{REGISTRY}/moomoo-api-mcp@sha256:" + "a" * 64,
+            "project": "existing-project",
+        }
+        path = self.repo / ".chatgpt-deploy.json"
+        path.write_text(json.dumps(selection) + "\n")
+        return path, selection
+
+    def test_first_enable_selects_matching_image_and_existing_project(self):
+        result = self.deploy("--chatgpt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        selected = json.loads((self.repo / ".chatgpt-deploy.json").read_text())
+        self.assertEqual(
+            selected,
+            {
+                "version": 2,
+                "image": f"{REGISTRY}/moomoo-api-mcp@sha256:" + "b" * 64,
+                "project": "existing-project",
+            },
+        )
+        self.assertIn(
+            "COMPOSE_PROJECT_NAME=existing-project",
+            (self.repo / ".deploy.env").read_text(),
+        )
+        self.assertFalse(
+            any("build" in args for name, args, _ in self.calls() if name == "docker")
+        )
+
+    def test_first_enable_missing_image_leaves_default_off(self):
+        self.env["AWS_TEST_TUNNEL"] = "missing"
+        result = self.deploy("--chatgpt")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        self.assertFalse((self.repo / ".deploy.env").exists())
+        self.assertTrue(all(name == "aws" for name, _, _ in self.calls()))
+
+    def test_first_enable_missing_key_restores_state_before_service_changes(self):
+        previous = self.save_previous_deploy()
+        target = self.add_newer_commit()
+        self.env["DOCKER_TEST_TUNNEL_KEY"] = ""
+        result = self.deploy("--chatgpt", target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CHATGPT_TUNNEL_API_KEY", result.stderr)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        self.assertEqual((self.repo / ".deploy.env").read_text(), previous)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual(self.compose_commands(), ["config"])
+
+    def test_failed_first_enable_removes_tunnel_and_restores_default_off(self):
+        previous = self.save_previous_deploy()
+        target = self.add_newer_commit()
+        self.env["DOCKER_TEST_FAIL_UP"] = "1"
+        result = self.deploy("--chatgpt", target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        self.assertEqual((self.repo / ".deploy.env").read_text(), previous)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        commands = self.compose_commands()
+        self.assertIn("stop", commands)
+        self.assertIn("rm", commands)
+        self.assertEqual(commands[-1], "up")
+        calls = [
+            args for name, args, _ in self.calls() if name == "docker" and "up" in args
+        ]
+        self.assertNotIn("docker-compose.chatgpt.yml", calls[-1])
+        self.assertIn("existing-project", calls[-1])
+
+    def test_disable_preserves_project_without_requiring_openai_key(self):
+        self.select_tunnel()
+        self.env["DOCKER_TEST_TUNNEL_KEY"] = ""
+        result = self.deploy("--no-chatgpt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        self.assertIn(
+            "COMPOSE_PROJECT_NAME=existing-project",
+            (self.repo / ".deploy.env").read_text(),
+        )
+        self.assertEqual(self.compose_commands()[:2], ["stop", "rm"])
+        self.assertEqual(sum(name == "aws" for name, _, _ in self.calls()), 1)
+        commands = [args for name, args, _ in self.calls() if name == "docker"]
+        self.assertFalse(any("down" in args or "volume" in args for args in commands))
+
+    def test_failure_after_disable_restores_tunnel_and_restarts_previous_stack(self):
+        path, selected = self.select_tunnel()
+        previous = self.save_previous_deploy()
+        target = self.add_newer_commit()
+        self.env["DOCKER_TEST_FAIL_PULL"] = "1"
+        result = self.deploy("--no-chatgpt", target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(path.read_text()), selected)
+        self.assertEqual((self.repo / ".deploy.env").read_text(), previous)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual(self.compose_commands()[-1], "up")
+        up = next(
+            args
+            for name, args, _ in reversed(self.calls())
+            if name == "docker" and "up" in args
+        )
+        self.assertIn("docker-compose.chatgpt.yml", up)
+        self.assertIn("existing-project", up)
+
+    def test_conflicting_tunnel_flags_and_prepare_disable_are_rejected(self):
+        for args in (("--chatgpt", "--no-chatgpt"), ("--prepare", "--no-chatgpt")):
+            with self.subTest(args=args):
+                result = self.deploy(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.calls())
+
+    def test_selected_tunnel_deploys_matching_ci_digest_without_building(self):
+        path, previous = self.select_tunnel()
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        image = f"{REGISTRY}/moomoo-api-mcp@sha256:" + "b" * 64
+        self.assertEqual(json.loads(path.read_text()), {**previous, "image": image})
+        aws = [args for name, args, _ in self.calls() if name == "aws"]
+        self.assertEqual(len(aws), 2)
+        self.assertIn("imageTag=tunnel-" + self.commit[:7], aws[1])
+        calls = self.calls()
+        pull = next(
+            args for name, args, _ in calls if name == "docker" and "pull" in args
+        )
+        self.assertEqual(pull[-3:], ["pull", "moomoo-mcp", "chatgpt-tunnel"])
+        self.assertIn("existing-project", pull)
+        self.assertIn("docker-compose.chatgpt.yml", pull)
+        self.assertFalse(
+            any("build" in args for name, args, _ in calls if name == "docker")
+        )
+        self.assertTrue(
+            all(args == [image] for name, args, _ in calls if name == "tunnel-image")
+        )
+
+    def test_selected_tunnel_lookup_failure_leaves_checkout_and_selection_unchanged(
+        self,
+    ):
+        path, _ = self.select_tunnel()
+        original = path.read_text()
+        target = self.add_newer_commit()
+        for mode in ("missing", "denied"):
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                self.env["AWS_TEST_TUNNEL"] = mode
+                result = self.deploy(target)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("could not confirm moomoo-api-mcp:tunnel-", result.stderr)
+                if mode == "denied":
+                    self.assertIn("AccessDeniedException", result.stderr)
+                self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+                self.assertEqual(path.read_text(), original)
+                self.assertFalse((self.repo / ".deploy.env").exists())
+                self.assertTrue(all(name == "aws" for name, _, _ in self.calls()))
+
+    def test_selected_tunnel_rollback_restores_previous_digest_and_project(self):
+        path, previous = self.select_tunnel()
+        saved_env = self.save_previous_deploy()
+        target = self.add_newer_commit()
+        for failure in ("CONFIG", "PULL", "UP", "verify", "prepare-pull"):
+            with self.subTest(failure=failure):
+                self.log.unlink(missing_ok=True)
+                self.log.with_name("up_marker").unlink(missing_ok=True)
+                option = (
+                    "CURL_TEST_FAIL"
+                    if failure == "verify"
+                    else "DOCKER_TEST_FAIL_"
+                    + ("PULL" if failure == "prepare-pull" else failure)
+                )
+                with mock.patch.dict(self.env, {option: "1"}):
+                    result = self.deploy(
+                        *(
+                            ["--prepare", target]
+                            if failure == "prepare-pull"
+                            else [target]
+                        )
+                    )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(path.read_text()), previous)
+                self.assertEqual((self.repo / ".deploy.env").read_text(), saved_env)
+                self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+                if failure in ("UP", "verify"):
+                    images = [
+                        args[0]
+                        for name, args, _ in self.calls()
+                        if name == "tunnel-image"
+                    ]
+                    self.assertEqual(images[-1], previous["image"])
+
+    def test_selected_tunnel_refuses_unsupported_target_before_checkout(self):
+        wrapper = self.repo / "scripts" / "compose-prod.sh"
+        wrapper.write_text("#!/bin/sh\nexit 0\n")
+        self.git("add", "scripts/compose-prod.sh")
+        self.git("commit", "-m", "test unsupported tunnel target")
+        unsupported = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "--quiet", "--detach", self.commit)
+        (self.repo / ".chatgpt-deploy.json").write_text("{}")
+        result = self.deploy(unsupported)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Disable the tunnel", result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
+        self.assertEqual(self.calls(), [])
 
     def test_cleanup_keeps_both_images_and_their_aliases(self):
         repo = self.seed_images()

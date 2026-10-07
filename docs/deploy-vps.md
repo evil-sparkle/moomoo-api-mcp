@@ -123,9 +123,9 @@ Create `$HOME/moomoo/.env` (mode 0600, not committed). See `.env.example` for th
 ```ini
 # Login identity
 MOOMOO_LOGIN_ACCOUNT=                          # your Moomoo login identity
-MOOMOO_LOGIN_PWD_MD5=                          # leave blank (first run uses console)
-MOOMOO_LOGIN_BY_REMEMBER=1                     # set after the first interactive login lands a token
+MOOMOO_LOGIN_BY_REMEMBER=1                     # reuse state from the first interactive login
 MOOMOO_LOGIN_REGION=sg                         # match your account region
+OPEND_INTERACTIVE=0                           # interactive mode is only for one-time setup
 
 # Trading safety
 MOOMOO_TRADING_MODE=READ_ONLY
@@ -226,27 +226,38 @@ an older published commit: `./scripts/deploy.sh --prepare <commit>`.
 Every Compose command below uses `compose-prod.sh`, which loads `.env` and
 `.deploy.env` explicitly. The same wrapper is used by systemd.
 
-This is the one non-mechanical step. The Linux OpenD build has no password flag, so unattended `-login_pwd_md5` does not work. The only headless path is `login_by_remember`, which needs a token written by a previous **interactive** session that also cleared the device-verification code. Without `OPEND_INTERACTIVE=1`, a headless start without a remembered token now exits with an error instead of hanging.
+This is the one non-mechanical step. Follow the documented
+[OpenD 10.10 startup flow](https://openapi.moomoo.com/moomoo-api-doc/en/opend/opend-cmd.html):
+log in interactively once, complete device verification and remember the password.
+Unattended starts then use `login_by_remember` with the persistent OpenD volume.
+The unverified `MOOMOO_LOGIN_PWD_MD5` startup option has been retired from this
+deployment; an old environment value is ignored. If remembered state is missing,
+the supervisor reports the required setup and keeps MCP diagnostics available
+without starting OpenD.
 
 ```sh
 cd "$HOME/moomoo"
-./scripts/compose-prod.sh run --rm -it -e OPEND_INTERACTIVE=1 moomoo-mcp
+./scripts/compose-prod.sh run --rm --no-deps -it \
+  -e OPEND_INTERACTIVE=1 -e OPEND_MAX_RESTARTS=0 moomoo-mcp
 ```
 
-This runs the supervisor with the gateway in interactive mode; OpenD prints its banner, then asks for the device-verification code. Check the Moomoo app on your phone, enter the 6-digit code. It then prompts:
+This runs OpenD interactively with supervisor retries disabled. Follow its account,
+password and device-verification prompts directly in your terminal. If login fails
+or OpenD reports a cooldown, stop with Ctrl-C rather than retrying. When asked:
 
 > Remember the password? (Y/n)
 
 Type `Y`. OpenD logs in, the token file appears under `/home/opend/.com.moomoo.OpenD/F3CNN/`, and the container exits when you Ctrl-C.
 
-Verify the token:
+Check that remembered state exists without printing credential files or account
+identifiers:
 
 ```sh
-./scripts/compose-prod.sh run --rm --entrypoint /bin/sh moomoo-mcp -c \
-  'ls -la "$HOME/.com.moomoo.OpenD/F3CNN/"'
-# Inspect UserAccMap/ and ftnet/auth_acc_list inside the mounted volume.
-# Presence alone does not prove login; also confirm a successful OpenD login.
+./scripts/compose-prod.sh run --rm --no-deps --entrypoint python moomoo-mcp -c \
+  'from moomoo_mcp.supervisor import has_remembered_token; print(has_remembered_token("/home/opend"))'
 ```
+
+`True` confirms state is present; also confirm OpenD reported successful login.
 
 You only do this once per account-region. Subsequent restarts use `login_by_remember=1` and complete unattended. If you ever wipe `opend-data` or change region, the same interactive flow must happen again.
 
@@ -331,7 +342,18 @@ takes effect immediately.
 
 How far back you can roll back is bounded by the ECR lifecycle policy, which
 keeps every `v*`-tagged image and the 30 most recent commit builds per
-repository.
+repository. Optional tunnel images share this repository under `tunnel-*` tags,
+so they share its retention policy; do not assume a separate 30-image window or
+that `tunnel-v*` tags receive the application's `v*` exemption.
+
+When the private ChatGPT tunnel is explicitly selected, CI also publishes its
+image as `moomoo-api-mcp:tunnel-<commit>`. The deploy script confirms that tag
+before checkout, saves its immutable ECR digest in `.chatgpt-deploy.json`, and
+pulls both selected images. The VPS needs no separate image build. Default
+deployment still checks and pulls only the application image. Follow the
+[private ChatGPT runbook](private-chatgpt-mcp.md): add the two OpenAI settings
+to `.env` and enable with `scripts/deploy.sh --chatgpt`; subsequent deployments
+retain that selection.
 
 After start, it verifies the endpoint as a client would: an authenticated MCP
 `initialize` using the `MCP_AUTH_TOKEN` Compose resolves for the service,
@@ -345,9 +367,9 @@ immediately. The token reaches curl on
 stdin, never a command line or file; the resolved configuration is never
 printed or written anywhere. On failure, or if the configuration cannot be
 resolved, or `pull` or `up` fails, it restores the previous `.deploy.env` and
-commit (restarting the previous deployment if something had been started) and
+commit and any previous tunnel image selection (restarting the previous deployment if something had been started) and
 exits non-zero. If the rollback's own restart fails, the script says so and the
-stack needs a manual `scripts/compose-prod.sh up -d`. Verification does not
+stack needs attention: retry `scripts/deploy.sh <previous-commit>`. Verification does not
 prove OpenD login.
 After verification succeeds, local image cleanup keeps the current container's
 image and the image used by the container before deployment, including all
@@ -357,13 +379,13 @@ forced deletion or a global prune. Cleanup is skipped for `--prepare`, failed
 deployments, an unidentified previous container (including the first deploy),
 and redeploys using the same image, which preserve the earlier rollback image.
 Cleanup errors warn without failing a verified deployment. Other repositories,
-untagged images, and volumes are untouched.
+untagged images, tunnel-prefixed tags, and volumes are untouched.
 
 Confirm login and MCP availability after each deployment; container startup
 alone is not a successful authenticated session.
 
-Keep the tracked working tree clean. Runtime secrets belong in `.env`; the two
-saved deployment settings belong in `.deploy.env`. Both are ignored by Git.
+Keep the tracked working tree clean. Runtime secrets belong in `.env`; the non-secret
+registry, image tag and retained Compose project belong in `.deploy.env`. Both are ignored by Git.
 Tags are mutable in ECR, so a commit tag records source identity but is not a
 cryptographic guarantee of immutable image content.
 
@@ -430,18 +452,19 @@ the container is meant to reach it.
 ## Everyday: rotate `MCP_AUTH_TOKEN`
 
 Rotate whenever the token has been displayed, shared, or copied into a client
-you no longer control. Only the MCP server reads it, so OpenD keeps its session
+you no longer control. The MCP server and enabled tunnel reuse it; OpenD retains its persisted session
 and no interactive login is needed.
 
 ```sh
 cd "$HOME/moomoo"
 NEW_TOKEN="$(openssl rand -hex 32)"
 sed -i "s|^MCP_AUTH_TOKEN=.*|MCP_AUTH_TOKEN=${NEW_TOKEN}|" .env
-systemctl --user restart moomoo.service
+./scripts/deploy.sh
 echo "$NEW_TOKEN"
 ```
 
-Paste the printed value into every client config's `Authorization: Bearer …`
+When the tunnel is enabled, follow the coordinated rotation sequence in
+[the tunnel runbook](private-chatgpt-mcp.md). Paste the printed value into every client config's `Authorization: Bearer …`
 header, then confirm the old token is refused and the new one is accepted:
 
 ```sh
@@ -465,3 +488,22 @@ cd "$HOME/moomoo"
 This retains the named volume. Account changes and deliberate token removal
 require a separate, explicit storage-cleanup procedure; deleting a similarly
 named directory in the checkout does not remove the Docker volume.
+
+
+### Optional official ChatGPT tunnel
+
+CI publishes both images to the existing ECR repository. Set
+`CHATGPT_TUNNEL_API_KEY` and `CHATGPT_TUNNEL_ID` in the deployment `.env`, alongside
+its existing `MCP_AUTH_TOKEN` and `MOOMOO_TRADING_MODE=READ_ONLY`, then run
+`./scripts/deploy.sh --chatgpt`. Later deployments retain the selection;
+`./scripts/deploy.sh --no-chatgpt` disables it. The script selects the matching
+immutable image and preserves the existing Compose project and persistent volumes.
+No separate host build or credential-staging command is needed. Normal restarts
+reuse credentials; deliberate rotations recreate affected containers.
+
+The official client uses fixed endpoints and a filtered child environment, with
+accepted upstream redirect limitations under trust in OpenAI and the Docker host.
+ChatGPT access is read-only; disable the tunnel before changing the trading mode.
+The separate container publishes no ports and cannot reach OpenD over the bridge.
+See [the tunnel deployment runbook](private-chatgpt-mcp.md) for configuration, diagnostics and rollback.
+Live OpenAI, ChatGPT web and iPad acceptance are separate checks.
