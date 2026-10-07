@@ -7,9 +7,6 @@ SHALL separately report OpenD readiness using read-only health checks within a
 bounded startup window. Readiness SHALL require successful quote and trade
 probes and explicit confirmation of quote login. Gateway readiness SHALL NOT
 change the meaning of MCP verification or imply trading permission or unlock.
-An unready gateway SHALL leave the verified deployment running without rollback
-and SHALL return deployment success with an explicit gateway warning. Prepare
-mode SHALL NOT run gateway health checks.
 
 #### Scenario: Remembered login completes during startup
 
@@ -30,7 +27,8 @@ mode SHALL NOT run gateway health checks.
 - **WHEN** the readiness window expires without successful probes and confirmed
   quote login, or the health response is refused or malformed
 - **THEN** deployment SHALL clearly report MCP deployment success and unconfirmed
-  OpenD readiness without rolling back or failing the verified deployment
+  OpenD readiness with an explicit gateway warning, leaving the verified
+  deployment running without rollback and returning deployment success
 - **AND** it SHALL NOT claim that every connectivity or permission failure is a
   missing login
 - **AND** it SHALL provide conditional initial-login instructions, including
