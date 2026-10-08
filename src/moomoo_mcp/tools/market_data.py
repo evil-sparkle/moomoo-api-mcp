@@ -193,10 +193,15 @@ async def get_option_chain(
         The provider accepts a range of at most 30 days. A wider range is
         rejected with an error rather than being silently truncated, so you are
         never handed a partial chain believing it is complete.
+
+        All clients of this server share 10 option-chain calls per rolling
+        30 seconds (plus a 0.1-second safety margin). Quota admission waits up
+        to five seconds without occupying an SDK worker, then raises an error
+        containing retry_after_seconds. Provider rejections are not retried.
+        Independent server processes and other OpenD clients are not coordinated.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    contracts = await run_blocking(
-        market_data_service.get_option_chain,
+    contracts = await market_data_service.get_option_chain_async(
         code=code,
         start=start,
         end=end,

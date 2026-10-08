@@ -1,5 +1,8 @@
 """Market data service for accessing quote data via Moomoo API."""
 
+from functools import partial
+
+import anyio.to_thread
 from moomoo import (
     RET_OK,
     AuType,
@@ -10,12 +13,20 @@ from moomoo import (
     TradeDateMarket,
 )
 
+from moomoo_mcp.services.rate_limit import (
+    ProviderRequestLimiter,
+    RateLimitPolicy,
+    Reservation,
+)
 from moomoo_mcp.services.sdk_response import as_dict, as_frame, as_list
 from moomoo_mcp.services.validation import validate_choice, validate_date_range
 
 # get_option_chain accepts at most a 30-day expiry window (the SDK's own default
 # expansion uses 29 days from one supplied bound).
 OPTION_CHAIN_MAX_SPAN_DAYS = 29
+
+# https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-option-chain.html
+OPTION_CHAIN_RATE_LIMIT = RateLimitPolicy("Moomoo", "get_option_chain", 10, 30.0)
 
 OPTION_TYPES = ("ALL", "CALL", "PUT")
 
@@ -74,7 +85,12 @@ class MarketDataService:
     MoomooService.
     """
 
-    def __init__(self, quote_ctx: OpenQuoteContext | None):
+    def __init__(
+        self,
+        quote_ctx: OpenQuoteContext | None,
+        *,
+        option_chain_limiter: ProviderRequestLimiter | None = None,
+    ):
         """Initialize MarketDataService with an existing quote context.
 
         Args:
@@ -83,8 +99,15 @@ class MarketDataService:
                 builds this service from MoomooService.quote_ctx, which is
                 None until a connection succeeds; every method here guards on
                 it and raises rather than dereferencing it.
+            option_chain_limiter: Optional shared budget for separate wrappers
+                using the same gateway. Defaults to this service's own budget.
         """
         self.quote_ctx = quote_ctx
+        # get_services owns one service for all MCP clients. Wrappers around
+        # that gateway must inject the same limiter if constructed separately.
+        self.option_chain_limiter = option_chain_limiter or ProviderRequestLimiter(
+            OPTION_CHAIN_RATE_LIMIT
+        )
 
     def subscribe(self, codes: list[str], sub_types: list[str]) -> None:
         """Subscribe to real-time data for specified stocks and data types.
@@ -361,7 +384,54 @@ class MarketDataService:
                 end, the range exceeds the provider's 30-day limit, or
                 option_type is unsupported.
             RuntimeError: If not connected, or the provider rejects the query.
+                Quota exhaustion raises ProviderRateLimitError immediately;
+                async callers should use get_option_chain_async to wait briefly.
         """
+        underlying, normalized_type = self._validate_option_chain(
+            code, start, end, option_type
+        )
+        reservation = self.option_chain_limiter.reserve()
+        try:
+            return self._query_option_chain(
+                reservation, underlying, start, end, normalized_type
+            )
+        finally:
+            reservation.release()
+
+    async def get_option_chain_async(
+        self,
+        code: str,
+        start: str | None = None,
+        end: str | None = None,
+        option_type: str = "ALL",
+    ) -> list[dict]:
+        """Validate and await quota before consuming an SDK worker slot.
+
+        Uses the same budget and response handling as get_option_chain. An
+        unused reservation is released on cancellation, even if a queued
+        worker starts later. A dispatched attempt is never refunded or retried.
+        """
+        underlying, normalized_type = self._validate_option_chain(
+            code, start, end, option_type
+        )
+        reservation = await self.option_chain_limiter.acquire()
+        try:
+            return await anyio.to_thread.run_sync(
+                partial(
+                    self._query_option_chain,
+                    reservation,
+                    underlying,
+                    start,
+                    end,
+                    normalized_type,
+                )
+            )
+        finally:
+            reservation.release()
+
+    def _validate_option_chain(
+        self, code: str, start: str | None, end: str | None, option_type: str
+    ) -> tuple[str, str]:
         if not self.quote_ctx:
             raise RuntimeError("Quote context not connected")
 
@@ -376,7 +446,19 @@ class MarketDataService:
             span_label="30 days",
         )
         normalized_type = validate_choice("option_type", option_type, OPTION_TYPES)
+        return underlying, normalized_type
 
+    def _query_option_chain(
+        self,
+        reservation: Reservation,
+        underlying: str,
+        start: str | None,
+        end: str | None,
+        normalized_type: str,
+    ) -> list[dict]:
+        if not self.quote_ctx:
+            raise RuntimeError("Quote context not connected")
+        reservation.start()
         ret, data = self.quote_ctx.get_option_chain(
             code=underlying,
             start=start,
