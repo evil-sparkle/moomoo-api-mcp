@@ -424,7 +424,10 @@ class MarketDataService:
                     start,
                     end,
                     normalized_type,
-                )
+                ),
+                # Allow cancellation cleanup to release an unused reservation
+                # even after a worker is assigned. start() rejects late work.
+                abandon_on_cancel=True,
             )
         finally:
             reservation.release()

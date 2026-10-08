@@ -207,7 +207,71 @@ async def test_anyio_cancellation_during_quota_wait_never_dispatches(
     service.get_option_chain("US.REPLACEMENT")
 
 
-async def test_cancelled_dispatched_sdk_call_remains_counted(governed_context):
+async def test_anyio_cancellation_after_worker_assignment_prevents_dispatch(
+    governed_context, monkeypatch
+):
+    service = governed_context.market_data_service
+    quote = quote_context(governed_context)
+    for _ in range(9):
+        service.get_option_chain("US.XYZ")
+    loop = asyncio.get_running_loop()
+    assigned = asyncio.Event()
+    finished = asyncio.Event()
+    release = Event()
+    worker_errors = []
+    original_query = service._query_option_chain
+
+    def paused_query(*args, **kwargs):
+        loop.call_soon_threadsafe(assigned.set)
+        try:
+            if not release.wait(timeout=5):
+                raise AssertionError("test did not release SDK worker")
+            return original_query(*args, **kwargs)
+        except RuntimeError as exc:
+            worker_errors.append(str(exc))
+            raise
+        finally:
+            loop.call_soon_threadsafe(finished.set)
+
+    monkeypatch.setattr(service, "_query_option_chain", paused_query)
+    scope = anyio.CancelScope()
+
+    async def request():
+        with scope:
+            await service.get_option_chain_async("US.CANCELLED")
+
+    waiting = asyncio.create_task(request())
+    try:
+        await asyncio.wait_for(assigned.wait(), timeout=2)
+        # The assigned worker holds its callable, so replacement calls can use
+        # the real query while the cancelled worker is still paused.
+        monkeypatch.setattr(service, "_query_option_chain", original_query)
+        scope.cancel()
+        await asyncio.wait_for(waiting, timeout=1)
+        assert quote.get_option_chain.call_count == 9
+        service.get_option_chain("US.REPLACEMENT")
+        assert quote.get_option_chain.call_count == 10
+        release.set()
+        await asyncio.wait_for(finished.wait(), timeout=2)
+        assert worker_errors == [
+            "Provider request reservation already released or used"
+        ]
+        assert quote.get_option_chain.call_count == 10
+        assert all(
+            call.kwargs["code"] != "US.CANCELLED"
+            for call in quote.get_option_chain.call_args_list
+        )
+    finally:
+        release.set()
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        await asyncio.wait_for(finished.wait(), timeout=2)
+
+
+@pytest.mark.parametrize("cancellation", ["asyncio", "anyio"])
+async def test_cancelled_dispatched_sdk_call_remains_counted(
+    governed_context, cancellation
+):
     service = governed_context.market_data_service
     quote = quote_context(governed_context)
     for _ in range(9):
@@ -228,12 +292,22 @@ async def test_cancelled_dispatched_sdk_call_remains_counted(governed_context):
             loop.call_soon_threadsafe(finished.set)
 
     quote.get_option_chain.side_effect = sdk
-    request = asyncio.create_task(service.get_option_chain_async("US.XYZ"))
+    scope = anyio.CancelScope()
+
+    async def invoke():
+        with scope:
+            await service.get_option_chain_async("US.XYZ")
+
+    request = asyncio.create_task(invoke())
     try:
         await asyncio.wait_for(started.wait(), timeout=2)
-        request.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await request
+        if cancellation == "asyncio":
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        else:
+            scope.cancel()
+            await asyncio.wait_for(request, timeout=1)
         with pytest.raises(ProviderRateLimitError):
             service.get_option_chain("US.XYZ")
         assert quote.get_option_chain.call_count == 10
