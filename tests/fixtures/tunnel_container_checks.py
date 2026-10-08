@@ -6,6 +6,7 @@ OpenAI acceptance. Historical upstream findings remain in earlier Git commits.
 
 import argparse
 import atexit
+import copy
 import errno
 import hashlib
 import ipaddress
@@ -925,6 +926,7 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
 
     assert control_stats()["proxy_hits"] == 1
 
+    brokerage_fixture = copy.deepcopy(fixture["services"]["moomoo-mcp"])
     # Exercise the actual manager against mode/auth/result refusals. These modes
     # exist only in a stdlib response fixture; brokerage trading is never enabled.
     shutil.copyfile(
@@ -934,8 +936,8 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
     (workspace / "preflight-server.py").chmod(0o444)
     before = control_stats()["authenticated"]
     for behavior, diagnostic in (
-        ("SIMULATE", "READ_ONLY"),
         ("REAL", "READ_ONLY"),
+        ("UNKNOWN", "READ_ONLY"),
         ("wrong-auth", "HTTP 401"),
         ("malformed", "malformed JSON"),
     ):
@@ -989,6 +991,66 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
     assert control_stats()["authenticated"] == before
     print(
         "PASS: actual image exhausts bounded startup deadline without client polling",
+        flush=True,
+    )
+
+    # Restore the real brokerage entrypoint in SIMULATE with its retained paper
+    # journal. OpenD remains the inert local stub: no provider is contacted.
+    fixture["services"]["moomoo-mcp"] = brokerage_fixture
+    brokerage_fixture["environment"].update(
+        MOOMOO_TRADING_MODE="SIMULATE",
+        MOOMOO_SIMULATED_ACC_IDS="123",
+        MOOMOO_JOURNAL_PATH="/var/lib/moomoo-mcp/data/execution.sqlite3",
+        MOOMOO_CREATE_JOURNAL="0",
+    )
+    updated = (
+        yaml.safe_dump(fixture)
+        .replace(
+            "    container_name: null",
+            '    container_name: !reset null\n    ports: !override ["127.0.0.1::8000"]',
+        )
+        .replace("    build: null", "    build: !reset null")
+    )
+    (workspace / "fixture.yml").write_text(updated)
+    run(
+        compose + ["up", "-d", "--no-deps", "--force-recreate", "moomoo-mcp"],
+        env=env,
+    )
+    run(compose + ["up", "-d", "--no-deps", "chatgpt-tunnel"], env=env)
+    wait_for(lambda: control_stats()["authenticated"] > before, 100)
+    enqueue_health = (
+        "import urllib.request;urllib.request.urlopen(urllib.request.Request("
+        "'http://127.0.0.1:8081/enqueue-health',data=b''))"
+    )
+    run(
+        compose
+        + ["exec", "-T", "tunnel-control-plane", "python", "-c", enqueue_health],
+        env=env,
+    )
+    wait_for(lambda: "SIMULATE" in control_stats()["forwarded_modes"])
+    logs = run(compose + ["logs", "--no-color", "chatgpt-tunnel"], env=env)
+    assert "SIMULATE startup verified" in logs
+    # The SIMULATE executor owns the process lock. Verify persistence with a
+    # read-only SQLite connection rather than opening a competing executor.
+    simulate_markers = """import sqlite3
+from pathlib import Path
+device = Path('/home/opend/.com.moomoo.OpenD/tunnel-fixture-marker')
+assert device.read_text() == 'synthetic-state'
+database = Path('/var/lib/moomoo-mcp/data/execution.sqlite3')
+with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as db:
+    row = db.execute(
+        'SELECT operation_id FROM operations WHERE operation_id=?',
+        ('migration-marker',),
+    ).fetchone()
+    assert row == ('migration-marker',)
+"""
+    run(
+        compose + ["exec", "-T", "moomoo-mcp", "python", "-c", simulate_markers],
+        env=env,
+    )
+    print(
+        "PASS: official client starts and forwards actual SIMULATE MCP health; "
+        "existing journal and OpenD state retained (no live broker)",
         flush=True,
     )
 

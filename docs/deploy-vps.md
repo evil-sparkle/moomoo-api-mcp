@@ -26,9 +26,10 @@ The base deployment is READ_ONLY. See [state and restarts](#state-and-restart-re
 for storage and process behavior, and [private ChatGPT access](#optional-chatgpt-access)
 for the optional tunnel enabled through this same deployment entrypoint.
 
-**Paper execution is not integrated into this deployment path yet.** The script
-does not select `docker-compose.paper.yml`; setting SIMULATE in the environment
-alone is insufficient. See [the paper support boundary](#deployment-support-boundary).
+The production wrapper selects `docker-compose.paper.yml` in SIMULATE and for
+selected ChatGPT tunnels. Configure the paper-account allowlist and journal
+before starting SIMULATE; the overlay alone does not initialize a journal.
+See [the paper support boundary](#deployment-support-boundary).
 
 ---
 
@@ -499,10 +500,14 @@ See the [container deployment](../openspec/specs/container-deployment/spec.md),
 ## Optional ChatGPT access
 
 The optional Compose service runs the unmodified OpenAI tunnel client. ChatGPT
-access requires server-enforced `READ_ONLY`; order placement, modification,
-cancellation, trade unlocking and operator recovery are refused. The ordinary
-MCP bearer is not a permanently read-only credential: disable the tunnel before
-changing the deployment to SIMULATE or REAL.
+access permits server-enforced `READ_ONLY` or `SIMULATE`. In `READ_ONLY`, every
+order mutation is refused. In `SIMULATE`, supported paper orders are permitted
+for explicitly allowlisted simulated accounts through the persistent execution
+journal. Real-account, position and market-data reads remain available; real
+orders and trade unlocking are refused before any gateway write. Operator
+recovery requires its separate credential, which is never given to the tunnel.
+The ordinary MCP bearer follows the server's trading mode: disable the tunnel
+before changing the deployment to `REAL`.
 
 ### Configure and deploy
 
@@ -523,6 +528,18 @@ CHATGPT_TUNNEL_API_KEY=<OpenAI tunnel runtime key with Tunnels Read and Use>
 CHATGPT_TUNNEL_ID=<selected tunnel identifier beginning tunnel_>
 ```
 
+For paper trading, select `MOOMOO_TRADING_MODE=SIMULATE` and configure the
+simulated-account allowlist and journal prerequisites in
+[paper execution](#standalone-paper-topology). Selected tunnel deployments also
+include `docker-compose.paper.yml`, with the same project-scoped `execution-data`
+volume across `READ_ONLY` and `SIMULATE`. `READ_ONLY` never opens the journal.
+Set `MOOMOO_CREATE_JOURNAL=1` only for deliberate first initialization, then
+return it to `0`. Preserve the existing journal when switching modes.
+Paper tool calls must explicitly use `trd_env="SIMULATE"`, the selected paper
+account, and the operation ID and admission epoch required by paper execution.
+Real-account reads may explicitly use `trd_env="REAL"`; the server never silently
+converts a real-order request into a paper order.
+
 The launcher derives the MCP Authorization header automatically. Supply a limited
 OpenAI runtime key, never an admin key, brokerage login, trade password or operator
 token. The tunnel receives only the three named tunnel inputs; the deployment
@@ -539,9 +556,9 @@ Enable once, after main CI publishes the images:
 
 Subsequent `./scripts/deploy.sh [commit]` deployments retain the selection. The
 script confirms both ECR tags before checkout, saves the immutable tunnel digest,
-pulls both images, validates authentication and READ_ONLY settings, then starts
-the stack. First enablement detects the running container's Compose project and
-saves that project for subsequent enabled and disabled deployments, preserving
+pulls both images, validates authentication and READ_ONLY or SIMULATE settings,
+then starts the stack. First enablement detects the running container's Compose
+project and saves it for subsequent enabled and disabled deployments, preserving
 its named volumes. A new host uses the checkout directory's default project.
 Missing credentials fail before startup. A missing tunnel image fails before
 checkout or service changes. `--prepare --chatgpt` validates and pulls without
@@ -564,11 +581,11 @@ for organization/workspace eligibility and setup.
 ### Startup, checks and recovery
 
 Before launching the client, the manager performs authenticated MCP initialize,
-tool discovery and `check_health`, requiring READ_ONLY. Transient MCP failures
-retry within a 90-second deadline; invalid credentials, mode or results fail
-closed. Every client launch repeats the gate. Degraded broker connectivity can
-still pass when MCP itself is available and READ_ONLY; that does not prove broker
-login or data access.
+tool discovery and `check_health`, requiring READ_ONLY or SIMULATE. Transient MCP
+failures retry within a 90-second deadline; invalid credentials, mode or results
+fail closed. Every client launch repeats the gate. Degraded broker connectivity
+can still pass when MCP itself is available in an allowed mode; that does not
+prove broker login or data access.
 
 The manager suppresses raw official-client output and prints bounded status
 messages without secrets or account data. It forwards stop signals, reaps the
@@ -617,8 +634,10 @@ client's configured local header alone supplies it in this integration.
 
 This stops/removes only the optional tunnel service and clears its selection while
 continuing the ordinary application deployment. It preserves the saved project
-and persistent state. It does not require Compose down or volume deletion. Do not
-combine disablement with `--prepare`, which promises not to start/stop services.
+and persistent state. In `SIMULATE`, the production wrapper keeps the paper overlay
+selected so local paper execution retains its journal after tunnel disablement.
+It does not require Compose down or volume deletion. Do not combine disablement
+with `--prepare`, which promises not to start/stop services.
 
 The deploy script restores the previous image selection, checkout and deployment
 metadata if a deployment fails. Failed first enablement removes the new optional
@@ -644,18 +663,22 @@ paper and real execution.
 
 ### Deployment support boundary
 
-**The production `scripts/deploy.sh` path does not currently enable paper
-execution.** Its `compose-prod.sh` wrapper selects the base and production files,
-plus the optional ChatGPT overlay; it never selects `docker-compose.paper.yml`.
-Adding journal settings to the host environment alone does not mount the journal
-or pass the paper settings into the service. SIMULATE startup requires them.
+The production `scripts/deploy.sh` path supports paper execution in `SIMULATE`.
+Its shared `compose-prod.sh` wrapper selects `docker-compose.paper.yml` for that
+mode, including when the optional ChatGPT tunnel is disabled. Selected tunnels
+also include the paper overlay in `READ_ONLY`, preserving the project-scoped
+journal volume across mode changes without opening it in `READ_ONLY`.
 
-The Compose examples below describe the standalone development/test topology.
-Do not apply them to the production checkout as an alternative deployment path:
-future deployments and systemd would not retain that overlay. Production paper
-support needs an explicit integration change in the deployment scripts first,
-including persistent selection, verification and rollback. Disable ChatGPT before
-using any trading mode other than READ_ONLY.
+Configure the explicit simulated-account allowlist and journal settings below.
+Journal initialization and recovery remain deliberate operator actions; deployment
+does not reset an existing journal or bypass its review gates. Preserve the saved
+Compose project and both persistent volumes through upgrades and rollback.
+Systemd and subsequent deployments use the same wrapper and mode selection.
+
+Use `deploy.sh` for production. The direct Compose examples below describe
+standalone development and test setups. Automatic production paper-overlay
+selection covers `SIMULATE`; `REAL` without a tunnel retains the base deployment
+files. Disable ChatGPT before switching to `REAL`, which the tunnel refuses.
 
 ### Standalone paper topology
 
@@ -699,8 +722,9 @@ journal. Once created, return it to `0` before normal operation so a missing mou
 fails closed. Never use initialization to erase or bypass an unresolved outcome.
 Do not run `down --volumes` against this deployment.
 
-READ_ONLY deployments omit the paper overlay and need no journal volume. Switching
-an existing executor temporarily to READ_ONLY must retain its original volume for
+READ_ONLY deployments without a selected tunnel omit the paper overlay and need
+no journal volume. Selected tunnel deployments retain its mount. Switching an
+existing executor temporarily to READ_ONLY must retain its original volume for
 later use; READ_ONLY does not open the database even if journal settings exist.
 
 Exactly one executor may hold a journal at a time. A second process or container

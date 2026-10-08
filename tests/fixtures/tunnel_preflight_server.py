@@ -1,6 +1,6 @@
 """Synthetic startup refusals only: no brokerage SDK or trading capability.
 
-SIMULATE/REAL are health response labels, never a configured brokerage mode.
+REAL/UNKNOWN are health response labels, never a configured brokerage mode.
 """
 
 import json

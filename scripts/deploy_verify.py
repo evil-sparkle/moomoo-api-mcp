@@ -55,6 +55,23 @@ COMPOSE_CONFIG = (
     "--format",
     "json",
 )
+BASE_COMPOSE_CONFIG = (
+    "docker",
+    "--context",
+    "rootless",
+    "compose",
+    "--env-file",
+    ".env",
+    "--env-file",
+    ".deploy.env",
+    "-f",
+    "docker-compose.yml",
+    "-f",
+    "docker-compose.prod.yml",
+    "config",
+    "--format",
+    "json",
+)
 DEFAULT_URL = "http://127.0.0.1:8000/mcp"
 DEFAULT_TIMEOUT = 90
 DEFAULT_GATEWAY_TIMEOUT = 60
@@ -119,14 +136,8 @@ def say(message: str) -> None:
     print(f"deploy_verify: {message}", file=sys.stderr, flush=True)
 
 
-def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
-    """Return the token Compose resolves for the service; "" means no auth.
-
-    The value is used exactly as Compose resolved it: no quote stripping,
-    trimming or interpolation, because Compose has already done all of that.
-    The one translation is Compose's own output escaping (see
-    decode_compose_dollars), which is how the resolved value is printed.
-    """
+def resolve_services(command: Sequence[str]) -> dict[str, Any]:
+    """Resolve Compose internally without relaying configuration or raw errors."""
     try:
         completed = subprocess.run(list(command), capture_output=True, check=False)
     except OSError:
@@ -144,7 +155,33 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
     except ValueError:
         raise ConfigError("Compose did not return a JSON configuration.") from None
     services = model.get("services") if isinstance(model, dict) else None
-    service = services.get(SERVICE) if isinstance(services, dict) else None
+    if not isinstance(services, dict) or not isinstance(services.get(SERVICE), dict):
+        raise ConfigError(f"the Compose configuration has no {SERVICE} service.")
+    return services
+
+
+def paper_overlay() -> str:
+    """Keep paper execution configured after disabling a SIMULATE tunnel."""
+    services = resolve_services(BASE_COMPOSE_CONFIG)
+    environment = services[SERVICE].get("environment", {})
+    if not isinstance(environment, dict):
+        raise ConfigError(f"{SERVICE} has invalid environment settings.")
+    mode = environment.get("MOOMOO_TRADING_MODE") or "READ_ONLY"
+    if not isinstance(mode, str):
+        raise ConfigError(f"{SERVICE} has an invalid trading mode.")
+    return "docker-compose.paper.yml" if mode.strip().upper() == "SIMULATE" else ""
+
+
+def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
+    """Return the token Compose resolves for the service; "" means no auth.
+
+    The value is used exactly as Compose resolved it: no quote stripping,
+    trimming or interpolation, because Compose has already done all of that.
+    The one translation is Compose's own output escaping (see
+    decode_compose_dollars), which is how the resolved value is printed.
+    """
+    services = resolve_services(command)
+    service = services.get(SERVICE)
     if not isinstance(service, dict):
         raise ConfigError(f"the Compose configuration has no {SERVICE} service.")
     environment = service.get("environment")
@@ -152,8 +189,10 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
         raise ConfigError(f"{SERVICE} does not set {TOKEN_VARIABLE}.")
     if isinstance(services, dict) and "chatgpt-tunnel" in services:
         mode = (environment.get("MOOMOO_TRADING_MODE") or "READ_ONLY").strip().upper()
-        if mode != "READ_ONLY":
-            raise ConfigError("The selected tunnel requires READ_ONLY; stop it first.")
+        if mode not in {"READ_ONLY", "SIMULATE"}:
+            raise ConfigError(
+                "The selected tunnel requires READ_ONLY or SIMULATE; stop it first."
+            )
     token = environment[TOKEN_VARIABLE]
     if not isinstance(token, str):
         raise ConfigError(
@@ -553,6 +592,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.add_parser(
         "check-config", help="fail unless Compose resolves a usable token"
     )
+    commands.add_parser(
+        "paper-overlay", help="print only the paper overlay needed without a tunnel"
+    )
     verify_parser = commands.add_parser(
         "verify", help="send an authenticated MCP initialize and validate the result"
     )
@@ -578,6 +620,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
     try:
+        if args.command == "paper-overlay":
+            print(paper_overlay())
+            return 0
         token = resolve_token()
         if args.command == "check-config":
             if token:

@@ -199,6 +199,16 @@ def validate_timeout(timeout: float) -> None:
         raise PreflightError("Timeout must be finite and greater than zero.")
 
 
+def validate_trading_mode(health: Any) -> str:
+    """Require server-enforced read-only or paper-only access before forwarding."""
+    mode = health.get("trading_mode") if isinstance(health, dict) else None
+    if not isinstance(mode, str) or mode not in {"READ_ONLY", "SIMULATE"}:
+        raise PreflightError(
+            "check_health did not prove READ_ONLY or SIMULATE operation."
+        )
+    return mode
+
+
 def run(
     *,
     url: str,
@@ -224,9 +234,8 @@ def run(
     client.list_tools()
     milestones.append("tools/list")
     health = client.call_tool("check_health", {})
-    if not isinstance(health, dict) or health.get("trading_mode") != "READ_ONLY":
-        raise PreflightError("check_health did not prove READ_ONLY operation.")
-    milestones.append("check_health:READ_ONLY")
+    trading_mode = validate_trading_mode(health)
+    milestones.append("check_health:" + trading_mode)
     if mode == "startup-safe":
         return milestones
     if trd_env not in {"REAL", "SIMULATE"} or not account_id:

@@ -51,12 +51,13 @@ MCP availability. Do not run a separate OpenD application on the host for this
 container deployment.
 
 - **Optional ChatGPT access:** follow [the tunnel runbook](docs/deploy-vps.md#optional-chatgpt-access)
-  and enable it with `./scripts/deploy.sh --chatgpt`. It requires READ_ONLY.
+  and enable it with `./scripts/deploy.sh --chatgpt`. It permits READ_ONLY or
+  SIMULATE, including real-account reads and supported paper orders.
 - **Local macOS development:** [the rootless Lima setup](README.md#local-rootless-docker-on-macos)
   provides a Linux Docker daemon for local image builds and container checks.
 - **Paper execution:** [the paper runbook](docs/deploy-vps.md#paper-execution-and-recovery) covers its
-  standalone Compose overlay, persistence and recovery. The production deployment
-  script does not yet integrate that overlay.
+  allowlist, journal, persistence and recovery. The production deployment script
+  automatically selects the paper overlay in SIMULATE and for selected tunnels.
 
 ### Alternative: local Docker with a rootful daemon
 
@@ -417,8 +418,11 @@ or a stdio-to-HTTP bridge for its private container endpoint. Do not assume a
 
 Use the [optional official tunnel](docs/deploy-vps.md#optional-chatgpt-access)
 through `deploy.sh --chatgpt`. It connects to this fork's existing container and
-requires READ_ONLY and uses the same stateless HTTP endpoint. Validate tool
-discovery and `check_health` in the actual client before relying on the integration.
+permits READ_ONLY or SIMULATE. ChatGPT can read real accounts and, in SIMULATE,
+trade only explicitly allowlisted paper accounts through the execution journal.
+Real writes and unlocking are refused; disable the tunnel before switching to
+REAL. The tunnel uses the same stateless HTTP endpoint. Validate tool discovery
+and `check_health` in the actual client before relying on the integration.
 
 ## AI Agent Guidance
 

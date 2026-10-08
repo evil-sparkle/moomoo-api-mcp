@@ -15,6 +15,7 @@ stats = {
     "forwarded_ok": 0,
     "proxy_hits": 0,
 }
+forwarded_modes: list[str] = []
 pending = [
     {
         "jsonrpc": "2.0",
@@ -58,7 +59,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/stats":
-            self.answer(200, stats)
+            self.answer(200, {**stats, "forwarded_modes": forwarded_modes})
             return
         if not self.authenticated():
             return
@@ -104,7 +105,12 @@ class Handler(BaseHTTPRequestHandler):
                 runtime_key[0] = "synthetic-runtime-key-rotated"
             self.answer(200, {})
             return
-        if self.path in {"/enqueue", "/enqueue-wrong", "/enqueue-conflict"}:
+        if self.path in {
+            "/enqueue",
+            "/enqueue-health",
+            "/enqueue-wrong",
+            "/enqueue-conflict",
+        }:
             with lock:
                 pending.append(
                     {
@@ -125,6 +131,9 @@ class Handler(BaseHTTPRequestHandler):
                             "Bearer synthetic-conflict",
                         ]
                     }
+                elif self.path == "/enqueue-health":
+                    pending[-1]["method"] = "tools/call"
+                    pending[-1]["params"] = {"name": "check_health", "arguments": {}}
             self.answer(200, {})
             return
         if not self.authenticated():
@@ -136,6 +145,14 @@ class Handler(BaseHTTPRequestHandler):
                 response = body.get("resp_json", {})
                 if isinstance(response, dict) and "result" in response:
                     stats["forwarded_ok"] += 1
+                    content = response["result"].get("structuredContent", {})
+                    mode = (
+                        content.get("trading_mode")
+                        if isinstance(content, dict)
+                        else None
+                    )
+                    if isinstance(mode, str) and mode in {"READ_ONLY", "SIMULATE"}:
+                        forwarded_modes.append(mode)
         self.answer(200, {})
 
 

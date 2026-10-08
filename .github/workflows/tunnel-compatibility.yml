@@ -23,6 +23,9 @@ on:
       - scripts/build-tunnel-image.sh
       - scripts/prepare-tunnel-build-context.sh
       - scripts/private_chatgpt_preflight.py
+      - scripts/compose-prod.sh
+      - scripts/deploy_verify.py
+      - scripts/tunnel_deployment.py
       - scripts/test-tunnel-container.sh
       - tests/fixtures/opend_stub.py
       - tests/fixtures/tunnel_*.py
