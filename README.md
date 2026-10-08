@@ -199,6 +199,25 @@ validity flags are not independent financial reconciliation.
 - `get_user_security`: List the securities in one watchlist group.
 - `get_option_chain`: Get option contracts for an underlying within a range of expiry dates, filtered to calls, puts, or all. Returns the exact provider contract symbols to use in quotes, previews, and orders — never build an option symbol by hand. The provider accepts a range of at most 30 days; a wider range is rejected rather than truncated.
 
+  All MCP clients of the process-owned gateway service share a rolling budget
+  of 10 option-chain SDK calls per 30 seconds, with a 0.1-second safety margin,
+  matching the [Moomoo option-chain limit](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-option-chain.html).
+  Quota admission waits asynchronously for up to five seconds before using an
+  SDK worker. If capacity remains unavailable, the tool returns an explicit
+  error containing `retry_after_seconds`; wait at least that long before a new
+  request. It is an estimate, since other callers can consume capacity meanwhile.
+  Invalid filters consume no quota; dispatched attempts, including provider
+  failures, do. Requests are never automatically retried. Other MCP tools do
+  not consume this budget.
+
+  This budget lives in one server process, shared by its clients; the supported
+  deployment runs one MCP server process per OpenD gateway. Separate MCP server
+  processes and other OpenD clients are not coordinated, and server restarts
+  reset the local window. Moomoo documents the endpoint limit without specifying
+  the complete accounting scope across independent OpenD clients, so provider
+  rate-limit errors remain possible. Direct synchronous Python service callers
+  share the budget and receive an immediate quota error instead of waiting.
+
 ### Trading
 
 - `place_order`: Place a new order (Market, Limit, Stop, etc.).

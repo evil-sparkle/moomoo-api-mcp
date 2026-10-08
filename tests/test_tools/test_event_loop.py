@@ -36,17 +36,24 @@ NON_BLOCKING_METHODS = {
     "collect_journal_health",
 }
 
+# Governed async methods await admission and offload SDK execution themselves.
+# They are safe only when awaited, unlike the immediate methods above.
+ASYNC_SERVICE_METHODS = {"get_option_chain_async"}
+
 
 def _direct_service_calls(path: pathlib.Path) -> list[str]:
     """Find service calls invoked directly rather than handed to run_blocking."""
     found = []
-    for node in ast.walk(ast.parse(path.read_text())):
+    tree = ast.parse(path.read_text())
+    awaited = {node.value for node in ast.walk(tree) if isinstance(node, ast.Await)}
+    for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             target = node.func.value
             if (
                 isinstance(target, ast.Name)
                 and target.id in SERVICE_NAMES
                 and node.func.attr not in NON_BLOCKING_METHODS
+                and not (node.func.attr in ASYNC_SERVICE_METHODS and node in awaited)
             ):
                 found.append(
                     f"{path.name}:{node.lineno} {target.id}.{node.func.attr}()"
@@ -55,7 +62,7 @@ def _direct_service_calls(path: pathlib.Path) -> list[str]:
 
 
 def test_no_tool_calls_a_service_directly():
-    """Every SDK call in the tool layer must go through run_blocking.
+    """SDK calls must be offloaded, directly or by an awaited governed method.
 
     A structural check, because the failure it prevents — one slow tool
     delaying every other request — only shows up under concurrency and is easy

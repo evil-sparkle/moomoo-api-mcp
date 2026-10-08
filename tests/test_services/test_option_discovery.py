@@ -5,7 +5,15 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from moomoo_mcp.services.market_data_service import MarketDataService
+from moomoo_mcp.services.market_data_service import (
+    OPTION_CHAIN_RATE_LIMIT,
+    MarketDataService,
+)
+from moomoo_mcp.services.rate_limit import (
+    ProviderRateLimitError,
+    ProviderRequestLimiter,
+)
+from tests.rate_limit_clock import FakeClock
 
 EXPIRATIONS = pd.DataFrame(
     [
@@ -211,3 +219,91 @@ class TestChainValidation:
     def test_requires_a_connection(self):
         with pytest.raises(RuntimeError, match="Quote context not connected"):
             MarketDataService(quote_ctx=None).get_option_chain("US.XYZ")
+
+
+class TestChainRateLimit:
+    @pytest.fixture
+    def governed(self, quote_ctx):
+        clock = FakeClock()
+        limiter = ProviderRequestLimiter(
+            OPTION_CHAIN_RATE_LIMIT, clock=clock, sleep=clock.sleep
+        )
+        return MarketDataService(quote_ctx, option_chain_limiter=limiter), clock
+
+    @pytest.mark.parametrize("provider_failure", [False, True])
+    async def test_sync_and_async_calls_share_budget(
+        self, governed, quote_ctx, provider_failure
+    ):
+        service, _clock = governed
+        if provider_failure:
+            quote_ctx.get_option_chain.return_value = (-1, "provider frequency limit")
+        for index in range(10):
+            if provider_failure:
+                with pytest.raises(RuntimeError) as exc:
+                    if index % 2:
+                        await service.get_option_chain_async("US.XYZ")
+                    else:
+                        service.get_option_chain("US.XYZ")
+                assert (
+                    str(exc.value)
+                    == "get_option_chain failed: provider frequency limit"
+                )
+            elif index % 2:
+                assert await service.get_option_chain_async("US.XYZ") == CHAIN.to_dict(
+                    "records"
+                )
+            else:
+                assert service.get_option_chain("US.XYZ") == CHAIN.to_dict("records")
+        with pytest.raises(ProviderRateLimitError):
+            service.get_option_chain("US.XYZ")
+        assert quote_ctx.get_option_chain.call_count == 10
+
+    @pytest.mark.parametrize(
+        "arguments, message",
+        [
+            ({"code": ""}, "non-empty security code"),
+            ({"start": "bad"}, "YYYY-MM-DD"),
+            ({"start": "2026-11-30", "end": "2026-11-01"}, "is after end"),
+            ({"start": "2026-11-01", "end": "2026-12-01"}, "at most 30 days"),
+            ({"option_type": "STRADDLE"}, "option_type must be one of"),
+        ],
+    )
+    async def test_validation_precedes_admission(
+        self, governed, quote_ctx, arguments, message
+    ):
+        service, _clock = governed
+        values = {"code": "US.XYZ", **arguments}
+        # Invalid requests consume no budget when it is empty or exhausted.
+        for exhausted in (False, True):
+            if exhausted:
+                for _ in range(10):
+                    service.get_option_chain("US.XYZ")
+            with pytest.raises(ValueError) as exc:
+                await service.get_option_chain_async(**values)
+            assert message in str(exc.value)
+            with pytest.raises(ValueError) as exc:
+                service.get_option_chain(**values)
+            assert message in str(exc.value)
+        assert quote_ctx.get_option_chain.call_count == 10
+
+    def test_separate_wrappers_can_share_one_gateway_budget(self, governed, quote_ctx):
+        service, _clock = governed
+        other = MarketDataService(
+            quote_ctx, option_chain_limiter=service.option_chain_limiter
+        )
+        for _ in range(5):
+            service.get_option_chain("US.XYZ", option_type="CALL")
+            other.get_option_chain("US.ABC", option_type="PUT")
+        with pytest.raises(ProviderRateLimitError):
+            other.get_option_chain("US.XYZ")
+        assert quote_ctx.get_option_chain.call_count == 10
+
+    async def test_sdk_exception_is_not_refunded_or_retried(self, governed, quote_ctx):
+        service, _clock = governed
+        quote_ctx.get_option_chain.side_effect = OSError("connection lost")
+        for _ in range(10):
+            with pytest.raises(OSError):
+                await service.get_option_chain_async("US.XYZ")
+        with pytest.raises(ProviderRateLimitError):
+            service.get_option_chain("US.XYZ")
+        assert quote_ctx.get_option_chain.call_count == 10
