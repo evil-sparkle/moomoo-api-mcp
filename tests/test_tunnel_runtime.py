@@ -35,26 +35,30 @@ def test_shared_token_normalization_matches_mcp_settings(monkeypatch):
 
 
 @pytest.mark.usefixtures("authorization")
-@pytest.mark.parametrize("mode", ["SIMULATE", "REAL", None])
+@pytest.mark.parametrize("mode", ["REAL", "UNKNOWN", "simulate", "", None, [], {}])
 def test_fatal_mode_never_spawns_client(monkeypatch, mode):
     client = Mock()
     client.call_tool.return_value = {"trading_mode": mode}
     monkeypatch.setattr(runtime, "McpClient", Mock(return_value=client))
+    monkeypatch.setattr(runtime, "verify_config", Mock())
+    monkeypatch.setattr(runtime.sys, "argv", ["runtime.py"])
     spawn = Mock()
     monkeypatch.setattr(runtime.subprocess, "Popen", spawn)
-    assert runtime.gate(threading.Event()) is False
+    assert runtime.main() == 1
     spawn.assert_not_called()
 
 
 @pytest.mark.usefixtures("authorization")
-def test_degraded_read_only_is_valid(monkeypatch):
+@pytest.mark.parametrize("mode", ["READ_ONLY", "SIMULATE"])
+def test_degraded_allowed_mode_is_valid(monkeypatch, capsys, mode):
     client = Mock()
-    client.call_tool.return_value = {"trading_mode": "READ_ONLY", "status": "degraded"}
+    client.call_tool.return_value = {"trading_mode": mode, "status": "degraded"}
     monkeypatch.setattr(runtime, "McpClient", Mock(return_value=client))
     assert runtime.gate(threading.Event())
     client.initialize.assert_called_once()
     client.list_tools.assert_called_once()
     client.call_tool.assert_called_once_with("check_health", {})
+    assert mode + " startup verified" in capsys.readouterr().out
     runtime.McpClient.assert_called_once_with(
         preflight.COMPOSE_URL,
         "Bearer synthetic-mcp",

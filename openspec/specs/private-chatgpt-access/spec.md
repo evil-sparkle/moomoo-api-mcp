@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines a private, optional, read-only path from eligible OpenAI products to the
+Defines a private, optional, read-only or paper-trading path from eligible OpenAI products to the
 existing loopback MCP deployment, including security boundaries and staged
 acceptance for ChatGPT web and the native iPad application.
 
@@ -114,15 +114,13 @@ limited to the owner-selected Platform organization and ChatGPT workspace.
 - **THEN** values SHALL NOT enter image layers, build arguments, Compose YAML, process arguments, tracked files or diagnostic output
 - **AND** the tunnel SHALL NOT inherit the brokerage environment
 
-### Requirement: Server-enforced read-only access
+### Requirement: Server-enforced read-only or paper-only access
 
 The integration SHALL be startable only when the resolved MCP deployment mode is
-`READ_ONLY`, and the MCP service SHALL remain the authority that rejects order
-submission, modification, cancellation, trade unlocking, and operator recovery.
-Tool annotations and product settings SHALL NOT grant authorization. Enabling
-paper or real writes for this integration SHALL require a separately reviewed
-change that updates its threat model, credentials, acceptance tests, and
-operations documentation.
+`READ_ONLY` or `SIMULATE`. The MCP service SHALL enforce this mode before gateway
+dispatch. Paper writes SHALL require existing account, journal, identity and
+recovery gates. The tunnel SHALL NOT receive operator credentials or gain REAL
+write or unlock authority.
 
 #### Scenario: Read-only deployment starts
 
@@ -132,26 +130,49 @@ operations documentation.
 - **AND** authorized account, position, market-data, and health reads MAY be
   forwarded
 
-#### Scenario: Non-read-only deployment is detected
+#### Scenario: Paper-only deployment starts
 
-- **WHEN** preflight resolves `MOOMOO_TRADING_MODE` as `SIMULATE`, `REAL`, or an
+- **WHEN** preflight proves `MOOMOO_TRADING_MODE=SIMULATE` and the other tunnel
+  prerequisites are valid
+- **THEN** the tunnel service MAY start and forward authorized real-account reads
+  and supported paper mutations
+- **AND** paper mutations SHALL require explicit `trd_env="SIMULATE"`, an
+  allowlisted verified simulated account and the existing journal admission data
+- **AND** real-account, position and market-data reads MAY be forwarded
+- **AND** tool annotations and product settings SHALL NOT grant authorization
+
+#### Scenario: Unsafe deployment is detected
+
+- **WHEN** preflight resolves `MOOMOO_TRADING_MODE` as `REAL` or an
   unusable value
 - **THEN** the tunnel service SHALL refuse to start
 - **AND** it SHALL NOT alter the MCP deployment to make the check pass
 
 #### Scenario: Mutation is requested through the tunnel
 
-- **WHEN** a caller requests order placement, modification, cancellation, trade
-  unlocking, or operator recovery
+- **WHEN** a caller requests any order mutation in `READ_ONLY`, a REAL order
+  mutation or trade unlocking in `SIMULATE`, or operator recovery using the
+  ordinary tunnel bearer
 - **THEN** the MCP service SHALL reject the request before any broker write or
   unlock method is dispatched
 
 #### Scenario: Startup gate is not permanent credential scope
 
-- **WHEN** an operator intends to change MCP mode to SIMULATE or REAL
+- **WHEN** an operator intends to change MCP mode to REAL
 - **THEN** the operator SHALL stop and disable the tunnel first
-- **AND** deployment tooling SHALL refuse a non-READ_ONLY deployment while the tunnel overlay remains selected
-- **AND** documentation SHALL state that the ordinary bearer does not itself enforce permanently read-only privileges
+- **AND** deployment tooling SHALL refuse REAL or unknown modes while the tunnel overlay remains selected
+- **AND** documentation SHALL state that the ordinary bearer follows the server mode
+- **AND** the bearer SHALL NOT be described as permanently read-only: SIMULATE
+  grants supported paper-write authority subject to existing execution gates
+
+#### Scenario: Switching between allowed modes preserves paper state
+
+- **WHEN** a selected tunnel deployment switches between READ_ONLY and SIMULATE
+- **THEN** managed deployment SHALL include the paper overlay and retain its
+  project-scoped journal volume and existing OpenD state
+- **AND** READ_ONLY SHALL NOT open the journal
+- **AND** SIMULATE SHALL require explicit paper configuration without automatically
+  initializing or replacing a journal to make startup succeed
 
 ### Requirement: Accurate tool safety metadata
 
@@ -284,7 +305,7 @@ it SHALL NOT delete or replace OpenD or execution-journal state.
 
 ### Requirement: Gated container startup and bounded recovery
 
-The container SHALL validate authenticated initialize, discovery and check_health proving READ_ONLY before launching a client capable of polling or forwarding.
+The container SHALL validate authenticated initialize, discovery and check_health proving READ_ONLY or SIMULATE before launching a client capable of polling or forwarding.
 
 #### Scenario: Tunnel startup and recovery contract
 
@@ -296,12 +317,12 @@ Transient MCP startup failures SHALL be retried within a bounded deadline with b
 #### Scenario: Delayed MCP startup
 
 - **WHEN** MCP DNS/reachability is initially unavailable but becomes ready within the startup deadline
-- **THEN** the tunnel SHALL start only after authenticated protocol results prove READ_ONLY
+- **THEN** the tunnel SHALL start only after authenticated protocol results prove READ_ONLY or SIMULATE
 - **AND** deadline exhaustion SHALL exit unsuccessfully with a safe diagnostic
 
 #### Scenario: Invalid credentials or mode
 
-- **WHEN** preflight receives refused authentication, an invalid MCP result, SIMULATE or REAL
+- **WHEN** preflight receives refused authentication, an invalid MCP result, REAL or an unknown mode
 - **THEN** no forwarding client SHALL start and the integration SHALL NOT fall back to anonymous access
 
 #### Scenario: Client hangs while container remains running
@@ -333,7 +354,7 @@ version and archive integrity.
 
 Its managed runtime SHALL use the fixed
 `https://api.openai.com` control plane with certificate verification, the approved
-private MCP URL, a scrubbed environment and authenticated READ_ONLY startup.
+private MCP URL, a scrubbed environment and authenticated READ_ONLY or SIMULATE startup.
 Acceptance SHALL require passing actual-image tests of normal authenticated
 polling, discovery and forwarding, negative authentication, rotation, runtime restrictions,
 isolation and recovery. A client fork SHALL NOT be required or shipped.

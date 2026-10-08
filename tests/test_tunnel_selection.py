@@ -150,8 +150,11 @@ def test_wrapper_pulls_selected_images_and_reuses_digest(tmp_path, registry_imag
 
 
 @pytest.mark.parametrize("operation", ["up", "start", "restart", "run", "create"])
-def test_wrapper_allows_explicit_authenticated_read_only_start(tmp_path, operation):
-    scripts, environment = wrapper_fixture(tmp_path)
+@pytest.mark.parametrize("mode", ["READ_ONLY", "SIMULATE", " simulate "])
+def test_wrapper_allows_explicit_authenticated_allowed_mode_start(
+    tmp_path, operation, mode
+):
+    scripts, environment = wrapper_fixture(tmp_path, mode=mode)
     result = subprocess.run(
         [str(scripts / "compose-prod.sh"), operation],
         cwd=tmp_path,
@@ -162,14 +165,18 @@ def test_wrapper_allows_explicit_authenticated_read_only_start(tmp_path, operati
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "started").exists()
+    args, _ = json.loads((tmp_path / "docker-call.json").read_text())
+    assert "docker-compose.paper.yml" in args
+    assert "docker-compose.chatgpt.yml" in args
+    assert args[args.index("-p") + 1] == "existing-project"
     assert "synthetic-only" not in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(
     "options,diagnostic",
     [
-        ({"mode": "SIMULATE"}, "READ_ONLY"),
         ({"mode": "REAL"}, "READ_ONLY"),
+        ({"mode": "UNKNOWN"}, "READ_ONLY"),
         ({"token": ""}, "MCP_AUTH_TOKEN"),
         ({"token": "   "}, "MCP_AUTH_TOKEN"),
         ({"key": ""}, "CHATGPT_TUNNEL_API_KEY"),
@@ -212,8 +219,27 @@ def test_wrapper_rejects_invalid_selection_before_daemon_action(tmp_path):
     assert not (tmp_path / "started").exists()
 
 
-@pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])
-def test_resolved_selected_tunnel_refuses_non_read_only(monkeypatch, mode):
+@pytest.mark.parametrize("mode", ["READ_ONLY", "SIMULATE"])
+def test_disabled_tunnel_keeps_local_paper_configuration(tmp_path, mode):
+    scripts, environment = wrapper_fixture(tmp_path, mode=mode)
+    (tmp_path / ".chatgpt-deploy.json").unlink()
+    result = subprocess.run(
+        [str(scripts / "compose-prod.sh"), "up", "-d"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    args, _ = json.loads((tmp_path / "docker-call.json").read_text())
+    assert ("docker-compose.paper.yml" in args) is (mode == "SIMULATE")
+    assert "docker-compose.chatgpt.yml" not in args
+    assert "synthetic" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("mode", ["REAL", "UNKNOWN"])
+def test_resolved_selected_tunnel_refuses_unsafe_mode(monkeypatch, mode):
     from unittest.mock import Mock
 
     from scripts import deploy_verify

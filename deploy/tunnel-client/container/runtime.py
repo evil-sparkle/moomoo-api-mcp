@@ -20,6 +20,7 @@ from private_chatgpt_preflight import (  # pyright: ignore[reportMissingImports]
     McpClient,
     PreflightError,
     RefuseRedirects,
+    validate_trading_mode,
 )
 
 RUNTIME = Path("/run/moomoo-chatgpt-tunnel")
@@ -92,14 +93,10 @@ def gate(stop: threading.Event, *, deadline_seconds: float = 90) -> bool:
                     return False
                 client.timeout = min(10, remaining)
                 result = operation()
-            if (
-                not isinstance(result, dict)
-                or result.get("trading_mode") != "READ_ONLY"
-            ):
-                raise PreflightError("check_health did not prove READ_ONLY operation.")
+            trading_mode = validate_trading_mode(result)
             if stop.is_set():
                 return False
-            report("MCP available; READ_ONLY startup verified")
+            report("MCP available; " + trading_mode + " startup verified")
             return True
         except PreflightError as exc:
             if not exc.transient:
@@ -164,7 +161,7 @@ def main() -> int:
         if not gate(stop):
             return 0 if stop.is_set() else 1
         # Official doctor performs unauthenticated metadata probes. The authenticated
-        # READ_ONLY preflight above is the gate; run parses the immutable config.
+        # Trading-mode preflight above is the gate; run parses the immutable config.
         child = subprocess.Popen(
             [BINARY, "run", "--config", CONFIG],
             env=environment,

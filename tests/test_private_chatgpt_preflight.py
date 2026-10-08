@@ -105,7 +105,7 @@ class McpFixture:
                                 "result": [
                                     {
                                         "acc_id": ACCOUNT_ID,
-                                        "trd_env": "SIMULATE",
+                                        "trd_env": params["arguments"]["trd_env"],
                                     }
                                 ]
                             },
@@ -178,23 +178,26 @@ def invoke(
     authorization_file: Path,
     *,
     mode: str = "startup-safe",
+    trd_env: str = "SIMULATE",
 ) -> list[str]:
     return preflight.run(
         url=server.url,
         authorization_file=authorization_file,
         mode=mode,
-        trd_env="SIMULATE" if mode == "full" else None,
+        trd_env=trd_env if mode == "full" else None,
         account_id=ACCOUNT_ID if mode == "full" else None,
     )
 
 
+@pytest.mark.parametrize("trading_mode", ["READ_ONLY", "SIMULATE"])
 def test_startup_safe_validates_real_mcp_results_and_authentication(
     authorization_file: Path,
+    trading_mode: str,
 ) -> None:
-    with McpFixture() as server:
+    with McpFixture(trading_mode=trading_mode) as server:
         milestones = invoke(server, authorization_file)
 
-    assert milestones == ["initialize", "tools/list", "check_health:READ_ONLY"]
+    assert milestones == ["initialize", "tools/list", "check_health:" + trading_mode]
     assert [call["request"]["method"] for call in server.calls] == [
         "initialize",
         "tools/list",
@@ -204,12 +207,17 @@ def test_startup_safe_validates_real_mcp_results_and_authentication(
     assert server.calls[-1]["request"]["params"]["name"] == "check_health"
 
 
+@pytest.mark.parametrize("trading_mode", ["READ_ONLY", "SIMULATE"])
+@pytest.mark.parametrize("trd_env", ["REAL", "SIMULATE"])
 def test_full_mode_validates_selected_account_and_positions(
     authorization_file: Path,
+    trading_mode: str,
+    trd_env: str,
 ) -> None:
-    with McpFixture() as server:
-        milestones = invoke(server, authorization_file, mode="full")
+    with McpFixture(trading_mode=trading_mode) as server:
+        milestones = invoke(server, authorization_file, mode="full", trd_env=trd_env)
 
+    assert milestones[2] == "check_health:" + trading_mode
     assert milestones[-2:] == ["get_accounts:selected", "get_positions"]
     calls = [
         call["request"]["params"]
@@ -218,12 +226,12 @@ def test_full_mode_validates_selected_account_and_positions(
     ]
     assert calls[-1] == {
         "name": "get_positions",
-        "arguments": {"trd_env": "SIMULATE", "acc_id": ACCOUNT_ID},
+        "arguments": {"trd_env": trd_env, "acc_id": ACCOUNT_ID},
     }
 
 
-@pytest.mark.parametrize("mode", ["SIMULATE", "REAL", None])
-def test_startup_safe_fails_closed_unless_health_proves_read_only(
+@pytest.mark.parametrize("mode", ["REAL", "UNKNOWN", "simulate", "", None])
+def test_startup_safe_fails_closed_unless_health_proves_allowed_mode(
     authorization_file: Path, mode: str | None
 ) -> None:
     with (
@@ -233,15 +241,22 @@ def test_startup_safe_fails_closed_unless_health_proves_read_only(
         invoke(server, authorization_file)
 
 
+@pytest.mark.parametrize("trading_mode", ["READ_ONLY", "SIMULATE"])
 @pytest.mark.parametrize("gateway_status", ["disconnected", "degraded"])
 def test_startup_safe_tolerates_unavailable_opend_but_full_fails_honestly(
-    authorization_file: Path, gateway_status: str
+    authorization_file: Path, gateway_status: str, trading_mode: str
 ) -> None:
-    with McpFixture(gateway_status=gateway_status) as server:
-        assert invoke(server, authorization_file)[-1] == "check_health:READ_ONLY"
+    with McpFixture(gateway_status=gateway_status, trading_mode=trading_mode) as server:
+        assert invoke(server, authorization_file)[-1] == "check_health:" + trading_mode
         server.fail_account = True
         with pytest.raises(preflight.PreflightError):
             invoke(server, authorization_file, mode="full")
+
+
+@pytest.mark.parametrize("health", [None, [], {}, {"trading_mode": []}])
+def test_invalid_health_fails_closed(health):
+    with pytest.raises(preflight.PreflightError, match="READ_ONLY or SIMULATE"):
+        preflight.validate_trading_mode(health)
 
 
 def test_missing_and_wrong_credentials_fail_before_any_protocol_result(

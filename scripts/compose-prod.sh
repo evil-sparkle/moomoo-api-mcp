@@ -13,7 +13,10 @@ if [ -f .chatgpt-deploy.json ]; then
   fi
   mapfile -t selected <<< "$values"
   export CHATGPT_TUNNEL_IMAGE="${selected[0]}"
-  optional=(-p "${selected[1]}" -f docker-compose.chatgpt.yml)
+  # Preserve the paper volume across READ_ONLY/SIMULATE mode changes. READ_ONLY
+  # never opens the journal; SIMULATE still requires explicit account admission
+  # and first-time journal initialization through the paper overlay settings.
+  optional=(-p "${selected[1]}" -f docker-compose.paper.yml -f docker-compose.chatgpt.yml)
   for argument in "$@"; do
   case "$argument" in
     up|start|restart|run|create)
@@ -29,6 +32,12 @@ if [ -f .chatgpt-deploy.json ]; then
     else
       set -- pull moomoo-mcp chatgpt-tunnel
     fi
+  fi
+else
+  # Removing the tunnel must not remove local SIMULATE execution or its storage.
+  paper_file="$(python3 scripts/deploy_verify.py paper-overlay)"
+  if [ -n "$paper_file" ]; then
+    optional=(-f "$paper_file")
   fi
 fi
 exec docker --context rootless compose --env-file .env --env-file .deploy.env \

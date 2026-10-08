@@ -5,6 +5,42 @@ import pytest
 from tests.test_compose_topology import PROD_ENV, _render
 
 
+@pytest.mark.parametrize("mode", ["READ_ONLY", "SIMULATE"])
+def test_managed_paper_tunnel_preserves_storage_and_isolates_operator(mode):
+    env = {
+        **PROD_ENV,
+        "MOOMOO_TRADING_MODE": mode,
+        "MOOMOO_SIMULATED_ACC_IDS": "123",
+        "MCP_AUTH_TOKEN": "synthetic-ordinary-token",
+        "MCP_OPERATOR_TOKEN": "synthetic-operator-token",
+        "CHATGPT_TUNNEL_IMAGE": "sha256:" + "a" * 64,
+        "CHATGPT_TUNNEL_API_KEY": "synthetic-runtime-key",
+        "CHATGPT_TUNNEL_ID": "tunnel_synthetic",
+    }
+    model = _render(
+        "docker-compose.yml",
+        "docker-compose.prod.yml",
+        "docker-compose.paper.yml",
+        "docker-compose.chatgpt.yml",
+        env=env,
+    )
+    broker = model["services"]["moomoo-mcp"]
+    journal = next(
+        mount
+        for mount in broker["volumes"]
+        if mount["target"] == "/var/lib/moomoo-mcp/data"
+    )
+    assert journal["source"] == "execution-data"
+    assert broker["environment"]["MOOMOO_TRADING_MODE"] == mode
+    assert broker["environment"]["MOOMOO_SIMULATED_ACC_IDS"] == "123"
+    assert broker["environment"]["MOOMOO_CREATE_JOURNAL"] == "0"
+    assert broker["environment"]["MCP_OPERATOR_TOKEN"] == "synthetic-operator-token"
+    tunnel = model["services"]["chatgpt-tunnel"]
+    assert not tunnel.get("volumes")
+    assert "MCP_OPERATOR_TOKEN" not in tunnel["environment"]
+    assert "synthetic-operator-token" not in tunnel["environment"].values()
+
+
 @pytest.mark.parametrize(
     "overlays",
     [

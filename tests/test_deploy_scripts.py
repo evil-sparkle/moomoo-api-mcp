@@ -167,10 +167,12 @@ if name == "docker":
             print("invalid env file", file=sys.stderr)
             sys.exit(15)
         token = os.environ.get("DOCKER_TEST_TOKEN", "test-only")
-        service = {{"environment": {{"MCP_AUTH_TOKEN": token}}}}
+        service = {{"environment": {{
+            "MCP_AUTH_TOKEN": token,
+            "MOOMOO_TRADING_MODE": os.environ.get("DOCKER_TEST_MODE", "READ_ONLY"),
+        }}}}
         services = {{"moomoo-mcp": service}}
         if pathlib.Path('.chatgpt-deploy.json').exists():
-            service['environment']['MOOMOO_TRADING_MODE'] = 'READ_ONLY'
             image = os.environ.get('CHATGPT_TUNNEL_IMAGE')
             services['chatgpt-tunnel'] = {{'image': image, 'environment': {{
                 'CHATGPT_TUNNEL_API_KEY': os.environ.get(
@@ -384,6 +386,36 @@ if name == "curl":
         ]
         self.assertNotIn("docker-compose.chatgpt.yml", calls[-1])
         self.assertIn("existing-project", calls[-1])
+
+    def test_first_enable_simulate_includes_paper_configuration(self):
+        self.env["DOCKER_TEST_MODE"] = "SIMULATE"
+        result = self.deploy("--chatgpt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        started = [
+            args for name, args, _ in self.calls() if name == "docker" and "up" in args
+        ]
+        self.assertEqual(len(started), 1)
+        self.assertIn("docker-compose.paper.yml", started[0])
+        self.assertIn("docker-compose.chatgpt.yml", started[0])
+        self.assertIn("existing-project", started[0])
+
+    def test_simulate_disable_retains_local_paper_configuration(self):
+        self.select_tunnel()
+        self.env["DOCKER_TEST_MODE"] = "SIMULATE"
+        self.env["DOCKER_TEST_TUNNEL_KEY"] = ""
+        result = self.deploy("--no-chatgpt")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
+        started = [
+            args for name, args, _ in self.calls() if name == "docker" and "up" in args
+        ]
+        self.assertEqual(len(started), 1)
+        self.assertIn("docker-compose.paper.yml", started[0])
+        self.assertNotIn("docker-compose.chatgpt.yml", started[0])
+        self.assertIn(
+            "COMPOSE_PROJECT_NAME=existing-project",
+            (self.repo / ".deploy.env").read_text(),
+        )
 
     def test_disable_preserves_project_without_requiring_openai_key(self):
         self.select_tunnel()
@@ -651,9 +683,11 @@ if name == "curl":
             self.assertEqual(args[:3], ["--context", "rootless", "compose"])
             self.assertIn(".env", args)
             self.assertIn(".deploy.env", args)
-        # The configuration is checked, then the image pulled. Nothing starts
-        # and nothing is probed.
-        self.assertEqual(self.compose_commands(), ["config", "pull"])
+        # The wrapper resolves paper mode before each command; check-config also
+        # resolves the complete stack. Nothing starts and no MCP probe is sent.
+        self.assertEqual(
+            self.compose_commands(), ["config", "config", "config", "pull"]
+        )
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
         self.assertFalse(any(name == "curl" for name, _, _ in calls))
 
@@ -676,15 +710,30 @@ if name == "curl":
         # which reads it from nowhere else.
         self.assertEqual(
             self.compose_commands(),
-            ["config", "pull", "up", "config", "config", "logs"],
+            [
+                "config",
+                "config",
+                "config",
+                "pull",
+                "config",
+                "up",
+                "config",
+                "config",
+                "config",
+                "config",
+                "config",
+                "logs",
+            ],
         )
         docker = [
             args
             for name, args, _ in self.calls()
             if name == "docker" and "compose" in args
         ]
-        self.assertEqual(docker[2][-3:], ["up", "-d", "--remove-orphans"])
-        self.assertIn("moomoo-mcp", docker[5])
+        startup = next(args for args in docker if "up" in args)
+        logs = next(args for args in docker if "logs" in args)
+        self.assertEqual(startup[-3:], ["up", "-d", "--remove-orphans"])
+        self.assertIn("moomoo-mcp", logs)
 
     def test_verification_probes_as_an_authenticated_mcp_client(self):
         """The probe sends Compose's resolved token and an MCP initialize.
@@ -931,7 +980,9 @@ if name == "curl":
         result = self.deploy(newer_commit)
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.compose_commands(), ["config", "pull"])
+        self.assertEqual(
+            self.compose_commands(), ["config", "config", "config", "pull"]
+        )
 
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
         self.assertEqual((self.repo / ".deploy.env").read_text(), prev_env)
@@ -1073,7 +1124,9 @@ if name == "curl":
             f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={newer_commit[:7]}\n",
         )
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), newer_commit)
-        self.assertEqual(self.compose_commands(), ["config", "pull"])
+        self.assertEqual(
+            self.compose_commands(), ["config", "config", "config", "pull"]
+        )
         self.assertFalse(any(name == "curl" for name, _, _ in self.calls()))
 
     def commit_host_checkout(self, deploy_sh, helper):
@@ -1114,7 +1167,20 @@ if name == "curl":
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), target)
         self.assertEqual(
             self.compose_commands(),
-            ["config", "pull", "up", "config", "config", "logs"],
+            [
+                "config",
+                "config",
+                "config",
+                "pull",
+                "config",
+                "up",
+                "config",
+                "config",
+                "config",
+                "config",
+                "config",
+                "logs",
+            ],
         )
         headers = [c[1] for c in self.calls() if c[0] == "curl-header"]
         self.assertEqual(headers, [["Authorization: Bearer test-only\n"]] * 2)

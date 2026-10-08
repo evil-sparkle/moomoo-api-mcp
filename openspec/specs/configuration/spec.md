@@ -197,7 +197,8 @@ environment injection.
 - **THEN** the following detailed obligations SHALL hold:
 
 The public template SHALL document the settings and the
-required READ_ONLY deployment mode. The runtime key SHALL be nonblank printable
+allowed READ_ONLY and SIMULATE deployment modes, the refusal of REAL mode and
+the existing paper configuration required in SIMULATE. The runtime key SHALL be nonblank printable
 ASCII; the selected identifier SHALL match `tunnel_[a-zA-Z0-9_-]{1,128}` after
 normalization. Credentials SHALL NOT be required by default-off deployments or
 tunnel stop/removal operations. Startup validation SHALL reject missing or invalid
