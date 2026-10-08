@@ -116,7 +116,10 @@ docs/deploy-*.md
 !docs/deploy-vps.md
 .deploy.env
 .deploy.reexec*
+
 .codex/
+!.codex/commands/
+!.codex/skills/
 
 # Claude Code: share the OpenSpec commands and skills; keep local settings
 # and agent worktrees out.
