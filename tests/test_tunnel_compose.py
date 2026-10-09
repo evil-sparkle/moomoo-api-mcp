@@ -6,7 +6,7 @@ from tests.test_compose_topology import PROD_ENV, _render
 
 
 @pytest.mark.parametrize("mode", ["READ_ONLY", "SIMULATE"])
-def test_managed_paper_tunnel_preserves_storage_and_isolates_operator(mode):
+def test_managed_paper_tunnel_preserves_storage_without_operator_capability(mode):
     env = {
         **PROD_ENV,
         "MOOMOO_TRADING_MODE": mode,
@@ -34,7 +34,7 @@ def test_managed_paper_tunnel_preserves_storage_and_isolates_operator(mode):
     assert broker["environment"]["MOOMOO_TRADING_MODE"] == mode
     assert broker["environment"]["MOOMOO_SIMULATED_ACC_IDS"] == "123"
     assert broker["environment"]["MOOMOO_CREATE_JOURNAL"] == "0"
-    assert broker["environment"]["MCP_OPERATOR_TOKEN"] == "synthetic-operator-token"
+    assert "MCP_OPERATOR_TOKEN" not in broker["environment"]
     tunnel = model["services"]["chatgpt-tunnel"]
     assert not tunnel.get("volumes")
     assert "MCP_OPERATOR_TOKEN" not in tunnel["environment"]

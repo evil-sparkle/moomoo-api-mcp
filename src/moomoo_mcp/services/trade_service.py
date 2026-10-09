@@ -622,6 +622,10 @@ class TradeService:
         except Exception as exc:  # noqa: BLE001 - startup must stay available
             logger.error(f"Trade connection failed: {exc}")
 
+    def start_paper_recovery(self) -> None:
+        if self.paper is not None:
+            self.paper.recovery.start()
+
     def close(self) -> None:
         """Close the trade context and abandon any connection still in flight.
 
@@ -632,6 +636,8 @@ class TradeService:
         The worker is a daemon thread, so the interpreter can exit while the
         constructor is still retrying.
         """
+        if self.paper is not None:
+            self.paper.recovery.stop()
         self._trade_probe.close()
         self._journal_probe.close()
         with self._connect_lock:
@@ -645,8 +651,9 @@ class TradeService:
             trade_ctx.close()
 
         if self.paper is not None:
-            with self.paper.lock:
-                self.paper.store.close()
+            # Recovery is stopped; the store guard protects only short SQL units.
+            # Do not wait indefinitely for a worker stuck in provider I/O.
+            self.paper.store.close()
 
     def probe_trade(self) -> dict[str, Any]:
         """Actively check trade connectivity with a read-only account listing.

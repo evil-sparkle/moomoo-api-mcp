@@ -86,7 +86,6 @@ class Settings:
     journal_path: str | None = None
     create_journal: bool = False
     journal_lock_wait_ms: int = 5000
-    operator_token: str | None = None
     allow_chatgpt_tunnel_host: bool = False
 
     @property
@@ -204,11 +203,6 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         env.get(ENV_ALLOW_UNAUTHENTICATED_HTTP) or ""
     ).strip() == "1"
 
-    operator_token = (env.get("MCP_OPERATOR_TOKEN") or "").strip() or None
-    if operator_token and operator_token == auth_token:
-        raise TradingModeConfigError(
-            "MCP_OPERATOR_TOKEN must differ from MCP_AUTH_TOKEN"
-        )
     allowlist: set[int] = set()
     journal_path = None
     create_journal = False
@@ -277,7 +271,6 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         journal_path=journal_path,
         create_journal=create_journal,
         journal_lock_wait_ms=lock_wait,
-        operator_token=operator_token,
         allow_chatgpt_tunnel_host=load_chatgpt_tunnel_host(env),
     )
 

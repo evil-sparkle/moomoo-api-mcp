@@ -144,7 +144,61 @@ os._exit(73)
             store.close()
 
 
-def test_reconciled_terminal_row_retains_independent_review_and_audit(tmp_path):
+def record_check(store, *, outcome="NOT_FOUND", resolution=None, number=1):
+    row = store.lookup("operation")
+    assert row is not None
+    store.record_recovery(
+        "operation",
+        observed_state=row["state"],
+        started_at=number * 10,
+        completed_at=number * 10 + 1,
+        outcome=outcome,
+        details={"orders": []},
+        next_check_at=number * 10 + 6,
+        resolution=resolution,
+        receipt={"order_id": "9", "order_status": "FILLED_ALL"}
+        if resolution == "BROKER_CONFIRMED"
+        else None,
+        accounted_facts={"filled_quantity": 2}
+        if resolution == "BROKER_CONFIRMED"
+        else None,
+    )
+
+
+def test_recovery_commits_audit_and_all_review_removal_together(tmp_path):
+    path = tmp_path / "journal.db"
+    store = ExecutionStore(path, create=True)
+    store.review()
+    admit(store)
+    store.mark_dispatch("operation", {})
+    original = store.lookup("operation")
+    assert original is not None
+    tag = original["order_tag"]
+    assert len(tag.encode("utf-8")) <= 64
+    store.close()
+    store = ExecutionStore(path)
+    store.review()
+    record_check(store, outcome="FOUND", resolution="BROKER_CONFIRMED")
+    recovered = store.lookup("operation")
+    assert recovered is not None
+    assert recovered["state"] == "RECONCILED"
+    assert recovered["order_tag"] == tag
+    assert store.health()["state"] == "READY"
+    store.close()
+    store = ExecutionStore(path)
+    assert store.review()["state"] == "READY"
+    store.close()
+    with sqlite3.connect(path) as conn:
+        row = conn.execute(
+            "SELECT operator_id, previous_state, accounted_facts FROM recovery_audit"
+        ).fetchone()
+    assert row[:2] == ("system", "UNKNOWN_OUTCOME")
+    assert json.loads(row[2]) == {"filled_quantity": 2}
+
+
+def test_absence_progress_and_monitoring_survive_restarts(tmp_path):
+    from moomoo_mcp.services.execution_store import ASSUMED_ABSENT
+
     path = tmp_path / "journal.db"
     store = ExecutionStore(path, create=True)
     store.review()
@@ -153,34 +207,56 @@ def test_reconciled_terminal_row_retains_independent_review_and_audit(tmp_path):
     store.close()
     store = ExecutionStore(path)
     store.review()
-    store.record_evidence(
-        "operation", [{"order_id": "9", "order_status": "FILLED_ALL"}], reconcile=True
-    )
-    row = store.lookup("operation")
-    assert row is not None
-    assert row["state"] == "RECONCILED"
-    assert store.health()["state"] == "JOURNAL_BLOCKED"
+    for number in range(1, 3):
+        record_check(store, number=number)
     store.close()
     store = ExecutionStore(path)
     store.review()
-    assert store.health()["blocking_reasons"] == ["RECOVERED_DISPATCH"]
-    store.acknowledge(
-        "operation",
-        operator_id="operator",
-        recovery_epoch=store.epoch,
-        observed_state="RECONCILED",
-        reason="Verified terminal",
-        evidence_reference="broker-order:9",
-        accounted_facts={"filled_quantity": 2},
-    )
+    for number in range(3, 6):
+        record_check(
+            store, number=number, resolution=ASSUMED_ABSENT if number == 5 else None
+        )
+    row = store.lookup("operation")
+    assert row is not None
+    assert row["state"] == "UNKNOWN_OUTCOME"
+    assert len(row["recovery_checks"]) == 5
     assert store.health()["state"] == "READY"
     store.close()
+    store = ExecutionStore(path)
+    assert store.review()["state"] == "READY"
+    assert store.recovery_rows(55) == []
+    assert len(store.recovery_rows(56)) == 1
+    store.block_late_order("operation")
+    assert store.health()["pending_operation_ids"] == ["operation"]
+    record_check(store, number=6, outcome="FOUND", resolution="BROKER_CONFIRMED")
+    assert store.health()["state"] == "READY"
+    store.close()
+
+
+def test_recovery_audit_failure_rolls_back_check_and_gate_release(tmp_path):
+    path = tmp_path / "journal.db"
+    store = ExecutionStore(path, create=True)
+    store.review()
+    admit(store)
+    store.outcome(
+        "operation", "UNKNOWN_OUTCOME", "POSSIBLY_SENT", reason="UNRESOLVED_OUTCOME"
+    )
     with sqlite3.connect(path) as conn:
-        row = conn.execute(
-            "SELECT operator_id, previous_state, accounted_facts FROM recovery_audit"
-        ).fetchone()
-    assert row[:2] == ("operator", "RECONCILED")
-    assert json.loads(row[2]) == {"filled_quantity": 2}
+        conn.execute(
+            "CREATE TRIGGER fail_audit BEFORE INSERT ON recovery_audit "
+            "BEGIN SELECT RAISE(ABORT, 'injected audit failure'); END"
+        )
+    with pytest.raises(ExecutionStoreError):
+        record_check(store, outcome="FOUND", resolution="BROKER_CONFIRMED")
+    store.close()
+    store = ExecutionStore(path)
+    assert store.review()["state"] == "JOURNAL_BLOCKED"
+    recovered = store.lookup("operation")
+    assert recovered is not None
+    assert recovered["recovery_checks"] == []
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM recovery_audit").fetchone() == (0,)
+    store.close()
 
 
 def test_restored_backup_refuses_unknown_retired_epoch(tmp_path):
@@ -296,7 +372,8 @@ def test_newer_wal_schema_does_not_checkpoint_or_rewrite_files(tmp_path):
         assert {file: file.read_bytes() for file in files} == before
 
 
-def test_v1_migration_preserves_acknowledged_modification_as_unobserved(tmp_path):
+@pytest.mark.parametrize("version", [1, 2])
+def test_migration_preserves_acknowledged_modification(tmp_path, version):
     path = tmp_path / "journal.db"
     store = ExecutionStore(path, create=True)
     store.review()
@@ -306,8 +383,29 @@ def test_v1_migration_preserves_acknowledged_modification_as_unobserved(tmp_path
     store.outcome("modify", "ACKNOWLEDGED", "ACKNOWLEDGED", receipt={"order_id": "77"})
     store.close()
     with sqlite3.connect(path) as conn:
-        conn.execute("ALTER TABLE operations DROP COLUMN modification_observed")
-        conn.execute("PRAGMA user_version=1")
+        if version == 1:
+            conn.execute("ALTER TABLE operations DROP COLUMN modification_observed")
+        conn.execute("DROP INDEX placement_tag")
+        for column in ("order_tag", "recovery_disposition", "next_recovery_at"):
+            conn.execute(f"ALTER TABLE operations DROP COLUMN {column}")
+        conn.execute("DROP TABLE recovery_checks")
+        conn.execute(f"PRAGMA user_version={version}")
+        conn.execute(
+            "INSERT INTO recovery_audit(operation_id,operator_id,resolution,reason,"
+            "evidence_reference,accounted_facts,recovery_epoch,observed_state,"
+            "previous_state) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "modify",
+                "operator",
+                "TERMINAL_ACCOUNTED",
+                "legacy audit",
+                "broker-order:77",
+                '{"filled_quantity":2}',
+                old_epoch,
+                "UNKNOWN_OUTCOME",
+                "UNKNOWN_OUTCOME",
+            ),
+        )
     migrated = ExecutionStore(path)
     try:
         assert migrated.review()["state"] == "READY"
@@ -316,9 +414,14 @@ def test_v1_migration_preserves_acknowledged_modification_as_unobserved(tmp_path
         assert pending[0]["admission_epoch"] == old_epoch
         assert pending[0]["state"] == "ACKNOWLEDGED"
         assert pending[0]["modification_observed"] == 0
+        assert pending[0]["order_tag"] is None
+        assert json.loads(pending[0]["accounted_facts"]) == {"filled_quantity": 2}
         assert migrated.unobserved_modifications(456, "77") == []
         assert migrated.unobserved_modifications(123, "88") == []
         with sqlite3.connect(path) as conn:
-            assert conn.execute("PRAGMA user_version").fetchone() == (2,)
+            assert conn.execute("PRAGMA user_version").fetchone() == (3,)
+            assert conn.execute(
+                "SELECT operator_id FROM recovery_audit"
+            ).fetchone() == ("operator",)
     finally:
         migrated.close()

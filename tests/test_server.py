@@ -428,7 +428,6 @@ class TestFastMCPSecurity:
 
             mock_create.assert_called_once_with(
                 auth_token="my-secret-token",
-                operator_token=None,
                 allow_chatgpt_tunnel_host=False,
             )
             mock_uvicorn_run.assert_called_once_with(
@@ -751,3 +750,38 @@ class TestStatelessStreamableHTTP:
                     assert "sentinel-notification-dropped" not in resp.text
         finally:
             server.mcp._tool_manager.remove_tool(test_tool_name)
+
+
+def test_paper_main_starts_recovery_before_http_listener(tmp_path):
+    import moomoo_mcp.server as server
+    from moomoo_mcp.settings import load_settings
+
+    settings = load_settings(
+        {
+            "MOOMOO_TRADING_MODE": "SIMULATE",
+            "MOOMOO_TRADING_MARKET": "US",
+            "MOOMOO_SIMULATED_ACC_IDS": "123",
+            "MCP_AUTH_TOKEN": "synthetic-startup-token",
+            "MOOMOO_JOURNAL_PATH": str(tmp_path / "execution.db"),
+            "MOOMOO_CREATE_JOURNAL": "1",
+        }
+    )
+    events = []
+    with (
+        patch.object(server, "_services", None),
+        patch.object(server, "_prepared_journal", None),
+        patch.object(server, "load_settings", return_value=settings),
+        patch.object(
+            server, "get_services", side_effect=lambda: events.append("recovery")
+        ),
+        patch.object(server, "create_streamable_http_app", return_value=MagicMock()),
+        patch(
+            "uvicorn.run", side_effect=lambda *_args, **_kwargs: events.append("http")
+        ),
+    ):
+        try:
+            server.main()
+            assert events == ["recovery", "http"]
+            assert (tmp_path / "execution.db").is_file()
+        finally:
+            server.close_services()

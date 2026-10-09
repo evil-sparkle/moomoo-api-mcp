@@ -60,6 +60,8 @@ class Broker:
             current["order_status"] = "FILLED_ALL"
             current["dealt_qty"] = current.get("qty", 2)
         self.orders[order_id] = current
+        if self.failure == "lost_response":
+            raise TimeoutError("response lost after acceptance")
         return RET_OK, pd.DataFrame([current])
 
     def place_order(self, **request):
@@ -108,6 +110,18 @@ class Service:
     def _first_record(_kind, data):
         return data.iloc[0].to_dict()
 
+    def get_orders(self, **request):
+        ret, data = self.trade_ctx.order_list_query(**request)
+        if ret != RET_OK:
+            raise RuntimeError("order_list_query failed")
+        return data.to_dict("records")
+
+    def get_history_orders(self, **request):
+        ret, data = self.trade_ctx.history_order_list_query(**request)
+        if ret != RET_OK:
+            raise RuntimeError("history_order_list_query failed")
+        return data.to_dict("records")
+
     def get_positions(self, **request):
         return [{"code": request["code"], "qty": self.position}]
 
@@ -122,6 +136,7 @@ def rig(tmp_path):
         cast(TradeService, cast(object, service)), store, frozenset({123, 456})
     )
     yield paper, service, broker, store
+    paper.recovery.stop()
     store.close()
 
 
@@ -311,56 +326,25 @@ def test_reconciliation_does_not_infer_success_from_candidates_or_target(rig, ki
     assert store.health()["state"] == "JOURNAL_BLOCKED"
 
 
-def test_operator_evidence_and_identity_checks_then_durable_accounting(rig):
+def test_automatic_terminal_accounting_preserves_exposure_without_success_claim(rig):
     paper, service, broker, store = rig
     target(broker)
     broker.failure = "timeout"
     mutate(paper, price="2.0")
-    args = {
-        "principal": "operator",
-        "operator_id": "operator",
-        "operation_id": "modify",
-        "resolution": "TERMINAL_ACCOUNTED",
-        "reason": "Verified broker",
-        "evidence_reference": "broker-order:77",
-        "recovery_epoch": store.epoch,
-        "observed_state": "UNKNOWN_OUTCOME",
-        "accounted_facts": {
-            "final_status": "FILLED_ALL",
-            "filled_quantity": 2,
-            "average_fill_price": 1.1,
-            "remaining_executable_quantity": 0,
-            "resulting_position": 2,
-        },
-    }
-    for patch in (
-        {"principal": "trading-agent"},
-        {"operator_id": "spoof"},
-        {"recovery_epoch": "old"},
-        {"observed_state": "ACKNOWLEDGED"},
-        {"evidence_reference": "remark:matching"},
-    ):
-        with pytest.raises((PermissionError, ValueError)):
-            paper.acknowledge(**(args | patch))
-    with pytest.raises(ValueError):
-        paper.acknowledge(**args)
     broker.orders["77"].update(
         order_status="FILLED_ALL", dealt_qty=2, dealt_avg_price=1.1
     )
     service.position = 8
-    with pytest.raises(ValueError):
-        paper.acknowledge(**args)
-    service.position = 2
-    result = paper.acknowledge(**args)
+    result = paper.reconcile("modify")
     assert result["state"] == "TERMINAL_ACCOUNTED"
-    assert result["disposition"] == "OPERATOR_ACCOUNTED"
-    assert result["accounted_facts"] == args["accounted_facts"]
+    assert result["accounted_facts"]["current_symbol_position"] == "8"
+    assert result["accounted_facts"]["mutation_success_proven"] is False
     assert paper.health()["state"] == "READY"
     with sqlite3.connect(broker.path) as conn:
         audit = conn.execute(
             "SELECT operator_id, resolution, previous_state FROM recovery_audit"
         ).fetchone()
-    assert audit == ("operator", "TERMINAL_ACCOUNTED", "UNKNOWN_OUTCOME")
+    assert audit == ("system", "TERMINAL_ACCOUNTED", "UNKNOWN_OUTCOME")
 
 
 @pytest.mark.parametrize(
@@ -427,7 +411,7 @@ def test_paper_journal_identity_survives_real_mode_restart(rig):
         reopened.close()
 
 
-def test_reconciliation_with_reliable_id_preserves_dispatch_recovery_gate(rig):
+def test_reconciliation_with_reliable_id_releases_dispatch_recovery_gate(rig):
     paper, _, broker, store = rig
     broker.failure = "timeout"
     place(paper)
@@ -439,9 +423,10 @@ def test_reconciliation_with_reliable_id_preserves_dispatch_recovery_gate(rig):
         reason="RECOVERED_DISPATCH",
     )
     target(broker)
+    broker.orders["77"]["remark"] = store.lookup("place")["order_tag"]
     assert paper.reconcile("place")["state"] == "RECONCILED"
-    assert store.health()["state"] == "JOURNAL_BLOCKED"
-    assert store.health()["blocking_reasons"] == ["RECOVERED_DISPATCH"]
+    assert store.health()["state"] == "READY"
+    assert store.health()["blocking_reasons"] == []
     assert len(broker.calls) == 1
 
 
@@ -554,6 +539,7 @@ def test_attribute_identical_candidates_do_not_establish_placement_ownership(rig
     place(paper)
     row = store.lookup("place")
     candidate = json.loads(row["merged_request"]) | {
+        "remark": "unrelated-order",
         "order_id": "1234",
         "order_status": "SUBMITTED",
     }
@@ -589,7 +575,7 @@ def test_successful_outcome_commit_followed_by_lookup_failure_is_durable(
     assert original_lookup("place")["state"] == "ACKNOWLEDGED"
 
 
-def test_failed_outcome_write_survives_two_process_restarts_and_needs_operator(
+def test_failed_outcome_write_survives_two_process_restarts_and_recovers_automatically(
     tmp_path,
 ):
     import subprocess
@@ -634,7 +620,6 @@ b.orders["77"].update(order_status="FILLED_ALL", dealt_qty=2, dealt_avg_price=1.
 p = PaperExecution(Service(b), s, frozenset({123}))
 assert s.lookup("modify")["state"] == "UNKNOWN_OUTCOME"
 assert "RECOVERED_DISPATCH" in p.health()["blocking_reasons"]
-assert p.reconcile("modify")["state"] == "UNKNOWN_OUTCOME"
 assert p.health()["state"] == "JOURNAL_BLOCKED"
 assert b.calls == []
 s.close()
@@ -658,23 +643,7 @@ s.close()
             cast(TradeService, cast(object, Service(broker))), store, frozenset({123})
         )
         assert paper.health()["state"] == "JOURNAL_BLOCKED"
-        result = paper.acknowledge(
-            principal="operator",
-            operator_id="operator",
-            operation_id="modify",
-            resolution="TERMINAL_ACCOUNTED",
-            reason="terminal exposure verified",
-            evidence_reference="broker-order:77",
-            recovery_epoch=store.epoch,
-            observed_state="UNKNOWN_OUTCOME",
-            accounted_facts={
-                "final_status": "FILLED_ALL",
-                "filled_quantity": 2,
-                "average_fill_price": 1.1,
-                "remaining_executable_quantity": 0,
-                "resulting_position": 2,
-            },
-        )
+        result = paper.reconcile("modify")
         assert result["state"] == "TERMINAL_ACCOUNTED"
         assert paper.health()["state"] == "READY"
         assert broker.calls == []
@@ -733,24 +702,7 @@ def test_operator_accounting_rejects_disagreement_in_broker_facts(
         "history_order_list_query",
         lambda **_kwargs: (RET_OK, pd.DataFrame([conflicting])),
     )
-    with pytest.raises(ValueError):
-        paper.acknowledge(
-            principal="operator",
-            operator_id="operator",
-            operation_id="modify",
-            resolution="TERMINAL_ACCOUNTED",
-            reason="reviewed terminal target",
-            evidence_reference="broker-order:77",
-            recovery_epoch=store.epoch,
-            observed_state="UNKNOWN_OUTCOME",
-            accounted_facts={
-                "final_status": "FILLED_ALL",
-                "filled_quantity": 2,
-                "average_fill_price": 1.1,
-                "remaining_executable_quantity": 0,
-                "resulting_position": 2,
-            },
-        )
+    assert paper.reconcile("modify")["state"] == "UNKNOWN_OUTCOME"
     assert store.lookup("modify")["state"] == "UNKNOWN_OUTCOME"
     assert paper.health()["state"] == "JOURNAL_BLOCKED"
     with sqlite3.connect(broker.path) as conn:
@@ -914,3 +866,378 @@ def test_failed_successor_preparation_does_not_retire_prior_visibility_guard(rig
         mutate(paper, "stale-again", price="80")
     assert "not yet observed" in str(refusal.value)
     assert len(broker.calls) == 1
+
+
+def recovery_clock(paper, initial=100.0):
+    now = [initial]
+    paper.recovery.clock = lambda: now[0]
+    return now
+
+
+def next_round(paper, now, token="place"):
+    row = paper.store.lookup(token)
+    assert row is not None
+    now[0] = row["next_recovery_at"]
+    return paper.reconcile(token)
+
+
+def test_persisted_unique_tags_and_original_remark_identity(rig):
+    paper, _, broker, store = rig
+    first = place(paper, remark="caller note")
+    row = store.lookup("place")
+    assert row is not None
+    assert first["order_tag"] == broker.calls[0][1]["remark"] == row["order_tag"]
+    assert len(first["order_tag"].encode("utf-8")) <= 64
+    assert first["order_tag"] != first["operation_id"]
+    assert json.loads(row["request"])["remark"] == "caller note"
+    assert place(paper, remark="caller note") == first
+    with pytest.raises(ExecutionConflict):
+        place(paper, remark="different note")
+    second = place(paper, token="second")
+    assert second["order_tag"] != first["order_tag"]
+    target(broker)
+    modification = mutate(paper, price="2.0")
+    assert modification["order_tag"] is None
+
+
+def test_lost_response_recovers_by_tag_and_deduplicates_current_history(rig):
+    paper, _, broker, store = rig
+    broker.failure = "lost_response"
+    first = place(paper)
+    assert first["broker_order_id"] is None
+    recovered = paper.reconcile("place")
+    assert recovered["state"] == "RECONCILED"
+    assert recovered["broker_order_id"] == "9007199254740993"
+    assert recovered["broker_status"] == "SUBMITTED"
+    assert recovered["recovery"]["disposition"] == "BROKER_CONFIRMED"
+    assert recovered["accounted_facts"]["remaining_executable_quantity"] == "2"
+    assert store.health()["state"] == "READY"
+    assert len(broker.calls) == 1
+    assert place(paper) == recovered
+
+
+def test_five_successful_negatives_release_gate_without_resending(rig):
+    from moomoo_mcp.services.execution_store import ASSUMED_ABSENT
+
+    paper, _, broker, store = rig
+    now = recovery_clock(paper)
+    broker.failure = "timeout"
+    place(paper)
+    first = paper.reconcile("place")
+    assert first["recovery"]["successful_negative_checks"] == 1
+    assert first["recovery"]["next_check_at"] == 105
+    assert paper.reconcile("place") == first  # A client cannot accelerate the schedule.
+    for expected_time in (105, 110, 120, 140):
+        result = next_round(paper, now)
+        assert result["recovery_checks"][-1]["completed_at"] == expected_time
+    assert result["state"] == "UNKNOWN_OUTCOME"
+    assert result["disposition"] == "POSSIBLY_SENT"
+    assert result["recovery"]["disposition"] == ASSUMED_ABSENT
+    assert result["recovery"]["absence_proven"] is False
+    assert store.health()["state"] == "READY"
+    assert place(paper) == result
+    assert len(broker.calls) == 1
+    broker.failure = None
+    fresh = place(paper, token="separate-decision")
+    assert fresh["state"] == "ACKNOWLEDGED"
+    assert fresh["recovery_updates"][0]["disposition"] == ASSUMED_ABSENT
+    assert len(broker.calls) == 2
+
+
+def test_queued_reads_use_actual_times_and_errors_do_not_count(rig, monkeypatch):
+    paper, service, broker, _ = rig
+    now = recovery_clock(paper)
+    broker.failure = "timeout"
+    place(paper)
+    original = service.get_history_orders
+    calls = []
+
+    def history(**kwargs):
+        calls.append(kwargs)
+        now[0] += 7  # Future provider queue time, without implementing a limiter.
+        if len(calls) == 2:
+            raise TimeoutError("query failed")
+        return original(**kwargs)
+
+    monkeypatch.setattr(service, "get_history_orders", history)
+    result = paper.reconcile("place")
+    assert result["recovery_checks"][0]["started_at"] == 100
+    assert result["recovery_checks"][0]["completed_at"] == 107
+    assert result["recovery"]["next_check_at"] == 112
+    result = next_round(paper, now)
+    assert result["recovery"]["successful_negative_checks"] == 1
+    assert result["recovery_checks"][-1]["outcome"] == "ERROR"
+    assert result["recovery"]["next_check_at"] == 124
+    for _ in range(4):
+        result = next_round(paper, now)
+    assert result["recovery"]["successful_negative_checks"] == 5
+    assert result["recovery_checks"][-1]["completed_at"] > 140
+    assert len(calls) == 6
+    assert all(
+        c["acc_id"] == 123 and c["trd_env"] == "SIMULATE" and c["start"] for c in calls
+    )
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "duplicates",
+        "request",
+        "history",
+        "account",
+        "malformed",
+        "fills",
+        "position_account",
+        "position_environment",
+    ],
+)
+def test_invalid_or_ambiguous_tag_evidence_does_not_count_as_absence(
+    rig, monkeypatch, problem
+):
+    paper, service, broker, store = rig
+    now = recovery_clock(paper)
+    broker.failure = "lost_response"
+    place(paper)
+    order = broker.orders["9007199254740993"]
+    if problem == "duplicates":
+        broker.orders["88"] = order | {"order_id": "88"}
+    elif problem == "request":
+        order["qty"] = 3
+    elif problem == "history":
+        monkeypatch.setattr(
+            service, "get_history_orders", lambda **_kwargs: [order | {"price": "2"}]
+        )
+    elif problem == "account":
+        order["acc_id"] = 456
+    elif problem == "malformed":
+        monkeypatch.setattr(
+            service, "get_orders", lambda **_kwargs: [{"remark": "missing identity"}]
+        )
+    elif problem.startswith("position_"):
+        position = {"code": "US.AAPL", "qty": 2}
+        position.update(
+            {"acc_id": 456} if problem == "position_account" else {"trd_env": "REAL"}
+        )
+        monkeypatch.setattr(service, "get_positions", lambda **_kwargs: [position])
+    else:
+        order["dealt_qty"] = float("nan")
+    for _ in range(6):
+        result = next_round(paper, now)
+        assert result["state"] == "UNKNOWN_OUTCOME"
+        assert result["recovery"]["successful_negative_checks"] == 0
+        assert result["recovery_checks"][-1]["outcome"] == "ERROR"
+    assert store.health()["state"] == "JOURNAL_BLOCKED"
+    assert len(broker.calls) == 1
+
+
+def test_late_discovery_blocks_before_position_accounting_and_reports_exposure(
+    rig, monkeypatch
+):
+    paper, service, broker, store = rig
+    now = recovery_clock(paper)
+    broker.failure = "timeout"
+    place(paper)
+    result = {}
+    for _ in range(5):
+        result = next_round(paper, now)
+    assert store.health()["state"] == "READY"
+    row = store.lookup("place")
+    assert row is not None
+    broker.orders["99"] = json.loads(row["merged_request"]) | {
+        "order_id": "99",
+        "order_status": "FILLED_ALL",
+        "dealt_qty": 2,
+        "dealt_avg_price": 1.1,
+    }
+    original = service.get_positions
+
+    def positions(**kwargs):
+        assert store.health()["blocking_reasons"] == ["LATE_ORDER_FOUND"]
+        assert kwargs["trd_env"] == "SIMULATE" and kwargs["acc_id"] == 123
+        raise TimeoutError("position evidence unavailable")
+
+    monkeypatch.setattr(service, "get_positions", positions)
+    result = next_round(paper, now)
+    assert result["recovery_checks"][-1]["outcome"] == "ERROR"
+    assert store.health()["state"] == "JOURNAL_BLOCKED"
+    with pytest.raises(OrderNotSentError):
+        place(paper, token="blocked")
+    monkeypatch.setattr(service, "get_positions", original)
+    service.position = 4
+    result = next_round(paper, now)
+    assert result["recovery"]["disposition"] == "LATE_BROKER_ORDER_FOUND"
+    assert result["accounted_facts"]["current_symbol_position"] == "4"
+    update = result["recovery_updates"][0]
+    assert update["accounted_facts"]["current_symbol_position"] == "4"
+    assert update["broker_order_id"] == "99"
+    assert update["next_check_at"] is None
+    assert store.health()["state"] == "READY"
+    assert len(broker.calls) == 1
+    with sqlite3.connect(broker.path) as conn:
+        assert [
+            r[0]
+            for r in conn.execute("SELECT resolution FROM recovery_audit ORDER BY id")
+        ] == ["ASSUMED_NOT_PLACED_AFTER_RETRIES", "LATE_BROKER_ORDER_FOUND"]
+
+
+@pytest.mark.parametrize("kind", ["MODIFY", "CANCEL"])
+def test_mutation_target_accounting_does_not_claim_causal_success(rig, kind):
+    paper, _, broker, store = rig
+    now = recovery_clock(paper)
+    target(broker)
+    broker.failure = "timeout"
+    mutate(paper, kind=kind, **({"price": "2.0"} if kind == "MODIFY" else {}))
+    first = paper.reconcile("modify")
+    assert first["recovery_checks"][-1]["outcome"] == "TARGET_PENDING"
+    assert first["order_tag"] is None
+    if kind == "MODIFY":
+        broker.orders["77"]["price"] = 2.0
+    else:
+        broker.orders["77"]["order_status"] = "CANCELLED_ALL"
+    result = next_round(paper, now, "modify")
+    assert result["accounted_facts"]["mutation_success_proven"] is False
+    assert store.health()["state"] == "READY"
+    assert len(broker.calls) == 1
+
+
+@pytest.mark.parametrize("known_id", [True, False])
+def test_legacy_untagged_placement_uses_id_or_remains_pending(rig, known_id):
+    paper, _, broker, store = rig
+    now = recovery_clock(paper)
+    broker.failure = "timeout"
+    place(paper)
+    with sqlite3.connect(broker.path) as conn:
+        conn.execute(
+            "UPDATE operations SET order_tag=NULL,broker_order_id=?",
+            ("77" if known_id else None,),
+        )
+    target(broker)
+    result = {}
+    for _ in range(5):
+        result = next_round(paper, now)
+    assert result["state"] == ("RECONCILED" if known_id else "UNKNOWN_OUTCOME")
+    assert result["recovery"]["successful_negative_checks"] == 0
+    assert store.health()["state"] == ("READY" if known_id else "JOURNAL_BLOCKED")
+    assert len(broker.calls) == 1
+
+
+def test_recovery_worker_resolves_lost_response_without_client_call(rig, monkeypatch):
+    paper, _, broker, store = rig
+    done = threading.Event()
+    original = store.record_recovery
+
+    def record(*args, **kwargs):
+        original(*args, **kwargs)
+        done.set()
+
+    monkeypatch.setattr(store, "record_recovery", record)
+    paper.recovery.start()
+    try:
+        broker.failure = "lost_response"
+        first = place(paper)
+        assert first["state"] == "UNKNOWN_OUTCOME"
+        assert done.wait(5)
+        assert store.lookup("place")["state"] == "RECONCILED"
+        assert store.health()["state"] == "READY"
+        assert len(broker.calls) == 1
+    finally:
+        paper.recovery.stop()
+    assert not paper.recovery._thread.is_alive()
+
+
+def test_startup_worker_recovers_persisted_dispatch_without_client_request(
+    rig, monkeypatch
+):
+    paper, service, broker, store = rig
+    broker.failure = "lost_response"
+    place(paper)
+    path = broker.path
+    tag = store.lookup("place")["order_tag"]
+    store.close()
+    restarted = ExecutionStore(path)
+    recovered = PaperExecution(
+        cast(TradeService, cast(object, service)), restarted, frozenset({123})
+    )
+    done = threading.Event()
+    original = restarted.record_recovery
+
+    def record(*args, **kwargs):
+        original(*args, **kwargs)
+        done.set()
+
+    monkeypatch.setattr(restarted, "record_recovery", record)
+    recovered.recovery.start()
+    try:
+        assert done.wait(5)
+        row = restarted.lookup("place")
+        assert (
+            row is not None and row["order_tag"] == tag and row["state"] == "RECONCILED"
+        )
+        assert restarted.health()["state"] == "READY"
+        assert len(broker.calls) == 1
+    finally:
+        recovered.recovery.stop()
+        restarted.close()
+
+
+def test_previously_conflicting_correlation_cannot_later_be_assumed_absent(rig):
+    paper, _, broker, store = rig
+    now = recovery_clock(paper)
+    broker.failure = "lost_response"
+    place(paper)
+    broker.orders["9007199254740993"]["qty"] = 3
+    result = paper.reconcile("place")
+    assert result["recovery_checks"][-1]["outcome"] == "ERROR"
+    broker.orders.clear()
+    for _ in range(5):
+        result = next_round(paper, now)
+    assert result["recovery"]["successful_negative_checks"] == 0
+    assert result["recovery"]["disposition"] is None
+    assert store.health()["state"] == "JOURNAL_BLOCKED"
+
+
+def test_shutdown_during_provider_read_does_not_wait_for_io_or_write_after_close(
+    rig, monkeypatch
+):
+    paper, service, broker, store = rig
+    broker.failure = "lost_response"
+    place(paper)
+    entered, release = threading.Event(), threading.Event()
+    original = service.get_orders
+
+    def orders(**kwargs):
+        entered.set()
+        assert release.wait(10)
+        return original(**kwargs)
+
+    monkeypatch.setattr(service, "get_orders", orders)
+    paper.recovery.start()
+    assert entered.wait(5)
+    try:
+        paper.recovery.stop()
+        store.close()
+    finally:
+        release.set()
+        paper.recovery._thread.join(timeout=5)
+    assert not paper.recovery._thread.is_alive()
+    with sqlite3.connect(broker.path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM recovery_checks").fetchone() == (0,)
+    assert len(broker.calls) == 1
+
+
+def test_result_conversion_failure_after_outcome_commit_keeps_observed_tag(
+    rig, monkeypatch
+):
+    paper, _, broker, store = rig
+
+    def failed_result(_row):
+        raise OSError("result conversion failed")
+
+    monkeypatch.setattr(paper, "result", failed_result)
+    result = place(paper)
+    assert result["submission_state"] == "durably_stored"
+    assert result["broker_acknowledged"] is True
+    assert result["order_tag"] == broker.calls[0][1]["remark"]
+    assert store.lookup("place")["state"] == "ACKNOWLEDGED"
+    assert place(paper) == result
+    assert paper.health()["pending_operation_ids"] == ["place"]

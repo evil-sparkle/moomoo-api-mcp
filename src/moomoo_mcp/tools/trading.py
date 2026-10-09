@@ -6,7 +6,7 @@ from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 from pydantic import StrictInt
 
-from moomoo_mcp.server import AppContext, mcp, operator_principal
+from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.tools.annotations import (
     CONSEQUENTIAL_TOOL,
     MUTATING_TOOL,
@@ -88,6 +88,12 @@ async def place_order(
       retry. Never resend blindly.
     - "acknowledged ... do not resend": the gateway took the request and its
       receipt could not be read. An order DOES exist; find it with get_orders.
+
+    Paper placements use a server-generated order_tag as the broker remark; caller
+    remarks remain in the journal. Recovery is automatic. Results include its
+    disposition and recent recovery_updates. UNKNOWN_OUTCOME remains uncertain even
+    after ASSUMED_NOT_PLACED_AFTER_RETRIES releases the paper block. An identical
+    operation retry never dispatches; a new operation ID is a separate trading decision.
 
     Args:
         code: Stock code (e.g., 'US.AAPL', 'HK.00700').
@@ -778,14 +784,14 @@ async def get_history_deals(
 async def get_execution(
     ctx: Context[ServerSession, AppContext], operation_id: str
 ) -> dict:
-    """Read one journal-owned paper operation without broker I/O or replay."""
+    """Read durable paper status, order tag, recovery decision and check times."""
     paper = ctx.request_context.lifespan_context.trade_service.paper
     if paper is None:
         raise ValueError("Paper journal is not configured")
     row = await run_blocking(paper.store.lookup, operation_id)
     if row is None:
         raise ValueError("Operation is not owned by this journal")
-    return paper.result(row)
+    return await run_blocking(paper.result, row)
 
 
 @mcp.tool(annotations=MUTATING_TOOL)
@@ -794,54 +800,12 @@ async def reconcile_execution(
 ) -> dict:
     """Query paper orders/history for one journal operation; never mutate orders.
 
-    Candidate matches and target presence do not prove mutation success. Recovered
-    dispatch markers still require operator acknowledgement after reconciliation.
+    Recovery runs automatically inside the server. This tool advances a due check
+    using the same policy. Exact broker ID/tag and consistent order/position evidence
+    release the gate; only tagged placements may be assumed absent after five clean
+    negative rounds. Errors do not count and the original operation never replays.
     """
     paper = ctx.request_context.lifespan_context.trade_service.paper
     if paper is None:
         raise ValueError("Paper journal is not configured")
     return await run_blocking(paper.reconcile, operation_id)
-
-
-@mcp.tool(annotations=MUTATING_TOOL)
-async def acknowledge_recovery(
-    ctx: Context[ServerSession, AppContext],
-    operation_id: str,
-    operator_id: str,
-    recovery_epoch: str,
-    observed_state: str,
-    resolution: str,
-    reason: str,
-    evidence_reference: str,
-    accounted_facts: dict,
-) -> dict:
-    """Operator-only evidence-backed accounting of an uncertain paper mutation.
-
-    Authenticate HTTP using the separate MCP_OPERATOR_TOKEN, never the agent token.
-    operator_id must be 'operator', the principal authenticated for this request.
-    Supply the current recovery_epoch and observed_state, resolution
-    TERMINAL_ACCOUNTED, a reason, and evidence_reference 'broker-order:<id>'.
-    accounted_facts must contain final_status, filled_quantity, average_fill_price,
-    remaining_executable_quantity (zero), and resulting_position. These facts are
-    checked against fresh broker order/history and position evidence. This records
-    exposure; it never claims the uncertain mutation succeeded or the account is flat.
-    Missing/ambiguous evidence stays blocked, with no absence or risk override.
-    """
-    principal = operator_principal.get()
-    if principal != "operator":
-        raise PermissionError("Separate authenticated operator capability required")
-    paper = ctx.request_context.lifespan_context.trade_service.paper
-    if paper is None:
-        raise ValueError("Paper journal is not configured")
-    return await run_blocking(
-        paper.acknowledge,
-        principal=principal,
-        operator_id=operator_id,
-        operation_id=operation_id,
-        recovery_epoch=recovery_epoch,
-        observed_state=observed_state,
-        resolution=resolution,
-        reason=reason,
-        evidence_reference=evidence_reference,
-        accounted_facts=accounted_facts,
-    )

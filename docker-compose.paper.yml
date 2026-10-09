@@ -9,7 +9,6 @@ services:
       - MOOMOO_JOURNAL_PATH=/var/lib/moomoo-mcp/data/execution.sqlite3
       - MOOMOO_CREATE_JOURNAL=${MOOMOO_CREATE_JOURNAL:-0}
       - MOOMOO_JOURNAL_LOCK_WAIT_MS=${MOOMOO_JOURNAL_LOCK_WAIT_MS:-5000}
-      - MCP_OPERATOR_TOKEN=${MCP_OPERATOR_TOKEN:-}
 
 volumes:
   execution-data:

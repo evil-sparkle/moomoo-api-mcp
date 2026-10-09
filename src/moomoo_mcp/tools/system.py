@@ -38,6 +38,9 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
         - trade_market: The configured MOOMOO_TRADING_MARKET discovery filter
           ('NONE' for all securities markets or one named market). It reports
           configuration, not account availability or trading permission.
+        - execution_journal: Journal readiness, pending_operation_ids and durable
+          recovery_updates, including actual check times and assumed-absence decisions.
+          Background recovery reports its result on the next tool reply.
         - gateway_version: OpenD version when the gateway reports one, else null.
     """
     lifespan_context = ctx.request_context.lifespan_context

@@ -31,7 +31,6 @@ READ_ONLY = {
     "preview_combo_order",
 }
 MUTATING = {
-    "acknowledge_recovery",
     "get_order_book",  # auto-subscribes before reading
     "get_stock_quote",  # auto-subscribes before reading
     "lock_trade",

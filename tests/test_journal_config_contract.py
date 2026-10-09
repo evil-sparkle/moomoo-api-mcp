@@ -23,15 +23,15 @@ def test_paper_allowlist_refuses_placeholders_and_empty_members(value: str) -> N
     assert "MOOMOO_SIMULATED_ACC_IDS" in str(error.value)
 
 
-def test_operator_capability_cannot_equal_agent_credential() -> None:
-    with pytest.raises(TradingModeConfigError) as error:
-        load_settings(
-            paper_settings(
-                MCP_AUTH_TOKEN="same-test-only-token",
-                MCP_OPERATOR_TOKEN="same-test-only-token",
-            )
+def test_obsolete_operator_environment_does_not_create_capability() -> None:
+    settings = load_settings(
+        paper_settings(
+            MCP_AUTH_TOKEN="same-test-only-token",
+            MCP_OPERATOR_TOKEN="same-test-only-token",
         )
-    assert "MCP_OPERATOR_TOKEN" in str(error.value)
+    )
+    assert settings.auth_token == "same-test-only-token"
+    assert not hasattr(settings, "operator_token")
 
 
 def test_read_only_ignores_journal_location_without_touching_disk(tmp_path) -> None:
