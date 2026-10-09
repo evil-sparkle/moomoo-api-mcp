@@ -16,7 +16,7 @@
 ## 4. Integration validation and PR
 
 - [x] 4.1 Run full tests, Ruff, type checking and strict OpenSpec validation; inspect the public diff for sensitive data and record validation limits in the PR.
-- [ ] 4.2 Commit, push and open the PR; register its URL with T3 and verify the linked PR and remote checks.
+- [x] 4.2 Commit, push and open the PR; register its URL with T3 and verify the linked PR and remote checks.
 
 ## Workflow follow-up
 
