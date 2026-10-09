@@ -199,24 +199,7 @@ validity flags are not independent financial reconciliation.
 - `get_user_security`: List the securities in one watchlist group.
 - `get_option_chain`: Get option contracts for an underlying within a range of expiry dates, filtered to calls, puts, or all. Returns the exact provider contract symbols to use in quotes, previews, and orders — never build an option symbol by hand. The provider accepts a range of at most 30 days; a wider range is rejected rather than truncated.
 
-  All MCP clients of the process-owned gateway service share a rolling budget
-  of 10 option-chain SDK calls per 30 seconds, with a 0.1-second safety margin,
-  matching the [Moomoo option-chain limit](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-option-chain.html).
-  Quota admission waits asynchronously for up to five seconds before using an
-  SDK worker. If capacity remains unavailable, the tool returns an explicit
-  error containing `retry_after_seconds`; wait at least that long before a new
-  request. It is an estimate, since other callers can consume capacity meanwhile.
-  Invalid filters consume no quota; dispatched attempts, including provider
-  failures, do. Requests are never automatically retried. Other MCP tools do
-  not consume this budget.
-
-  This budget lives in one server process, shared by its clients; the supported
-  deployment runs one MCP server process per OpenD gateway. Separate MCP server
-  processes and other OpenD clients are not coordinated, and server restarts
-  reset the local window. Moomoo documents the endpoint limit without specifying
-  the complete accounting scope across independent OpenD clients, so provider
-  rate-limit errors remain possible. Direct synchronous Python service callers
-  share the budget and receive an immediate quota error instead of waiting.
+  Option-chain requests use the shared [broker request dispatcher](#broker-request-limits), with a budget of 10 calls per 30 seconds.
 
 ### Trading
 
@@ -630,6 +613,75 @@ is rejected with an explicit error rather than emitted as a plausible id: the
 precision was already lost upstream, and a silent replacement would send a
 request against the wrong account or position.
 
+## Broker request limits
+
+Every runtime SDK operation with a published timed limit passes through one
+process-owned dispatcher. PyrateLimiter maintains rolling-window history;
+reservations remain counted until the SDK starts or the caller cancels. Public
+MCP calls wait asynchronously for up to five seconds for capacity, before taking
+an SDK worker. Direct synchronous service calls fail immediately when full.
+Errors name the quota pool and include `retry_after_seconds`, a rounded estimate
+that other callers may affect. Dispatched attempts remain charged on provider
+failure or cancellation. The server never automatically retries broker calls.
+
+All limits below are calls per rolling **30 seconds**, with a **0.1-second safety
+margin**. Each operation has an independent pool unless explicitly grouped below.
+Account pools use the resolved account ID, including when a caller supplies
+`acc_id="0"`. Quote and user pools span local clients and services; internal order
+checks, instrument snapshots, and paper recovery use the same pools as tools.
+
+| SDK operation and broker documentation | Calls | Local quota pool / condition |
+| --- | ---: | --- |
+| [accinfo_query](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-funds.html) | 10 | Per account; only `refresh_cache=True` |
+| [position_list_query](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-position-list.html) | 10 | Per account; only `refresh_cache=True` |
+| [order_list_query](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-order-list.html) | 10 | Per account; only `refresh_cache=True` |
+| [deal_list_query](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-order-fill-list.html) | 10 | Per account; only `refresh_cache=True` |
+| [history_order_list_query](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-history-order-list.html) | 10 | Per account |
+| [history_deal_list_query](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-history-order-fill-list.html) | 10 | Per account |
+| [acctradinginfo_query](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-max-trd-qtys.html), [comboorder_tradinginfo_query](https://openapi.moomoo.com/moomoo-api-doc/en/trade/comboorder-tradinginfo-query.html) | 10 | Shared max-quantity pool per account (conservative interpretation; see below) |
+| [get_margin_ratio](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-margin-ratio.html) | 10 | Per gateway user |
+| [get_acc_cash_flow](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-acc-cash-flow.html) | 20 | Per account |
+| [unlock_trade](https://openapi.moomoo.com/moomoo-api-doc/en/trade/unlock.html) | 10 | Per gateway user; both unlocking and locking |
+| [place_order](https://openapi.moomoo.com/moomoo-api-doc/en/trade/place-order.html), [place_combo_order](https://openapi.moomoo.com/moomoo-api-doc/en/trade/place-combo-order.html) | 15 | Shared placement pool per account; starts at least 20 ms apart |
+| [modify_order](https://openapi.moomoo.com/moomoo-api-doc/en/trade/modify-order.html), including cancellations | 20 | Per account; starts at least 40 ms apart |
+| [get_market_snapshot](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-market-snapshot.html) | 60 | Shared quote pool for this operation |
+| [request_history_kline](https://openapi.moomoo.com/moomoo-api-doc/en/quote/request-history-kline.html) | 60 | Initial pages only; continuation requests are exempt |
+| [get_option_expiration_date](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-option-expiration-date.html) | 60 | Shared quote pool for this operation |
+| [get_option_chain](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-option-chain.html) | 10 | Shared quote pool for this operation |
+| [get_market_state](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-market-state.html) | 10 | Shared quote pool for this operation |
+| [request_trading_days](https://openapi.moomoo.com/moomoo-api-doc/en/quote/request-trading-days.html) | 30 | Shared quote pool for this operation |
+| [get_user_security_group](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-user-security-group.html) | 10 | Shared quote pool for this operation |
+| [get_user_security](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-user-security.html) | 10 | Shared quote pool for this operation |
+
+The combo max-quantity documentation describes a limit for max-quantity query
+APIs collectively. This implementation conservatively groups both APIs; that
+wording does not explicitly establish whether the broker keeps separate pools.
+Placement sharing is explicitly documented by the broker.
+
+Credential-managed REAL writes reserve two unlock-interface calls before
+unlocking, so a write cannot exhaust the capacity needed to relock. Paper writes
+reserve mutation capacity before persisting a dispatch marker. Admission errors
+report that no order was sent; errors after SDK dispatch preserve the existing
+outcome and reconciliation rules. Paced pools admit only one pending start at a
+time, so worker congestion cannot turn old reservations into clustered starts.
+
+The following runtime APIs have no published numeric frequency limit and pass
+through without a timed budget: [get_acc_list](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-acc-list.html),
+[get_global_state](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-global-state.html),
+[get_stock_basicinfo](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-static-info.html),
+[get_stock_quote](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-stock-quote.html),
+[get_order_book](https://openapi.moomoo.com/moomoo-api-doc/en/quote/get-order-book.html),
+[subscribe / unsubscribe](https://openapi.moomoo.com/moomoo-api-doc/en/quote/sub.html),
+and [query_subscription](https://openapi.moomoo.com/moomoo-api-doc/en/quote/query-subscription.html).
+Subscription capacity and the provider's minimum hold period still apply.
+
+The supported deployment runs one MCP process per OpenD gateway/user. These
+budgets do not coordinate other processes or independent OpenD clients, and
+restarting the server resets local history. Provider rate-limit errors therefore
+remain possible and are returned without replay. Python integrations creating
+several service wrappers must inject the same `BrokerRequestDispatcher` instance
+for wrappers using the same gateway/user.
+
 ## Contributing
 
 Use Python 3.12 locally and preserve Python 3.10 compatibility. `pyproject.toml`
@@ -651,7 +703,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run basedpyright
 uv run pytest
-bash scripts/validate-openspec.sh
+npx --yes @fission-ai/openspec@1.14.1 validate --all --strict
 ```
 
 Select checks by scope:
@@ -690,34 +742,21 @@ response-loss and external retry-chain acceptance remain separate evidence.
 
 ### OpenSpec integrations
 
-Use **`@fission-ai/openspec@1.14.1`**, matching the exact pin in
-`scripts/validate-openspec.sh`. The unscoped npm package is unrelated. A machine's
-bare `openspec` executable may be older; check `openspec --version` before use or
-invoke the validation script above.
-
-`openspec-verify-change` is an agent skill (`$openspec-verify-change` in Codex or
-`/openspec-verify-change` in slash-invoked skill interfaces), not an
-`openspec verify` CLI subcommand. It reviews completeness, correctness, and
-coherence against change artifacts. CLI `validate` checks structure.
-
-The repository profile in `openspec/profile.json` is **core + verify**:
-`propose`, `explore`, `apply`, `update`, `sync`, `archive`, `verify`. Delivery is
-skills only for the existing Codex, Antigravity, Claude, and OpenCode
-integrations. Duplicate `/opsx:*` commands and Antigravity workflow files are not
-installed. No other expanded workflows are installed.
+Use **`@fission-ai/openspec`**; the unscoped npm package is unrelated. The CLI
+version is pinned to 1.14.1, matching CI. Check `openspec --version` for generated
+integration differences. CLI `validate` checks artifact structure; review code
+and tests against the change artifacts to verify behavior.
 
 Regenerate from the repository root with:
 
 ```bash
-./scripts/update-openspec.sh
+npx --yes @fission-ai/openspec@1.14.1 update
 ```
 
-Use the repository script rather than bare `openspec update`: it supplies the
-tracked profile in isolated temporary configuration and refreshes all four tool
-integrations. Review the generated diff, confirm `generatedBy: "1.14.1"` and the
-seven selected workflows, then regenerate again to confirm no further changes.
-Do not hand-edit managed integrations. Keep `openspec/config.yaml` limited to
-invariants and pointers; architectural requirements belong in `openspec/specs/`.
+Review the generated diff and workflow inventory, then regenerate again to
+confirm no further changes. Do not hand-edit managed integrations. Keep
+`openspec/config.yaml` limited to invariants and pointers; architectural
+requirements belong in `openspec/specs/`.
 
 ### Local rootless Docker on macOS
 

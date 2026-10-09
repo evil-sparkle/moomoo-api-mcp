@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from moomoo import RET_OK, OpenQuoteContext
 
+from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.health import (
     HEALTH_DEADLINE_SECONDS,
@@ -37,9 +38,16 @@ def _is_logged_in(value: Any) -> bool:
 class MoomooService:
     """Service to manage Moomoo API connections."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 11111):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 11111,
+        *,
+        dispatcher: BrokerRequestDispatcher | None = None,
+    ):
         self.host = host
         self.port = port
+        self.dispatcher = dispatcher or BrokerRequestDispatcher()
         self.quote_ctx: OpenQuoteContext | None = None
         self._quote_probe = BoundedProbe("quote")
 
@@ -85,7 +93,10 @@ class MoomooService:
                 "unavailable", "Quote context not initialized", reason="not_initialized"
             )
 
-        ret, data = quote_ctx.get_global_state()
+        ret, data = self.dispatcher.call(
+            "get_global_state",
+            quote_ctx.get_global_state,
+        )
         if ret != RET_OK:
             return failure("error", data)
 

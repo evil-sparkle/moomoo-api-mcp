@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from threading import Lock
 
 import anyio
+from pyrate_limiter import InMemoryBucket, Rate, RateItem
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class RateLimitPolicy:
     period_seconds: float
     safety_margin_seconds: float = 0.1
     max_wait_seconds: float = 5.0
+    min_interval_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if self.calls < 1:
@@ -31,6 +33,7 @@ class RateLimitPolicy:
             ("period_seconds", self.period_seconds),
             ("safety_margin_seconds", self.safety_margin_seconds),
             ("max_wait_seconds", self.max_wait_seconds),
+            ("min_interval_seconds", self.min_interval_seconds),
         ):
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
@@ -59,8 +62,14 @@ class ProviderRateLimitError(RuntimeError):
 class Reservation:
     """One pending dispatch; release is harmless after dispatch has started."""
 
-    def __init__(self, limiter: "ProviderRequestLimiter"):
+    def __init__(self, limiter: "ProviderRequestLimiter", weight: int = 1):
         self._limiter = limiter
+        self._remaining = weight
+
+    @property
+    def remaining(self) -> int:
+        with self._limiter._lock:
+            return self._remaining
 
     def start(self) -> None:
         """Commit immediately before the SDK call, or reject a released slot."""
@@ -90,59 +99,106 @@ class ProviderRequestLimiter:
         self._clock = clock
         self._sleep = sleep
         self._lock = Lock()
-        self._starts: deque[float] = deque()
+        # PyrateLimiter owns the exact rolling-window log. Pending reservations
+        # deliberately live outside its timestamped history until SDK dispatch.
+        self._bucket = InMemoryBucket(
+            [Rate(policy.calls, math.ceil(policy.window_seconds * 1000))]
+        )
+        self._spacing = (
+            InMemoryBucket([Rate(1, math.ceil(policy.min_interval_seconds * 1000))])
+            if policy.min_interval_seconds
+            else None
+        )
         self._pending: set[Reservation] = set()
+        self._waiters: deque[object] = deque()
 
     def _prune(self, now: float) -> None:
-        while self._starts and now >= self._starts[0] + self.policy.window_seconds:
-            self._starts.popleft()
+        timestamp = math.floor(now * 1000)
+        self._bucket.leak(timestamp)
+        if self._spacing is not None:
+            self._spacing.leak(timestamp)
 
     def _retry_after(self, now: float) -> float:
         # Pending workers have no known dispatch time. A full window is a
         # conservative estimate; cancellation may free capacity sooner.
-        if self._starts:
-            return max(0.0, self._starts[0] + self.policy.window_seconds - now)
+        oldest = self._bucket.peek(self._bucket.count() - 1)
+        if oldest is not None:
+            return max(
+                0.001,
+                (oldest.timestamp + self._bucket.rates[0].interval + 1) / 1000 - now,
+            )
         return self.policy.window_seconds
 
-    def _try_reserve(self) -> tuple[Reservation | None, float]:
+    def _try_reserve(
+        self, weight: int = 1, ticket: object | None = None
+    ) -> tuple[Reservation | None, float]:
+        if weight < 1 or weight > self.policy.calls:
+            raise ValueError("Reservation weight must fit the operation budget")
         with self._lock:
             now = self._clock()
             self._prune(now)
-            if len(self._starts) + len(self._pending) < self.policy.calls:
-                reservation = Reservation(self)
+            if self._waiters and self._waiters[0] is not ticket:
+                return None, self._retry_after(now)
+            if self._spacing is not None:
+                if weight != 1:
+                    raise ValueError(
+                        "Paced operations require single-call reservations"
+                    )
+                # One pending start per paced group prevents delayed workers
+                # from consuming previously admitted permits in a later burst.
+                if self._pending:
+                    return None, self.policy.window_seconds
+                previous = self._spacing.peek(0)
+                if previous is not None:
+                    return None, max(
+                        0.001,
+                        (previous.timestamp + self._spacing.rates[0].interval + 1)
+                        / 1000
+                        - now,
+                    )
+            pending = sum(slot._remaining for slot in self._pending)
+            if self._bucket.count() + pending + weight <= self.policy.calls:
+                reservation = Reservation(self, weight)
                 self._pending.add(reservation)
                 return reservation, 0.0
             return None, self._retry_after(now)
 
-    def reserve(self) -> Reservation:
+    def reserve(self, weight: int = 1) -> Reservation:
         """Reserve immediately; synchronous callers never sleep for quota."""
-        reservation, retry_after = self._try_reserve()
+        reservation, retry_after = self._try_reserve(weight)
         if reservation is None:
             raise ProviderRateLimitError(self.policy, retry_after)
         return reservation
 
-    async def acquire(self) -> Reservation:
+    async def acquire(
+        self, weight: int = 1, *, deadline: float | None = None
+    ) -> Reservation:
         """Wait for quota without using a worker; timeout never dispatches."""
         if self.policy.max_wait_seconds == 0:
-            return self.reserve()
-        deadline = self._clock() + self.policy.max_wait_seconds
-        while True:
-            if self._clock() > deadline:
-                with self._lock:
-                    now = self._clock()
-                    self._prune(now)
-                    retry_after = self._retry_after(now)
-                raise ProviderRateLimitError(self.policy, retry_after)
-            reservation, retry_after = self._try_reserve()
-            if reservation is not None:
-                return reservation
-            remaining = deadline - self._clock()
-            if remaining <= 0:
-                raise ProviderRateLimitError(self.policy, retry_after)
-            # A released pending reservation can free capacity before the next
-            # timestamp expires. Short sleeps observe that without binding
-            # notifications to one event loop or touching them from SDK threads.
-            await self._sleep(min(retry_after, remaining, 0.05))
+            return self.reserve(weight)
+        if deadline is None:
+            deadline = self._clock() + self.policy.max_wait_seconds
+        ticket = object()
+        with self._lock:
+            self._waiters.append(ticket)
+        try:
+            while True:
+                if self._clock() > deadline:
+                    with self._lock:
+                        now = self._clock()
+                        self._prune(now)
+                        retry_after = self._retry_after(now)
+                    raise ProviderRateLimitError(self.policy, retry_after)
+                reservation, retry_after = self._try_reserve(weight, ticket)
+                if reservation is not None:
+                    return reservation
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    raise ProviderRateLimitError(self.policy, retry_after)
+                await self._sleep(min(retry_after, remaining, 0.05))
+        finally:
+            with self._lock:
+                self._waiters.remove(ticket)
 
     def _start(self, reservation: Reservation) -> None:
         with self._lock:
@@ -150,9 +206,18 @@ class ProviderRequestLimiter:
                 raise RuntimeError(
                     "Provider request reservation already released or used"
                 )
-            self._pending.remove(reservation)
-            self._starts.append(self._clock())
+            now = self._clock()
+            self._prune(now)
+            item = RateItem(self.policy.operation, math.floor(now * 1000))
+            if not self._bucket.put(item):
+                raise RuntimeError("Reserved provider capacity was not available")
+            if self._spacing is not None and not self._spacing.put(item):
+                raise RuntimeError("Reserved dispatch spacing was not available")
+            reservation._remaining -= 1
+            if reservation._remaining == 0:
+                self._pending.remove(reservation)
 
     def _release(self, reservation: Reservation) -> None:
         with self._lock:
             self._pending.discard(reservation)
+            reservation._remaining = 0

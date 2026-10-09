@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 from moomoo import RET_ERROR, RET_OK
 
+from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher, QuotaRequest
 from moomoo_mcp.services.execution_store import ExecutionConflict, ExecutionStore
 from moomoo_mcp.services.order_errors import OrderNotSentError
 from moomoo_mcp.services.paper_execution import PaperExecution
@@ -19,11 +20,13 @@ from moomoo_mcp.services.trading_policy import (
     TradingMode,
     TradingPolicy,
 )
+from tests.rate_limit_clock import FakeClock
 
 
 class Broker:
     def __init__(self, path):
         self.path = path
+        self.clock = FakeClock()
         self.calls = []
         self.orders = {}
         self.failure = None
@@ -42,6 +45,8 @@ class Broker:
             assert row == ("DISPATCHING", 1)
             conn.rollback()
         self.calls.append((kind, request.copy()))
+        # Model time taken by gateway IO, beyond both mutation spacing limits.
+        self.clock.advance(0.05)
         if self.entered:
             self.entered.set()
             assert self.release is not None
@@ -82,6 +87,7 @@ class Broker:
 class Service:
     def __init__(self, broker):
         self.trade_ctx = broker
+        self.dispatcher = BrokerRequestDispatcher(clock=lambda: self.trade_ctx.clock())
         self.policy = TradingPolicy(TradingMode.SIMULATE)
         self.accounts = [
             {"acc_id": 123, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]}
@@ -758,6 +764,18 @@ def test_decimal_notional_just_above_cap_is_not_rounded_down(rig):
     assert broker.calls == []
     row = store.lookup("place")
     assert row is not None and row["state"] == "REFUSED" and row["marker"] == 0
+
+
+def test_quota_refusal_does_not_admit_or_mark_a_paper_write(rig):
+    paper, service, broker, store = rig
+    held = service.dispatcher.limiter(QuotaRequest("place_order", 123)).reserve()
+    try:
+        with pytest.raises(OrderNotSentError, match="order_placement rate limit"):
+            place(paper)
+        assert store.lookup("place") is None
+        assert broker.calls == []
+    finally:
+        held.release()
 
 
 class DelayedObservationBroker(Broker):

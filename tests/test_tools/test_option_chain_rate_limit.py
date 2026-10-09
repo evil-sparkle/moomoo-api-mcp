@@ -95,7 +95,7 @@ async def test_eleven_concurrent_mcp_clients_begin_at_most_ten_sdk_calls(
         assert "retry_after_seconds=26" in str(exc.value)
         assert quote.get_option_chain.call_count == 10
 
-        clock.advance(25.1)
+        clock.advance(25.102)
         await call_mcp_tool(governed_context, "get_option_chain", {"code": "US.XYZ"})
         assert starts[-1] >= 30.1
         assert all(starts[i + 10] - starts[i] >= 30 for i in range(len(starts) - 10))
@@ -116,7 +116,7 @@ async def test_capacity_expiring_within_deadline_allows_mcp_request(
         call_mcp_tool(governed_context, "get_option_chain", {"code": "US.XYZ"})
     )
     await clock.wait_for_sleepers()
-    clock.advance(2.1)
+    clock.advance(2.102)
     result = await waiting
     assert result.structured["result"][0]["code"] == "US.XYZ261120C100000"
     assert quote_context(governed_context).get_option_chain.call_count == 11
@@ -203,7 +203,7 @@ async def test_anyio_cancellation_during_quota_wait_never_dispatches(
     scope.cancel()
     await waiting
     assert quote_context(governed_context).get_option_chain.call_count == 10
-    clock.advance(30.1)
+    clock.advance(30.102)
     service.get_option_chain("US.REPLACEMENT")
 
 

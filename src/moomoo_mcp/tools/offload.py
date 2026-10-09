@@ -19,11 +19,15 @@ saturated worker pool delay health past its own deadline.
 import asyncio
 import contextlib
 import functools
+import inspect
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future
 from typing import Any, TypeVar
 
 import anyio.to_thread
+
+from moomoo_mcp.services.order_errors import OrderNotSentError, not_sent_message
+from moomoo_mcp.services.rate_limit import ProviderRateLimitError
 
 T = TypeVar("T")
 
@@ -45,6 +49,34 @@ async def run_blocking(func: Callable[..., T], /, *args: Any, **kwargs: Any) -> 
         Whatever ``func`` returns. Exceptions propagate unchanged, so a tool's
         error handling is unaffected by running off the loop.
     """
+    owner = getattr(func, "__self__", None)
+    prepare = getattr(type(owner), "prepare_admission", None)
+    if owner is not None and prepare is not None:
+        bound = inspect.signature(func).bind(*args, **kwargs)
+        bound.apply_defaults()
+        original_arguments = dict(bound.arguments)
+        plan = await anyio.to_thread.run_sync(
+            functools.partial(prepare, owner, func.__name__, bound.arguments)
+        )
+        try:
+            return await owner.dispatcher.run_async(
+                plan.requests, func, **bound.arguments
+            )
+        except ProviderRateLimitError as exc:
+            if plan.write_operation:
+                recover = getattr(type(owner), "recover_admission", None)
+                if recover is not None:
+                    result = await anyio.to_thread.run_sync(
+                        functools.partial(
+                            recover, owner, func.__name__, original_arguments
+                        )
+                    )
+                    if result is not None:
+                        return result
+                raise OrderNotSentError(
+                    not_sent_message(plan.write_operation, str(exc))
+                ) from exc
+            raise
     return await anyio.to_thread.run_sync(functools.partial(func, *args, **kwargs))
 
 

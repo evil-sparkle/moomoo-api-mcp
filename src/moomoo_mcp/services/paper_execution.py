@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import math
 import threading
+from contextlib import ExitStack
 from decimal import Decimal, localcontext
 from typing import TYPE_CHECKING, Any
 
 from moomoo import RET_OK
 
+from moomoo_mcp.services.admission import AdmissionPlan, prepare_paper_call
+from moomoo_mcp.services.broker_dispatch import QuotaRequest
 from moomoo_mcp.services.execution_identity import (
     canonicalize_request,
     decimal_price,
@@ -39,13 +42,18 @@ class PaperExecution:
         self, service: TradeService, store: ExecutionStore, allowlist: frozenset[int]
     ):
         self.service = service
+        self.dispatcher = service.dispatcher
         self.store = store
         self.allowlist = allowlist
         self.lock = threading.RLock()
+        self._admission_lock = threading.Lock()
         self._late_failure: dict[str, dict] = {}
         self._late_identity: dict[str, dict] = {}
         self.store.review()
         self.recovery = PaperRecovery(self)
+
+    def prepare_admission(self, method: str, params: dict[str, Any]) -> AdmissionPlan:
+        return prepare_paper_call(self, method, params)
 
     def health(self) -> dict:
         health = self.store.health()
@@ -199,6 +207,26 @@ class PaperExecution:
         admission_epoch: str | None,
         acc_id: int | str,
     ) -> dict:
+        with ExitStack() as admission:
+            return self._execute(
+                kind,
+                params,
+                operation_id=operation_id,
+                admission_epoch=admission_epoch,
+                acc_id=acc_id,
+                admission=admission,
+            )
+
+    def _execute(
+        self,
+        kind: str,
+        params: dict,
+        *,
+        operation_id: str | None,
+        admission_epoch: str | None,
+        acc_id: int | str,
+        admission: ExitStack,
+    ) -> dict:
         with not_sent("paper " + kind):
             self.service.policy.check_write(kind, "SIMULATE")
             validate_token(operation_id, admission_epoch)
@@ -210,8 +238,12 @@ class PaperExecution:
         row = self.store.lookup(operation_id)
         if row:
             return self._retry(row, kind, params, acc_id)
-        with not_sent("paper " + kind):
+        with not_sent("paper " + kind), self._admission_lock:
             # Fail storage/recovery and stale tokens before any broker discovery.
+            # Another caller may have admitted this token after our first lookup.
+            row = self.store.lookup(operation_id)
+            if row is not None:
+                return self._retry(row, kind, params, acc_id)
             if admission_epoch != self.store.epoch:
                 raise ExecutionConflict(
                     "Unknown non-current-epoch token cannot be accounted for;"
@@ -220,6 +252,16 @@ class PaperExecution:
             self.ready()
             account = self._account(acc_id)
             canonical = canonicalize_request("SIMULATE", account, kind, params)
+            admission.enter_context(
+                self.dispatcher.reserve(
+                    [
+                        QuotaRequest(
+                            "place_order" if kind == "PLACE" else "modify_order",
+                            account,
+                        )
+                    ]
+                )
+            )
             row, admitted = self.store.admit(
                 operation_id, admission_epoch, account, kind, canonical, params
             )
@@ -233,6 +275,16 @@ class PaperExecution:
                 merged = self._prepare(kind, params, account, observed_modifications)
                 if kind == "PLACE":
                     merged["remark"] = row["order_tag"]
+                admission.enter_context(
+                    self.dispatcher.protect_mutation(
+                        [
+                            QuotaRequest(
+                                "place_order" if kind == "PLACE" else "modify_order",
+                                account,
+                            )
+                        ]
+                    )
+                )
                 self.store.mark_dispatch(operation_id, merged)
             except Exception as exc:
                 with not_sent("paper " + kind):
@@ -250,9 +302,13 @@ class PaperExecution:
                 ctx = self.service.trade_ctx
                 assert ctx is not None
                 if kind == "PLACE":
-                    ret, data = ctx.place_order(**merged)
+                    ret, data = self.dispatcher.call(
+                        "place_order", ctx.place_order, **merged
+                    )
                 else:
-                    ret, data = ctx.modify_order(**merged)
+                    ret, data = self.dispatcher.call(
+                        "modify_order", ctx.modify_order, **merged
+                    )
             except Exception as exc:
                 return self._finish(
                     operation_id,

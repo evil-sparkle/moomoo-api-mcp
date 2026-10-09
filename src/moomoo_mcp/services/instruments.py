@@ -31,6 +31,7 @@ from typing import Any
 
 from moomoo import RET_OK, OpenQuoteContext
 
+from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
 from moomoo_mcp.services.trading_policy import (
     OPTION_CLASSIFICATION,
     InstrumentFacts,
@@ -103,7 +104,12 @@ def _rows(operation: str, ret: Any, data: Any) -> list[dict[str, Any]]:
 class InstrumentAdapter:
     """Builds :class:`InstrumentFacts` for the codes an order names."""
 
-    def __init__(self, quote_ctx_provider: Callable[[], OpenQuoteContext | None]):
+    def __init__(
+        self,
+        quote_ctx_provider: Callable[[], OpenQuoteContext | None],
+        *,
+        dispatcher: BrokerRequestDispatcher | None = None,
+    ):
         """
         Args:
             quote_ctx_provider: Returns the shared quote context, or None when
@@ -113,6 +119,7 @@ class InstrumentAdapter:
                 wiring time.
         """
         self._quote_ctx_provider = quote_ctx_provider
+        self.dispatcher = dispatcher or BrokerRequestDispatcher()
 
     def __call__(self, codes: Sequence[str]) -> list[InstrumentFacts]:
         """Gather the valuation facts for ``codes``, in the order given.
@@ -155,7 +162,9 @@ class InstrumentAdapter:
     def _snapshots(
         self, quote_ctx: OpenQuoteContext, codes: list[str]
     ) -> dict[str, dict[str, Any]]:
-        ret, data = quote_ctx.get_market_snapshot(codes)
+        ret, data = self.dispatcher.call(
+            "get_market_snapshot", quote_ctx.get_market_snapshot, codes
+        )
         rows = _rows("get_market_snapshot", ret, data)
         return {str(row.get("code")): row for row in rows}
 
@@ -195,8 +204,12 @@ class InstrumentAdapter:
             # is passed only because the parameter is positional-ish in the SDK
             # signature; every returned row carries its own stock_type, which is
             # what gets read.
-            ret, data = quote_ctx.get_stock_basicinfo(
-                market=market, stock_type="STOCK", code_list=group
+            ret, data = self.dispatcher.call(
+                "get_stock_basicinfo",
+                quote_ctx.get_stock_basicinfo,
+                market=market,
+                stock_type="STOCK",
+                code_list=group,
             )
             rows = _rows(f"get_stock_basicinfo({market})", ret, data)
             for row in rows:
