@@ -11,7 +11,6 @@ Enforcement lives in the service layer, before any gateway request, so it
 applies to direct Python use of ``TradeService`` and not only to MCP calls.
 """
 
-import logging
 import math
 import os
 from collections.abc import Mapping, Sequence
@@ -21,11 +20,8 @@ from types import MappingProxyType
 
 from moomoo_mcp.services.validation import FIXED_LIMIT_TYPES, NO_FIXED_LIMIT_TYPES
 
-logger = logging.getLogger(__name__)
-
 ENV_VAR = "MOOMOO_TRADING_MODE"
 ENV_MAX_ORDER_QTY = "MOOMOO_MAX_ORDER_QTY"
-ENV_MAX_ORDER_NOTIONAL = "MOOMOO_MAX_ORDER_NOTIONAL"
 ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY = "MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY"
 ENV_REAL_ACC_IDS = "MOOMOO_REAL_ACC_IDS"
 
@@ -324,8 +320,7 @@ class TradingPolicy:
         """Build a policy from environment variables.
 
         Reads ``MOOMOO_TRADING_MODE``, ``MOOMOO_MAX_ORDER_QTY``,
-        ``MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY``, ``MOOMOO_REAL_ACC_IDS``, and
-        the legacy ``MOOMOO_MAX_ORDER_NOTIONAL``.
+        ``MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY``, and ``MOOMOO_REAL_ACC_IDS``.
 
         Args:
             environ: Environment mapping to read. Defaults to ``os.environ``.
@@ -365,31 +360,11 @@ class TradingPolicy:
                 ) from exc
             _require_positive_finite(ENV_MAX_ORDER_QTY, "limit", max_order_qty)
 
-        # 3. Parse the currency-qualified notional caps, and classify the legacy
-        #    variable. The legacy value is never parsed as a limit: a cap with no
-        #    unit cannot be applied to an instrument whose currency we now know.
+        # 3. Parse optional currency-qualified notional caps.
         raw_by_currency = (env.get(ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY) or "").strip()
-        raw_legacy = (env.get(ENV_MAX_ORDER_NOTIONAL) or "").strip()
         max_order_notional: dict[str, float] = {}
         if raw_by_currency:
             max_order_notional = _parse_notional_caps(raw_by_currency)
-            if raw_legacy:
-                # Both set is the rollback-friendly arrangement: the old image
-                # reads the legacy variable, this one reads the new one, and one
-                # environment file serves both.
-                logger.info(
-                    f"{ENV_MAX_ORDER_NOTIONAL} is set and ignored; "
-                    f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY} is in effect."
-                )
-        elif raw_legacy:
-            raise TradingModeConfigError(
-                f"{ENV_MAX_ORDER_NOTIONAL} is set on its own. A notional cap "
-                "without a currency cannot be applied, because an order's value "
-                "is measured in the instrument's own currency. Set "
-                f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY} instead, for example "
-                "USD:25000. Leaving the legacy variable in place alongside it is "
-                "supported, and is what makes a rollback need no environment edit."
-            )
 
         # 4. The REAL account allowlist. Required in REAL mode, ignored otherwise:
         #    a SIMULATE deployment listing REAL accounts would be stating an

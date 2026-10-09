@@ -126,15 +126,10 @@ non-read-only phase, no REAL-order path).
   - make `max_order_notional` a currency → amount mapping, parsed from
     `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` (`CURRENCY:AMOUNT[,…]`);
   - reject entries without a currency, duplicates, non-alphabetic and
-    non-three-letter codes, `nan` and `inf`;
-  - handle the legacy `MOOMOO_MAX_ORDER_NOTIONAL` as design Decision 2 describes.
-    It is ignored, with an INFO log, alongside the new variable, and is a startup
-    error when set alone. It is never parsed as a limit.
+    non-three-letter codes, `nan` and `inf`.
 
   Verify with `test_trading_policy.py` cases for each rejection, including direct
-  construction. Add a case for both variables set, which enforces the new cap and
-  logs, and one for the legacy variable alone, where the error names the new
-  variable.
+  construction.
 - [x] 2.3 Add `real_acc_ids` to the policy, parsed from `MOOMOO_REAL_ACC_IDS`
   (comma-separated decimal identifiers). It is required when the mode is REAL and
   ignored otherwise. Verify with tests for a missing, empty or malformed value in
@@ -345,16 +340,14 @@ non-read-only phase, no REAL-order path).
 - [x] 8.1 Update the configuration files:
   - `.env.example`: add `MOOMOO_REAL_ACC_IDS`,
     `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`, `MCP_AUTH_TOKEN` as required for HTTP,
-    and `MCP_ALLOW_UNAUTHENTICATED_HTTP`. Mark `MOOMOO_MAX_ORDER_NOTIONAL` as a
-    legacy, rollback-only setting.
-  - `docker-compose.yml`: pass through the new variables, and keep passing through
-    `MOOMOO_MAX_ORDER_NOTIONAL`.
+    and `MCP_ALLOW_UNAUTHENTICATED_HTTP`.
+  - `docker-compose.yml`: pass through the new variables.
 
   Verify with `tests/test_compose_topology.py` still passing, and
   `./scripts/smoke-test.sh` in CI.
 - [x] 8.2 Update the documentation:
-  - `docs/deploy-vps.md`: the migration steps from design.md, the rollback with no
-    `.env` edit, and the crash-loop signal.
+  - `docs/deploy-vps.md`: the migration steps from design.md, rollback compatibility
+    checks, and the crash-loop signal.
   - [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference): the unlock lifecycle, the `ARMED`/`HALTED`
     transitions, and `lock_trade` recovery.
   - `README.md`: the configuration table.
@@ -362,8 +355,7 @@ non-read-only phase, no REAL-order path).
     "HTTP currently runs unauthenticated"; add `settings.py` to the module map.
 
   Verify by searching the docs for `auto-unlock` and `_auto_unlock_trade`, and
-  finding none remaining. Every `MOOMOO_MAX_ORDER_NOTIONAL=` mention must be labelled
-  legacy or rollback-only.
+  finding none remaining.
 
 ## 9. Integration check
 

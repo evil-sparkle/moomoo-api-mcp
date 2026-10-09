@@ -303,7 +303,7 @@ class TestStartupConfigurationFailure:
         [
             {ENV_VAR: "PAPER"},
             {ENV_VAR: "REAL"},  # no allowlist
-            {"MOOMOO_MAX_ORDER_NOTIONAL": "25000"},  # legacy variable alone
+            {"MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY": "25000"},  # no currency
             {"MOOMOO_SECURITY_FIRM": "NOTAFIRM"},
             {"MOOMOO_TRADING_MARKET": "USA"},
             {"MOOMOO_OPEND_PORT": "not-a-port"},

@@ -15,12 +15,6 @@ The system SHALL support the following security configuration environment variab
   order, or for a combo's largest leg.
 - `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`: optional currency-qualified caps on a
   single order's notional value, in the form `CURRENCY:AMOUNT[,CURRENCY:AMOUNT...]`.
-- `MOOMOO_MAX_ORDER_NOTIONAL`: legacy, unit-less cap.
-  - This version never applies it as a limit.
-  - It is ignored when `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` is set, so one
-    environment file can serve both this version and an earlier one during a
-    rollback.
-  - Set on its own, it is a configuration error.
 - `MOOMOO_REAL_ACC_IDS`: comma-separated REAL account identifiers that REAL writes
   may target. Required when `MOOMOO_TRADING_MODE` is `REAL`.
 - `MOOMOO_SECURITY_FIRM`: optional securities-firm identifier. When set, it SHALL
@@ -66,14 +60,6 @@ names the variable. The server SHALL NOT fall back to a default in its place.
 - **GIVEN** `MCP_TRANSPORT` is `stdio`
 - **WHEN** the server starts without `MCP_AUTH_TOKEN`
 - **THEN** it SHALL start normally
-
-#### Scenario: One environment file serves old and new images
-
-- **GIVEN** the environment sets `MOOMOO_MAX_ORDER_NOTIONAL=25000` and
-  `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:25000`
-- **WHEN** this version starts
-- **THEN** it SHALL start, enforce the currency-qualified cap, and log that the
-  legacy variable is ignored
 
 #### Scenario: Unrecognized security firm
 

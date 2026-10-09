@@ -37,10 +37,6 @@ journal and the approval workflow on top of it.
     `USD:25000,HKD:200000`.
   - Orders in a currency without a cap are refused while any notional cap is
     configured.
-  - The legacy `MOOMOO_MAX_ORDER_NOTIONAL` is ignored when the new variable is set.
-    One `.env` can therefore serve the new image and, after a rollback, the old one.
-  - **BREAKING**: the legacy variable set on its own is a startup error, because a
-    cap without a unit cannot be applied.
 - **Modifications are checked as the order that would result.**
   - A `NORMAL` modification fetches the existing order, merges in the requested
     changes, and checks the result.
@@ -165,8 +161,6 @@ None.
   - The live VPS `.env` must gain `MOOMOO_REAL_ACC_IDS`, and
     `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` if a cap is used, before upgrading.
     Without them the new image refuses to start.
-  - The legacy `MOOMOO_MAX_ORDER_NOTIONAL` can stay in place. The old image reads
-    it, and the new image ignores it, so a rollback needs no `.env` edit.
 - **Agent (ZeroClaw)**: write tool calls must pass `trd_env`. Tool descriptions
   change.
 - **Dependencies**: none new.

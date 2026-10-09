@@ -21,17 +21,6 @@ cannot be evaluated for an order, the order SHALL be refused, not permitted.
   currency.
 - Constructing the policy directly SHALL apply the same validation.
 
-**Legacy variable**
-
-`MOOMOO_MAX_ORDER_NOTIONAL` is the legacy, unit-less cap. This version SHALL NOT use
-it as a limit.
-
-- If both variables are set, the legacy variable SHALL be ignored, and startup SHALL
-  log that it is ignored.
-- If only the legacy variable is set, startup SHALL fail with a configuration error.
-  The error SHALL explain that a cap without a currency cannot be applied, and SHALL
-  name `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`.
-
 **Quantity limit**
 
 The quantity checked against `MOOMOO_MAX_ORDER_QTY` SHALL be:
@@ -238,26 +227,10 @@ computed.
   `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` contains `USD:nan` or `USD:inf`
 - **THEN** startup SHALL fail with a configuration error naming the variable
 
-#### Scenario: Legacy variable alongside the new one
-
-- **GIVEN** `MOOMOO_MAX_ORDER_NOTIONAL` is `25000` and
-  `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` is `USD:25000`
-- **WHEN** the server starts
-- **THEN** it SHALL enforce `USD:25000`
-- **AND** SHALL log that the legacy variable is ignored
-
-#### Scenario: Legacy variable alone is rejected
-
-- **GIVEN** `MOOMOO_MAX_ORDER_NOTIONAL` is `25000`, and
-  `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` is unset
-- **WHEN** the server starts
-- **THEN** startup SHALL fail with a configuration error naming
-  `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`
-
 #### Scenario: Unbounded orders when limits are not configured
 
 - **GIVEN** neither `MOOMOO_MAX_ORDER_QTY` nor `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`
-  is set, and `MOOMOO_MAX_ORDER_NOTIONAL` is unset
+  is set
 - **WHEN** an order is submitted within an authorized trading environment
 - **THEN** the service SHALL permit the order without quantity or notional limit
   rejection

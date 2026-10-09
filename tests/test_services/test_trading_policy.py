@@ -450,30 +450,6 @@ class TestLimitConfiguration:
         with pytest.raises(TradingModeConfigError):
             TradingPolicy(TradingMode.REAL, **kwargs)
 
-    def test_legacy_variable_alongside_the_new_one_is_ignored(self, caplog):
-        with caplog.at_level("INFO"):
-            policy = TradingPolicy.from_env(
-                {
-                    "MOOMOO_MAX_ORDER_NOTIONAL": "25000",
-                    "MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY": "USD:25000",
-                }
-            )
-        assert policy.max_order_notional == {"USD": 25000.0}
-        assert "MOOMOO_MAX_ORDER_NOTIONAL is set and ignored" in caplog.text
-
-    def test_legacy_variable_alone_is_a_startup_error(self):
-        with pytest.raises(TradingModeConfigError) as excinfo:
-            TradingPolicy.from_env({"MOOMOO_MAX_ORDER_NOTIONAL": "25000"})
-
-        message = str(excinfo.value)
-        assert "MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY" in message
-        assert "without a currency" in message
-
-    def test_legacy_variable_is_never_parsed_as_a_limit(self):
-        """Even a value that would parse fine is not read as a cap."""
-        with pytest.raises(TradingModeConfigError):
-            TradingPolicy.from_env({"MOOMOO_MAX_ORDER_NOTIONAL": "25000"})
-
     def test_no_cap_configured_means_no_assessment(self):
         policy = TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({456}))
         assert policy.notional_cap_configured is False

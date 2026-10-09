@@ -127,14 +127,6 @@ itself. `TradeService` receives the credential in its constructor, replacing the
 - **Format.** The caps come from a new variable,
   `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`. The policy field `max_order_notional`
   becomes `Mapping[str, float]`, keyed by an upper-case currency.
-- **Legacy variable.** `load_settings` reads `MOOMOO_MAX_ORDER_NOTIONAL` only to
-  classify it:
-  - Absent: nothing happens.
-  - Present alongside the new variable: it is ignored, and a single INFO log line
-    says so.
-  - Present alone: `TradingModeConfigError` naming the new variable.
-
-  The value is never parsed as a limit.
 - **Parsing.** Parse with `split(",")`, then `partition(":")`, with explicit
   checks: a three-letter alphabetic code (`isalpha()`) and no duplicates. No regex.
 - **Currency.** The snapshot carries no currency field (verified against
@@ -171,11 +163,6 @@ itself. `TradeService` receives the credential in its constructor, replacing the
   a 25,000 cap means roughly 7.8× different exposure in USD and in HKD.
 - *Alternative:* a single cap plus a `…_CURRENCY` variable. It was rejected because
   it cannot express a second market without another format change later.
-- *Alternative:* reuse `MOOMOO_MAX_ORDER_NOTIONAL` with the new format. It was
-  rejected for rollback reasons. The previous image parses that variable with
-  `float()` and fails on `USD:…`. A rollback would then require editing `.env` under
-  pressure. With a new name, one `.env` serves both images: the old image enforces
-  its unit-less cap, and the new one enforces currency caps.
 - *Alternative:* use a currency field from the snapshot. It is not available:
   `MarketSnapshotQuery` exposes no currency field in `moomoo-api` 10.10.7008. Should a
   future SDK add one, it would take precedence over the verified-market table without
@@ -593,23 +580,20 @@ Stage 1.1 market selection. See `verification.md` for the command/result record.
 1. Before deploying, edit the VPS `.env`:
    - Set `MOOMOO_REAL_ACC_IDS=<your REAL acc_id>`. Get it from `get_accounts`.
    - Add `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:<amount>`, plus any other traded
-     currencies. Leave the existing `MOOMOO_MAX_ORDER_NOTIONAL` in place for the old
-     image.
+     currencies.
    - Confirm `MCP_AUTH_TOKEN` is set. The runbook already requires it.
 2. Add `MOOMOO_REAL_ACC_IDS`, `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` and
    `MCP_ALLOW_UNAUTHENTICATED_HTTP` to the `docker-compose.yml` environment
-   passthrough. They default to empty. Keep `MOOMOO_MAX_ORDER_NOTIONAL` passed
-   through.
+   passthrough. They default to empty.
 3. Deploy through the normal path. `deploy_verify.py` proves that authenticated
    `initialize` works.
 4. Call `check_health` and confirm `execution_halted: false`.
 5. Place and cancel a SIMULATE order.
 6. Optionally, place and cancel a minimal REAL limit order far from the market. This
    step is operator-run.
-7. **Rollback:** redeploy the previous image tag with no `.env` edit. The old image
-   ignores `MOOMOO_REAL_ACC_IDS` and `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`, and
-   enforces its unit-less `MOOMOO_MAX_ORDER_NOTIONAL` as before. The old image also
-   restores startup auto-unlock. That is expected behaviour for that version.
+7. **Rollback:** check the target image's configuration requirements and trading
+   safeguards before deployment. Earlier images may require different configuration
+   and restore startup auto-unlock.
 8. Update the ZeroClaw agent prompt or skills for two changes: write tools now
    require `trd_env`, and `modify_order`/`cancel_order` now resolve the account
    before dispatch, so a call that relied on the gateway's own default for
@@ -620,8 +604,6 @@ Stage 1.1 market selection. See `verification.md` for the command/result record.
    currency table and that any option instruments have a verified monetary
    multiplier. Instruments outside those sets are refused while a cap is set; this is
    intended, and is the migration's most likely surprise.
-10. After Stage 1 has been stable for a while, remove `MOOMOO_MAX_ORDER_NOTIONAL`
-   from `.env`, which ends rollback compatibility for that setting.
 
 ## Stage 2 contract carry-forward (2026-09-23)
 
