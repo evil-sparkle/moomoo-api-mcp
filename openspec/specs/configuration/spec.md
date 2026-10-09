@@ -41,6 +41,8 @@ The system SHALL support the following security configuration environment variab
   order, or for a combo's largest leg.
 - `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`: optional currency-qualified caps on a
   single order's notional value, in the form `CURRENCY:AMOUNT[,CURRENCY:AMOUNT...]`.
+  - Compose SHALL supply `USD:500` when this setting is unset or empty.
+  - Compose SHALL preserve an operator-provided value when it is nonempty.
 - `MOOMOO_REAL_ACC_IDS`: comma-separated REAL account identifiers that REAL writes
   may target. Required when `MOOMOO_TRADING_MODE` is `REAL`.
 - `MOOMOO_SECURITY_FIRM`: optional securities-firm identifier. When set, it SHALL
@@ -50,6 +52,19 @@ The system SHALL support the following security configuration environment variab
 
 An invalid value for any of these SHALL fail startup with a configuration error that
 names the variable. The server SHALL NOT fall back to a default in its place.
+
+#### Scenario: Compose supplies a default notional cap
+
+- **GIVEN** the notional-cap environment setting is unset or empty
+- **WHEN** the base or production Compose configuration is rendered
+- **THEN** the server environment SHALL contain
+  `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:500`
+
+#### Scenario: Compose preserves an explicit notional cap
+
+- **GIVEN** `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` is `USD:1500,HKD:8000`
+- **WHEN** the base or production Compose configuration is rendered
+- **THEN** the server SHALL receive and parse those currency-qualified caps
 
 #### Scenario: FastMCP bearer token authentication
 

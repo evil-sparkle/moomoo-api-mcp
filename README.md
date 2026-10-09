@@ -293,7 +293,7 @@ password alone never enables REAL writes. Container operators should use the
 | `MCP_AUTH_TOKEN`            | **Required** for the HTTP endpoint           | `secret-token`|
 | `MCP_ALLOW_UNAUTHENTICATED_HTTP` | Optional: `1` serves HTTP without a token, honoured only in `READ_ONLY` | `1`     |
 | `MOOMOO_MAX_ORDER_QTY`      | Optional: cap on quantity per order; for a combo, on the largest leg   | `500`         |
-| `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` | Optional: notional caps, one per currency                 | `USD:25000,HKD:200000` |
+| `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` | Notional caps, one per currency. Compose defaults to `USD:500` when unset or empty | `USD:500` |
 
 #### Order limits
 

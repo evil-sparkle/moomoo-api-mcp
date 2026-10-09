@@ -147,12 +147,15 @@ MOOMOO_TRADING_MARKET=NONE                     # account discovery: NONE, HK, US
 MOOMOO_TRADE_PASSWORD_MD5=                     # blank until you intend to place orders
 MOOMOO_REAL_ACC_IDS=                           # required once MOOMOO_TRADING_MODE=REAL
 MOOMOO_MAX_ORDER_QTY=1000
-MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:10000
+MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:500
 
 # MCP transport
 MCP_TRANSPORT=streamable-http
 MCP_AUTH_TOKEN=                                # generate: openssl rand -hex 32
 ```
+
+Compose supplies `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:500` when the setting
+is unset or empty. Set a nonempty currency-qualified value to override that cap.
 
 `MCP_AUTH_TOKEN` is not optional on this transport. The server refuses to start
 without it, because an unauthenticated HTTP endpoint exposes every tool,

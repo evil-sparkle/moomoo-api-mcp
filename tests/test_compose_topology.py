@@ -34,6 +34,8 @@ from unittest.mock import patch
 
 import pytest
 
+from moomoo_mcp.services.trading_policy import TradingPolicy
+
 ROOT = Path(__file__).resolve().parents[1]
 
 SERVICE = "moomoo-mcp"
@@ -113,6 +115,32 @@ def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
             f"docker compose config failed for {files}: {result.stderr.strip()}"
         )
     return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(
+    "overlays",
+    [("docker-compose.yml",), ("docker-compose.yml", "docker-compose.prod.yml")],
+)
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, {"USD": 500.0}),
+        ("", {"USD": 500.0}),
+        ("USD:1500,HKD:8000", {"USD": 1500.0, "HKD": 8000.0}),
+    ],
+)
+def test_compose_notional_default_and_override_are_valid(overlays, value, expected):
+    env = dict(PROD_ENV)
+    if value is not None:
+        env["MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY"] = value
+    rendered = _render(*overlays, env=env)
+    environment = rendered["services"][SERVICE]["environment"]
+
+    if value:
+        assert environment["MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY"] == value
+    else:
+        assert environment["MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY"] == "USD:500"
+    assert TradingPolicy.from_env(environment).max_order_notional == expected
 
 
 def test_retired_login_password_is_not_injected_by_compose():
