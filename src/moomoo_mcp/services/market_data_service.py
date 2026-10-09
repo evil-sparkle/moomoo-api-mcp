@@ -1,6 +1,7 @@
 """Market data service for accessing quote data via Moomoo API."""
 
 from functools import partial
+from typing import Any
 
 import anyio.to_thread
 from moomoo import (
@@ -13,6 +14,8 @@ from moomoo import (
     TradeDateMarket,
 )
 
+from moomoo_mcp.services.admission import AdmissionPlan, prepare_market_call
+from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher, QuotaRequest
 from moomoo_mcp.services.rate_limit import (
     ProviderRequestLimiter,
     RateLimitPolicy,
@@ -90,6 +93,7 @@ class MarketDataService:
         quote_ctx: OpenQuoteContext | None,
         *,
         option_chain_limiter: ProviderRequestLimiter | None = None,
+        dispatcher: BrokerRequestDispatcher | None = None,
     ):
         """Initialize MarketDataService with an existing quote context.
 
@@ -105,9 +109,15 @@ class MarketDataService:
         self.quote_ctx = quote_ctx
         # get_services owns one service for all MCP clients. Wrappers around
         # that gateway must inject the same limiter if constructed separately.
-        self.option_chain_limiter = option_chain_limiter or ProviderRequestLimiter(
-            OPTION_CHAIN_RATE_LIMIT
+        self.dispatcher = dispatcher or BrokerRequestDispatcher(
+            option_chain_limiter=option_chain_limiter
         )
+        self.option_chain_limiter = self.dispatcher.limiter(
+            QuotaRequest("get_option_chain")
+        )
+
+    def prepare_admission(self, method: str, params: dict[str, Any]) -> AdmissionPlan:
+        return prepare_market_call(self, method, params)
 
     def subscribe(self, codes: list[str], sub_types: list[str]) -> None:
         """Subscribe to real-time data for specified stocks and data types.
@@ -123,7 +133,13 @@ class MarketDataService:
         if not self.quote_ctx:
             raise RuntimeError("Quote context not connected")
 
-        ret, err = self.quote_ctx.subscribe(codes, sub_types, subscribe_push=False)
+        ret, err = self.dispatcher.call(
+            "subscribe",
+            self.quote_ctx.subscribe,
+            codes,
+            sub_types,
+            subscribe_push=False,
+        )
         if ret != RET_OK:
             raise RuntimeError(f"subscribe failed: {err}")
 
@@ -145,7 +161,9 @@ class MarketDataService:
 
         # is_all_conn=False: report what this connection holds, not what every
         # client attached to the same OpenD holds.
-        ret, data = self.quote_ctx.query_subscription(is_all_conn=False)
+        ret, data = self.dispatcher.call(
+            "query_subscription", self.quote_ctx.query_subscription, is_all_conn=False
+        )
         if ret != RET_OK:
             raise RuntimeError(f"query_subscription failed: {data}")
 
@@ -188,8 +206,11 @@ class MarketDataService:
 
         # unsubscribe_all is never passed: this server releases only what it was
         # asked to release, on its own connection.
-        ret, err = self.quote_ctx.unsubscribe(
-            code_list=cleaned_codes, subtype_list=cleaned_types
+        ret, err = self.dispatcher.call(
+            "unsubscribe",
+            self.quote_ctx.unsubscribe,
+            code_list=cleaned_codes,
+            subtype_list=cleaned_types,
         )
         if ret != RET_OK:
             raise RuntimeError(f"unsubscribe failed: {err}")
@@ -215,7 +236,9 @@ class MarketDataService:
         # Auto-subscribe before getting quotes
         self.subscribe(codes, [SubType.QUOTE])
 
-        ret, data = self.quote_ctx.get_stock_quote(codes)
+        ret, data = self.dispatcher.call(
+            "get_stock_quote", self.quote_ctx.get_stock_quote, codes
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_stock_quote failed: {data}")
 
@@ -255,7 +278,9 @@ class MarketDataService:
 
         ktype_enum, autype_enum = validate_candle_filters(ktype, autype)
 
-        ret, data, _ = self.quote_ctx.request_history_kline(
+        ret, data, _ = self.dispatcher.call(
+            "request_history_kline",
+            self.quote_ctx.request_history_kline,
             code=code,
             start=start,
             end=end,
@@ -306,7 +331,9 @@ class MarketDataService:
 
         ktype_enum, autype_enum = validate_candle_filters(ktype, autype)
 
-        ret, data, next_page_req_key = self.quote_ctx.request_history_kline(
+        ret, data, next_page_req_key = self.dispatcher.call(
+            "request_history_kline",
+            self.quote_ctx.request_history_kline,
             code=code,
             start=start,
             end=end,
@@ -349,7 +376,11 @@ class MarketDataService:
         if not underlying:
             raise ValueError("code must be a non-empty security code, e.g. 'US.AAPL'.")
 
-        ret, data = self.quote_ctx.get_option_expiration_date(code=underlying)
+        ret, data = self.dispatcher.call(
+            "get_option_expiration_date",
+            self.quote_ctx.get_option_expiration_date,
+            code=underlying,
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_option_expiration_date failed: {data}")
 
@@ -495,7 +526,9 @@ class MarketDataService:
         if not codes:
             return []
 
-        ret, data = self.quote_ctx.get_market_snapshot(codes)
+        ret, data = self.dispatcher.call(
+            "get_market_snapshot", self.quote_ctx.get_market_snapshot, codes
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_market_snapshot failed: {data}")
 
@@ -524,7 +557,9 @@ class MarketDataService:
         # Auto-subscribe before getting order book
         self.subscribe([code], [SubType.ORDER_BOOK])
 
-        ret, data = self.quote_ctx.get_order_book(code, num=num)
+        ret, data = self.dispatcher.call(
+            "get_order_book", self.quote_ctx.get_order_book, code, num=num
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_order_book failed: {data}")
 
@@ -556,7 +591,9 @@ class MarketDataService:
         if not all(cleaned):
             raise ValueError("codes must not contain empty security codes.")
 
-        ret, data = self.quote_ctx.get_market_state(code_list=cleaned)
+        ret, data = self.dispatcher.call(
+            "get_market_state", self.quote_ctx.get_market_state, code_list=cleaned
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_market_state failed: {data}")
 
@@ -597,7 +634,9 @@ class MarketDataService:
         normalized_market = validate_choice("market", market, TRADING_DAY_MARKETS)
         validate_date_range(start, end)
 
-        ret, data = self.quote_ctx.request_trading_days(
+        ret, data = self.dispatcher.call(
+            "request_trading_days",
+            self.quote_ctx.request_trading_days,
             market=normalized_market,
             start=start,
             end=end,
@@ -636,7 +675,11 @@ class MarketDataService:
         elif group_type == 2:
             group_type_enum = UserSecurityGroupType.SYSTEM
 
-        ret, data = self.quote_ctx.get_user_security_group(group_type=group_type_enum)
+        ret, data = self.dispatcher.call(
+            "get_user_security_group",
+            self.quote_ctx.get_user_security_group,
+            group_type=group_type_enum,
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_user_security_group failed: {data}")
 
@@ -657,7 +700,9 @@ class MarketDataService:
         if not self.quote_ctx:
             raise RuntimeError("Quote context not connected")
 
-        ret, data = self.quote_ctx.get_user_security(group_name)
+        ret, data = self.dispatcher.call(
+            "get_user_security", self.quote_ctx.get_user_security, group_name
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_user_security failed: {data}")
 

@@ -3,9 +3,10 @@
 import logging
 import math
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from numbers import Integral
 from typing import Any
@@ -19,6 +20,12 @@ from moomoo import (
     TrdMarket,
 )
 
+from moomoo_mcp.services.admission import (
+    AdmissionPlan,
+    prepare_trade_call,
+    recover_paper_admission,
+)
+from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher, QuotaRequest
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.health import (
@@ -209,6 +216,7 @@ class TradeService:
         instrument_lookup: InstrumentLookup | None = None,
         execution_store: ExecutionStore | None = None,
         simulated_account_allowlist: frozenset[int] = frozenset(),
+        dispatcher: BrokerRequestDispatcher | None = None,
     ):
         """Initialize TradeService.
 
@@ -234,6 +242,7 @@ class TradeService:
         """
         self.host = host
         self.port = port
+        self.dispatcher = dispatcher or BrokerRequestDispatcher()
         self.security_firm = security_firm
         candidate_market = (trading_market or "").strip().upper()
         if not candidate_market:
@@ -262,6 +271,12 @@ class TradeService:
             and self.policy.mode is not TradingMode.READ_ONLY
             else None
         )
+
+    def prepare_admission(self, method: str, params: dict[str, Any]) -> AdmissionPlan:
+        return prepare_trade_call(self, method, params)
+
+    def recover_admission(self, method: str, params: dict[str, Any]) -> dict | None:
+        return recover_paper_admission(self, method, params)
 
     @property
     def has_trade_credential(self) -> bool:
@@ -669,7 +684,10 @@ class TradeService:
                 "unavailable", "Trade context not initialized", reason="not_initialized"
             )
 
-        ret, data = trade_ctx.get_acc_list()
+        ret, data = self.dispatcher.call(
+            "get_acc_list",
+            trade_ctx.get_acc_list,
+        )
         if ret != RET_OK:
             return failure("error", data)
 
@@ -724,7 +742,10 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.get_acc_list()
+        ret, data = self.dispatcher.call(
+            "get_acc_list",
+            self.trade_ctx.get_acc_list,
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_acc_list failed: {data}")
 
@@ -869,7 +890,9 @@ class TradeService:
             if normalized_currency:
                 kwargs["currency"] = normalized_currency
 
-        ret, data = self.trade_ctx.accinfo_query(**kwargs)
+        ret, data = self.dispatcher.call(
+            "accinfo_query", self.trade_ctx.accinfo_query, **kwargs
+        )
         if ret != RET_OK:
             raise RuntimeError(f"accinfo_query failed: {data}")
 
@@ -955,7 +978,9 @@ class TradeService:
             except AttributeError:
                 position_market = TrdMarket.NONE
 
-        ret, data = self.trade_ctx.position_list_query(
+        ret, data = self.dispatcher.call(
+            "position_list_query",
+            self.trade_ctx.position_list_query,
             code=code,
             position_market=position_market,
             pl_ratio_min=pl_ratio_min,
@@ -999,7 +1024,9 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.acctradinginfo_query(
+        ret, data = self.dispatcher.call(
+            "acctradinginfo_query",
+            self.trade_ctx.acctradinginfo_query,
             order_type=order_type,
             code=code,
             price=price,
@@ -1028,7 +1055,9 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.get_margin_ratio(code_list=code_list)
+        ret, data = self.dispatcher.call(
+            "get_margin_ratio", self.trade_ctx.get_margin_ratio, code_list=code_list
+        )
         if ret != RET_OK:
             raise RuntimeError(f"get_margin_ratio failed: {data}")
 
@@ -1055,7 +1084,9 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.get_acc_cash_flow(
+        ret, data = self.dispatcher.call(
+            "get_acc_cash_flow",
+            self.trade_ctx.get_acc_cash_flow,
             clearing_date=clearing_date,
             trd_env=trd_env,
             acc_id=acc_id,
@@ -1163,7 +1194,9 @@ class TradeService:
         Raises:
             RuntimeError: If the gateway refuses the unlock.
         """
-        ret, data = trade_ctx.unlock_trade(
+        ret, data = self.dispatcher.call(
+            "unlock_trade",
+            trade_ctx.unlock_trade,
             password=password,
             password_md5=password_md5,
             is_unlock=True,
@@ -1177,7 +1210,9 @@ class TradeService:
         The connect worker locks the context it has just built, before it is
         reachable through ``self.trade_ctx``.
         """
-        ret, data = trade_ctx.unlock_trade(is_unlock=False)
+        ret, data = self.dispatcher.call(
+            "unlock_trade", trade_ctx.unlock_trade, is_unlock=False
+        )
         if ret != RET_OK:
             raise RuntimeError(f"lock_trade failed: {data}")
 
@@ -1218,6 +1253,19 @@ class TradeService:
             "permitted while halted."
         )
 
+    @contextmanager
+    def _admit_write(
+        self, operation: str, sdk_operation: str, account_id: int, uses_jit: bool
+    ) -> Iterator[None]:
+        requests = [QuotaRequest(sdk_operation, account_id)]
+        if uses_jit:
+            requests.append(QuotaRequest("unlock_trade", weight=2))
+        with ExitStack() as admission:
+            with not_sent(operation):
+                admission.enter_context(self.dispatcher.reserve(requests))
+                admission.enter_context(self.dispatcher.protect_mutation(requests))
+            yield
+
     def _dispatch_write(
         self,
         trd_env: str,
@@ -1226,6 +1274,8 @@ class TradeService:
         convert: Callable[[Any], dict],
         *,
         adds_exposure: bool,
+        sdk_operation: str,
+        account_id: int,
     ) -> tuple[dict, str | None]:
         """Run one order-mutating gateway call, and classify what came back.
 
@@ -1259,7 +1309,7 @@ class TradeService:
         """
         uses_jit = self._uses_jit_unlock(trd_env)
 
-        with self._jit_lock:
+        with self._jit_lock, ExitStack() as admission:
             if adds_exposure:
                 # The authoritative halt check, inside the serialized region.
                 #
@@ -1276,6 +1326,9 @@ class TradeService:
                 with not_sent(operation):
                     self._check_execution_halt(operation, trd_env)
 
+            admission.enter_context(
+                self._admit_write(operation, sdk_operation, account_id, uses_jit)
+            )
             if uses_jit:
                 try:
                     assert self.trade_ctx is not None
@@ -1572,7 +1625,9 @@ class TradeService:
         receipt, relock_error = self._dispatch_write(
             trd_env,
             operation,
-            lambda: trade_ctx.place_order(
+            lambda: self.dispatcher.call(
+                "place_order",
+                trade_ctx.place_order,
                 price=price,
                 qty=qty,
                 code=code,
@@ -1592,6 +1647,8 @@ class TradeService:
             ),
             lambda data: self._first_record(operation, data),
             adds_exposure=True,
+            sdk_operation="place_order",
+            account_id=resolved_acc_id,
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
@@ -1859,7 +1916,9 @@ class TradeService:
         receipt, relock_error = self._dispatch_write(
             trd_env,
             operation,
-            lambda: trade_ctx.place_combo_order(
+            lambda: self.dispatcher.call(
+                "place_combo_order",
+                trade_ctx.place_combo_order,
                 combo_leg_list=legs,
                 price=price,
                 qty=qty,
@@ -1871,6 +1930,8 @@ class TradeService:
             ),
             lambda data: self._first_combo_record(operation, data),
             adds_exposure=True,
+            sdk_operation="place_combo_order",
+            account_id=resolved_acc_id,
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
@@ -1952,7 +2013,9 @@ class TradeService:
             trd_env, self._get_market_from_code(legs[0].code), acc_id
         )
 
-        ret, data = self.trade_ctx.comboorder_tradinginfo_query(
+        ret, data = self.dispatcher.call(
+            "comboorder_tradinginfo_query",
+            self.trade_ctx.comboorder_tradinginfo_query,
             combo_leg_list=legs,
             price=price,
             qty=qty,
@@ -1993,7 +2056,9 @@ class TradeService:
             ValueError: If the order cannot be retrieved or is not there.
         """
         assert self.trade_ctx is not None
-        ret, data = self.trade_ctx.order_list_query(
+        ret, data = self.dispatcher.call(
+            "order_list_query",
+            self.trade_ctx.order_list_query,
             order_id=order_id,
             trd_env=trd_env,
             acc_id=acc_id,
@@ -2147,7 +2212,9 @@ class TradeService:
         receipt, relock_error = self._dispatch_write(
             trd_env,
             operation,
-            lambda: trade_ctx.modify_order(
+            lambda: self.dispatcher.call(
+                "modify_order",
+                trade_ctx.modify_order,
                 modify_order_op=modify_order_op,
                 order_id=order_id,
                 qty=qty,
@@ -2161,6 +2228,8 @@ class TradeService:
             lambda data: self._first_record("modify_order", data),
             # NORMAL and ENABLE restore exposure; the rest only reduce it.
             adds_exposure=requested_op in EXPOSING_MODIFY_OPS,
+            sdk_operation="modify_order",
+            account_id=resolved_acc_id,
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
@@ -2231,7 +2300,9 @@ class TradeService:
         receipt, relock_error = self._dispatch_write(
             trd_env,
             operation,
-            lambda: trade_ctx.modify_order(
+            lambda: self.dispatcher.call(
+                "modify_order",
+                trade_ctx.modify_order,
                 modify_order_op="CANCEL",
                 order_id=order_id,
                 qty=0,
@@ -2243,6 +2314,8 @@ class TradeService:
             lambda data: self._first_record(operation, data),
             # A cancellation reduces exposure, so it is permitted while halted.
             adds_exposure=False,
+            sdk_operation="modify_order",
+            account_id=resolved_acc_id,
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
@@ -2278,7 +2351,9 @@ class TradeService:
         # Convert string status values to OrderStatus enum values
         converted_status_filter = self._convert_status_filter(status_filter_list)
 
-        ret, data = self.trade_ctx.order_list_query(
+        ret, data = self.dispatcher.call(
+            "order_list_query",
+            self.trade_ctx.order_list_query,
             code=code,
             status_filter_list=converted_status_filter,
             trd_env=trd_env,
@@ -2321,7 +2396,9 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.deal_list_query(
+        ret, data = self.dispatcher.call(
+            "deal_list_query",
+            self.trade_ctx.deal_list_query,
             code=code,
             trd_env=trd_env,
             acc_id=acc_id,
@@ -2367,7 +2444,9 @@ class TradeService:
         # Convert string status values to OrderStatus enum values
         converted_status_filter = self._convert_status_filter(status_filter_list)
 
-        ret, data = self.trade_ctx.history_order_list_query(
+        ret, data = self.dispatcher.call(
+            "history_order_list_query",
+            self.trade_ctx.history_order_list_query,
             code=code,
             status_filter_list=converted_status_filter,
             start=start,
@@ -2413,7 +2492,9 @@ class TradeService:
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
 
-        ret, data = self.trade_ctx.history_deal_list_query(
+        ret, data = self.dispatcher.call(
+            "history_deal_list_query",
+            self.trade_ctx.history_deal_list_query,
             code=code,
             start=start,
             end=end,

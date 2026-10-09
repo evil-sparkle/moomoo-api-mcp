@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from moomoo_mcp.services.base_service import MoomooService
+from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
 from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.instruments import InstrumentAdapter
 from moomoo_mcp.services.market_data_service import MarketDataService
@@ -112,9 +113,10 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             else None
         )
     )
+    dispatcher = BrokerRequestDispatcher()
     try:
         moomoo_service = MoomooService(
-            host=resolved.opend_host, port=resolved.opend_port
+            host=resolved.opend_host, port=resolved.opend_port, dispatcher=dispatcher
         )
     except BaseException:
         if execution_store is not None:
@@ -131,10 +133,13 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             simulated_account_allowlist=resolved.simulated_account_allowlist,
             trade_password=resolved.trade_password,
             trade_password_md5=resolved.trade_password_md5,
+            dispatcher=dispatcher,
             # Reads the shared quote context through a callable, not the object:
             # the connection is opened lazily and replaced on reconnect, so holding
             # the instance would pin whichever one existed at wiring time.
-            instrument_lookup=InstrumentAdapter(lambda: moomoo_service.quote_ctx),
+            instrument_lookup=InstrumentAdapter(
+                lambda: moomoo_service.quote_ctx, dispatcher=dispatcher
+            ),
         )
     except BaseException:
         if execution_store is not None:
@@ -164,7 +169,9 @@ def _build_services(settings: Settings | None = None) -> AppContext:
         # the gateway unlocked for the life of the process.
 
         # Create market data service using the shared quote context
-        market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
+        market_data_service = MarketDataService(
+            quote_ctx=moomoo_service.quote_ctx, dispatcher=dispatcher
+        )
 
         trade_service.start_paper_recovery()
 

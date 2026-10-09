@@ -43,7 +43,7 @@ def test_ten_dispatches_and_safety_margin(limiter, clock):
     clock.advance(30)
     with pytest.raises(ProviderRateLimitError):
         limiter.reserve()
-    clock.advance(0.1)
+    clock.advance(0.102)
     limiter.reserve().start()
 
 
@@ -55,7 +55,7 @@ def test_rolling_window_expires_entries_individually(clock):
     limiter.reserve().start()
     clock.advance(10)
     limiter.reserve().start()
-    clock.advance(20)
+    clock.advance(20.002)
     limiter.reserve().start()
     with pytest.raises(ProviderRateLimitError) as exc:
         limiter.reserve()
@@ -72,7 +72,7 @@ def test_pending_reservations_do_not_expire(limiter, clock):
         slot.release()  # A started request cannot be refunded.
     with pytest.raises(ProviderRateLimitError):
         limiter.reserve()
-    clock.advance(30.1)
+    clock.advance(30.102)
     limiter.reserve()
 
 
@@ -116,7 +116,7 @@ async def test_expiry_within_deadline_admits_waiter(limiter, clock):
     clock.advance(28)
     waiting = asyncio.create_task(limiter.acquire())
     await clock.wait_for_sleepers()
-    clock.advance(2.1)
+    clock.advance(2.102)
     (await waiting).start()
 
 

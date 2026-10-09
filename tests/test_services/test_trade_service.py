@@ -1041,6 +1041,8 @@ class TestRelockAlwaysAttempted:
                 lambda: mock_trade_ctx.place_order(),
                 exploding_convert,
                 adds_exposure=True,
+                sdk_operation="place_order",
+                account_id=123,
             )
 
         mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
@@ -1476,6 +1478,8 @@ class TestHaltIsScopedToRealWrites:
             lambda: (RET_OK, pd.DataFrame([{"order_id": "1"}])),
             lambda _data: {"order_id": "1"},
             adds_exposure=True,
+            sdk_operation="place_order",
+            account_id=123,
         )
 
         assert receipt == {"order_id": "1"}
@@ -1588,6 +1592,8 @@ class TestHaltIsCheckedInsideTheLock:
                 lambda: (RET_OK, pd.DataFrame([{"order_id": "1"}])),
                 lambda _data: {"order_id": "1"},
                 adds_exposure=True,
+                sdk_operation="place_order",
+                account_id=123,
             )
 
         mock_trade_ctx.unlock_trade.assert_not_called()

@@ -2,7 +2,7 @@
 
 import os
 from concurrent.futures import Future
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -79,8 +79,12 @@ class TestLifespanResilience:
         )
 
         with (
-            patch("moomoo_mcp.server.MoomooService", return_value=moomoo_service),
-            patch("moomoo_mcp.server.TradeService", return_value=trade_service),
+            patch(
+                "moomoo_mcp.server.MoomooService", return_value=moomoo_service
+            ) as quote_cls,
+            patch(
+                "moomoo_mcp.server.TradeService", return_value=trade_service
+            ) as trade_cls,
             patch("moomoo_mcp.server.MarketDataService") as market_data_cls,
         ):
             async with app_lifespan(MagicMock()) as app_context:
@@ -89,7 +93,11 @@ class TestLifespanResilience:
 
         # A failed trade connection must not trigger an unlock attempt.
         trade_service.unlock_trade.assert_not_called()
-        market_data_cls.assert_called_once_with(quote_ctx=None)
+        market_data_cls.assert_called_once_with(quote_ctx=None, dispatcher=ANY)
+        dispatcher = trade_cls.call_args.kwargs["dispatcher"]
+        assert quote_cls.call_args.kwargs["dispatcher"] is dispatcher
+        assert market_data_cls.call_args.kwargs["dispatcher"] is dispatcher
+        assert trade_cls.call_args.kwargs["instrument_lookup"].dispatcher is dispatcher
 
         # The session ending is not the process ending: the connections outlive
         # it, and only shutdown releases them.
