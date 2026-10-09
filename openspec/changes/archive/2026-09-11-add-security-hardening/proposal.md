@@ -16,7 +16,7 @@ Operating an AI-integrated trading server in a public repository involves high-s
   - Run `moomoo-api-mcp` and `opend` containers as non-root users (`appuser` / `opend`).
   - Replace editable `-e .` install with standard package installation in production `Dockerfile`.
 - **Trading Safety Guardrails**:
-  - Add configurable `max_order_qty` (`MOOMOO_MAX_ORDER_QTY`) and `max_order_notional` (`MOOMOO_MAX_ORDER_NOTIONAL`) guardrails to `TradingPolicy`.
+  - Add configurable quantity (`MOOMOO_MAX_ORDER_QTY`) and notional guardrails to `TradingPolicy`.
   - Enforce limits in `TradeService.place_order` and `TradeService.place_combo_order`.
 - **API & Transport Security**:
   - Enable DNS rebinding protection via `TransportSecuritySettings`.
@@ -30,4 +30,4 @@ Operating an AI-integrated trading server in a public repository involves high-s
 - Affected specs:
   - `container-deployment`: Checksum verification, non-root user execution.
   - `trading-policy`: Order quantity and notional value limit checks.
-  - `configuration`: `MCP_AUTH_TOKEN`, `MOOMOO_MAX_ORDER_QTY`, `MOOMOO_MAX_ORDER_NOTIONAL`.
+  - `configuration`: `MCP_AUTH_TOKEN`, `MOOMOO_MAX_ORDER_QTY`, and notional limits.

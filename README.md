@@ -294,7 +294,6 @@ password alone never enables REAL writes. Container operators should use the
 | `MCP_ALLOW_UNAUTHENTICATED_HTTP` | Optional: `1` serves HTTP without a token, honoured only in `READ_ONLY` | `1`     |
 | `MOOMOO_MAX_ORDER_QTY`      | Optional: cap on quantity per order; for a combo, on the largest leg   | `500`         |
 | `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` | Optional: notional caps, one per currency                 | `USD:25000,HKD:200000` |
-| `MOOMOO_MAX_ORDER_NOTIONAL` | Legacy, rollback-only. Never applied as a limit; a startup error on its own | `25000` |
 
 #### Order limits
 
@@ -310,12 +309,6 @@ price. The supported US stocks, ETFs and options are valued in USD. Options use
 OpenD's `option_contract_multiplier` for premium value; a missing or invalid
 multiplier is refused, without substituting deliverable size or assuming 100.
 Combo premium limits are not maximum-loss limits.
-
-`MOOMOO_MAX_ORDER_NOTIONAL` is the previous unit-less cap. This version never
-applies it: a cap with no currency cannot be applied to an instrument whose
-currency it does not know. Leave it beside
-`MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` and the previous image still enforces
-it, so a rollback needs no `.env` edit. Set on its own, it is a startup error.
 
 #### Gateway lock and the execution halt
 

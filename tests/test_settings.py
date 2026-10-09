@@ -70,11 +70,11 @@ class TestInvalidValues:
         with pytest.raises(TradingModeConfigError, match="MOOMOO_REAL_ACC_IDS"):
             load_settings({"MOOMOO_TRADING_MODE": "REAL"})
 
-    def test_a_legacy_only_notional_cap_is_a_configuration_error(self):
-        with pytest.raises(
-            TradingModeConfigError, match="MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY"
-        ):
-            load_settings({"MOOMOO_MAX_ORDER_NOTIONAL": "25000"})
+    def test_a_notional_cap_without_a_currency_is_a_configuration_error(self):
+        with pytest.raises(TradingModeConfigError) as excinfo:
+            load_settings({"MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY": "25000"})
+
+        assert "MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY" in str(excinfo.value)
 
 
 class TestSecurityFirm:

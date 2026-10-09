@@ -168,9 +168,7 @@ returned string ID exactly. `acc_id="0"` works only when one account matches the
 requested environment. Login region, securities firm, trading market and trading
 environment are separate settings.
 
-`MOOMOO_MAX_ORDER_NOTIONAL` is a retired, rollback-only setting. The current
-server uses `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`; the legacy value alone is a
-startup error. If rolling back across a configuration or journal schema change,
+If rolling back across a configuration or journal schema change,
 check that target version's requirements before deployment. Do not assume an
 older image preserves current trading safeguards.
 

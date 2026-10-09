@@ -59,10 +59,6 @@ services:
       - MOOMOO_REAL_ACC_IDS=${MOOMOO_REAL_ACC_IDS:-}
       - MOOMOO_MAX_ORDER_QTY=${MOOMOO_MAX_ORDER_QTY:-}
       - MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=${MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY:-}
-      # Legacy, rollback-only. This image ignores it as a limit; the previous
-      # image reads it. Passing it through is what lets one .env serve both, so
-      # a rollback needs no environment edit.
-      - MOOMOO_MAX_ORDER_NOTIONAL=${MOOMOO_MAX_ORDER_NOTIONAL:-}
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       # Only honoured in READ_ONLY mode, and only as "1".
       - MCP_ALLOW_UNAUTHENTICATED_HTTP=${MCP_ALLOW_UNAUTHENTICATED_HTTP:-}
