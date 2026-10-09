@@ -60,15 +60,19 @@ def recreated() -> None:
     assert DEVICE.read_text() == "authorization-volume-untouched"
     assert store.health()["recovery_review_outstanding"]
     assert store.review()["state"] != "READY"
-    store.acknowledge(
-        "stale-admitted",
-        operator_id="fixture-operator",
-        recovery_epoch=store.epoch,
-        observed_state="ADMITTED",
-        reason="fixture confirms no dispatch",
-        evidence_reference="fixture://seed",
-        accounted_facts={"dispatch": "not_sent"},
-    )
+    # Storage-only fixture: drive five completed negative rounds through the
+    # durable policy interface. Broker evidence classification is tested separately.
+    for number in range(5):
+        store.record_recovery(
+            "stale-admitted",
+            observed_state="ADMITTED",
+            started_at=number * 10,
+            completed_at=number * 10 + 1,
+            outcome="NOT_FOUND",
+            details={"orders": []},
+            next_check_at=number * 10 + 6,
+            resolution="ASSUMED_NOT_PLACED_AFTER_RETRIES" if number == 4 else None,
+        )
     assert store.health()["state"] == "READY"
     store.close()
     print("C01 recreated container retained rows and device marker", flush=True)

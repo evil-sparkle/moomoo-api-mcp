@@ -701,7 +701,6 @@ Supply the following values through your deployment's existing settings mechanis
 | `MOOMOO_CREATE_JOURNAL` | `1` only for explicitly authorized first initialization; normally `0` |
 | `MOOMOO_JOURNAL_LOCK_WAIT_MS` | Bounded SQLite wait, 1–60000 milliseconds; default 5000 |
 | `MCP_AUTH_TOKEN` | Normal authenticated tool access |
-| `MCP_OPERATOR_TOKEN` | Separate operator credential, different from the normal token |
 
 Existing REAL trading credentials and account allowlists still apply to REAL
 orders. Paper journaling adds no authority to trade REAL accounts. Use the US or
@@ -781,42 +780,29 @@ rows missing from the snapshot. Unknown tokens carrying retired epochs are refus
 and existing uncertain/nonterminal rows gate new admissions until accounted for.
 A missing restored token is not evidence that its broker request never happened.
 
-### Recovery and operator review
+### Automatic recovery
 
-Use `check_health` to obtain the current admission/recovery epoch and journal
-state; use `get_execution(operation_id)` for the recorded receipt, broker status,
-reconciliation observations and any durable accounted facts. A new paper placement
-must include its caller-generated operation ID, the current admission epoch, an
-explicit SIMULATE environment, and a decimal-string limit price. Preserve its token
-and original request through every retry; a retry never changes the request or
-refreshes the epoch. Only the first admission can dispatch. ACKNOWLEDGED means the gateway accepted
-the request, not that the order filled. UNKNOWN_OUTCOME means possibly sent and
-blocks new paper mutations, including cancellations.
+Recovery runs inside the MCP process after startup and uncertain responses. It does
+not depend on client instructions or a separate operator credential. See
+[Automatic paper execution recovery](paper-recovery.md) for matching, retry timing,
+assumed absence, late discovery and schema migration details.
 
-Inspect journal health and operation status first. Use reconciliation only where
-provider evidence reliably identifies the submitted order and its outcome.
-Account explicitly for uncertain outcomes through the authenticated operator
-recovery interface, supplying the current recovery epoch, observed state, reason,
-evidence reference and verified accounted facts. Ordinary tool credentials do not
-have operator acknowledgement authority. Operator identity is authenticated
-independently on each stateless HTTP request. Never invent broker evidence to
-clear a gate. Acknowledgement is audited and does not replay a possibly sent request.
+Use `check_health` for journal readiness, pending operation IDs and recent recovery
+updates. Use `get_execution(operation_id)` for the stored request outcome, order
+identity, actual check times and recovery disposition. `reconcile_execution` uses
+that same recovery policy for a due check; repeated calls cannot bypass the schedule.
 
-**Reinitializing, replacing or repointing the journal for the same broker account
-is not an approved recovery method.** Preserve the original journal and unresolved
-records. Continued experimentation requires a separately authorized, independently
-verified isolated paper environment. It does not reconcile the previous environment.
-An unresolved operation can block execution indefinitely; elapsed time, missing
-history and operator risk acceptance are not recovery evidence. Only
-`TERMINAL_ACCOUNTED` is supported: pass `operator_id="operator"`, the current
-recovery epoch and observed local state, a reason, `broker-order:<id>`, and facts
-for final status, filled quantity, average fill price, zero remaining executable
-quantity and resulting position. These are checked against fresh order/history
-and position data, then committed with the audit record before the gate can clear.
-Never provide the operator credential to a trading agent.
+New paper placements require their caller-generated operation ID, current admission
+epoch, explicit SIMULATE environment and decimal-string limit price. Preserve the
+original request and token on every retry. The server generates a separate order tag
+and sends it as the broker remark. ACKNOWLEDGED means gateway acceptance, not a fill.
+UNKNOWN_OUTCOME remains uncertain even if the paper absence policy releases its
+recovery block. A separate new trading decision uses a new ID; the original never
+replays. Conflicting evidence, active uncertain mutations, identityless legacy rows
+and storage failures can still keep paper trading blocked.
 
-A provider's “reset paper account” button is not sufficient evidence of isolation:
-verify what it does to outstanding orders, pending requests and account identity.
+Keep the original journal and unresolved records. Reinitializing, replacing or
+repointing storage does not recover broker actions missing from that journal.
 
 ### Paper verification boundary
 
@@ -826,8 +812,8 @@ response-loss recovery, retention or external retry propagation. Those remain in
 
 ### Journal upgrades and dependent modifications
 
-Take a consistent backup before upgrading. Schema 1 journals upgrade atomically
-to schema 2; older schema-1 executors refuse the upgraded journal. Unobserved
+Take a consistent backup before upgrading. Schema 1 and 2 journals upgrade atomically
+to schema 3; older executors refuse the upgraded journal. Unobserved
 acknowledged modifications can block a dependent modification until fresh broker
 observations match the earlier request. A durably refused operation stays refused
 on retry; never change an uncertain operation's token to bypass recovery.

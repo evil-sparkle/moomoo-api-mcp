@@ -5,7 +5,6 @@ import os
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
@@ -30,35 +29,21 @@ from moomoo_mcp.settings import (
 
 logger = logging.getLogger(__name__)
 
-operator_principal: ContextVar[str | None] = ContextVar(
-    "operator_principal", default=None
-)
-
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Enforces constant-time bearer token authorization on HTTP requests."""
 
-    def __init__(self, app, auth_token: str, operator_token: str | None = None) -> None:
+    def __init__(self, app, auth_token: str) -> None:
         super().__init__(app)
         self.auth_token = auth_token
-        if operator_token and operator_token == auth_token:
-            raise ValueError("MCP_OPERATOR_TOKEN must differ from MCP_AUTH_TOKEN")
-        self.operator_token = operator_token
 
     async def dispatch(self, request: Request, call_next) -> Response:
         headers = request.headers.getlist("Authorization")
         auth_header = headers[0] if len(headers) == 1 else ""
         if auth_header.startswith("Bearer ") and auth_header.isascii():
             token = auth_header[7:].strip()
-            is_operator = bool(self.operator_token) and hmac.compare_digest(
-                token, self.operator_token or ""
-            )
-            if is_operator or hmac.compare_digest(token, self.auth_token):
-                binding = operator_principal.set("operator" if is_operator else None)
-                try:
-                    return await call_next(request)
-                finally:
-                    operator_principal.reset(binding)
+            if hmac.compare_digest(token, self.auth_token):
+                return await call_next(request)
 
         return JSONResponse(
             {"detail": "Unauthorized: Invalid or missing bearer token."},
@@ -181,6 +166,8 @@ def _build_services(settings: Settings | None = None) -> AppContext:
         # Create market data service using the shared quote context
         market_data_service = MarketDataService(quote_ctx=moomoo_service.quote_ctx)
 
+        trade_service.start_paper_recovery()
+
         return AppContext(
             moomoo_service=moomoo_service,
             trade_service=trade_service,
@@ -294,7 +281,6 @@ import moomoo_mcp.tools.trading  # noqa: E402, F401
 
 def create_streamable_http_app(
     auth_token: str | None = None,
-    operator_token: str | None = None,
     *,
     allow_chatgpt_tunnel_host: bool | None = None,
 ):
@@ -318,9 +304,7 @@ def create_streamable_http_app(
     raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
     token = raw.strip()
     if token:
-        app.add_middleware(
-            BearerAuthMiddleware, auth_token=token, operator_token=operator_token
-        )
+        app.add_middleware(BearerAuthMiddleware, auth_token=token)
     return app
 
 
@@ -349,8 +333,8 @@ def main():
         global _prepared_journal
         with _services_lock:
             if _services is None and _prepared_journal is None:
-                # Validate/lock storage before listening; gateway connections stay
-                # lazy until the first request, as in READ_ONLY and Stage 1.
+                # Validate/lock storage before listening. Paper recovery starts
+                # with the process, independent of the first client request.
                 _prepared_journal = (
                     settings,
                     ExecutionStore(
@@ -360,6 +344,7 @@ def main():
                     ),
                 )
                 atexit.register(close_services)
+        get_services()
 
     host = os.environ.get("FASTMCP_HOST", "127.0.0.1")
     port = int(os.environ.get("FASTMCP_PORT", "8000"))
@@ -373,7 +358,6 @@ def main():
 
     app = create_streamable_http_app(
         auth_token=settings.auth_token,
-        operator_token=settings.operator_token,
         allow_chatgpt_tunnel_host=settings.allow_chatgpt_tunnel_host,
     )
     uvicorn.run(app, host=host, port=port)

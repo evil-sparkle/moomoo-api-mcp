@@ -22,7 +22,7 @@ from moomoo_mcp.services.execution_store import (
     ExecutionStoreError,
 )
 from moomoo_mcp.services.order_errors import not_sent
-from moomoo_mcp.services.sdk_response import as_frame
+from moomoo_mcp.services.paper_recovery import PaperRecovery
 from moomoo_mcp.services.trading_policy import LegFacts, OrderFacts
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
@@ -45,6 +45,7 @@ class PaperExecution:
         self._late_failure: dict[str, dict] = {}
         self._late_identity: dict[str, dict] = {}
         self.store.review()
+        self.recovery = PaperRecovery(self)
 
     def health(self) -> dict:
         health = self.store.health()
@@ -54,6 +55,9 @@ class PaperExecution:
                 set(health["blocking_reasons"]) | {"OUTCOME_NOT_STORED"}
             )
             health["blocking"] = max(health["blocking"], len(self._late_failure))
+            health["pending_operation_ids"] = sorted(
+                set(health["pending_operation_ids"]) | self._late_failure.keys()
+            )
         return health
 
     def ready(self) -> None:
@@ -153,11 +157,17 @@ class PaperExecution:
             return self._late_failure[row["operation_id"]]
         return self.result(row)
 
-    @staticmethod
-    def result(row: dict) -> dict:
+    def result(self, row: dict) -> dict:
         receipt = json.loads(row["receipt"]) if row.get("receipt") else {}
         return {
             "operation_id": row["operation_id"],
+            "order_tag": row["order_tag"],
+            "recovery": self.store.recovery_context(row),
+            "recovery_checks": [
+                c | {"details": json.loads(c["details"])}
+                for c in row["recovery_checks"]
+            ],
+            "recovery_updates": self.health()["recovery_updates"],
             "admission_epoch": row["admission_epoch"],
             "state": row["state"],
             "disposition": row["disposition"],
@@ -221,6 +231,8 @@ class PaperExecution:
                 self.ready()
                 observed_modifications: list[str] = []
                 merged = self._prepare(kind, params, account, observed_modifications)
+                if kind == "PLACE":
+                    merged["remark"] = row["order_tag"]
                 self.store.mark_dispatch(operation_id, merged)
             except Exception as exc:
                 with not_sent("paper " + kind):
@@ -304,6 +316,7 @@ class PaperExecution:
         observed_modifications: list[str] | None = None,
     ) -> dict:
         committed = False
+        order_tag = self._late_identity[operation_id]["order_tag"]
         try:
             self.store.outcome(
                 operation_id,
@@ -317,11 +330,19 @@ class PaperExecution:
             committed = True
             row = self.store.lookup(operation_id)
             assert row is not None
+            if reason:
+                self.recovery.wake()
+            result = self.result(row)
             self._late_identity.pop(operation_id, None)
-            return self.result(row)
+            return result
         except Exception as exc:
             result = {
                 "operation_id": operation_id,
+                "order_tag": order_tag,
+                "recovery": {
+                    "disposition": "PENDING_STORAGE_RECOVERY",
+                    "original_operation_replay_allowed": False,
+                },
                 "state": state,
                 "disposition": disposition if committed else "OBSERVED_NOT_STORED",
                 "submission_state": "durably_stored" if committed else "observed",
@@ -459,187 +480,5 @@ class PaperExecution:
             "acc_id": account,
         }
 
-    def observations(self, row: dict) -> list[dict]:
-        ctx = self.service.trade_ctx
-        if ctx is None:
-            raise ValueError("Trade context not connected")
-        account = int(row["account"])
-        results = []
-        for operation, response in (
-            (
-                "order_list_query",
-                ctx.order_list_query(
-                    trd_env="SIMULATE", acc_id=account, refresh_cache=True
-                ),
-            ),
-            (
-                "history_order_list_query",
-                ctx.history_order_list_query(trd_env="SIMULATE", acc_id=account),
-            ),
-        ):
-            ret, data = response
-            if ret != RET_OK:
-                raise ValueError(f"{operation} failed: {data}")
-            results.extend(
-                serialize_identifiers(as_frame(operation, data).to_dict("records"))
-            )
-        return results
-
     def reconcile(self, operation_id: str) -> dict:
-        with self.lock:
-            row = self.store.lookup(operation_id)
-            if row is None:
-                raise ValueError("Operation is not owned by this journal")
-            observations = self.observations(row)
-            exact = [
-                o
-                for o in observations
-                if row["broker_order_id"]
-                and str(o.get("order_id")) == row["broker_order_id"]
-            ]
-            # Current/history copies of one broker identity are not two candidates.
-            by_id = {str(o["order_id"]): o for o in exact}
-            agreement = bool(exact) and all(
-                all(
-                    o.get(k) == exact[0].get(k)
-                    for k in (
-                        "order_status",
-                        "qty",
-                        "price",
-                        "dealt_qty",
-                        "dealt_avg_price",
-                    )
-                )
-                for o in exact
-            )
-            proven = (
-                agreement
-                and row["kind"] == "PLACE"
-                and row["state"] == "UNKNOWN_OUTCOME"
-                and len(by_id) == 1
-            )
-            self.store.record_evidence(
-                operation_id,
-                list(by_id.values()) if proven else observations,
-                reconcile=proven,
-            )
-            result = self.store.lookup(operation_id)
-            assert result is not None
-            return self.result(result)
-
-    def acknowledge(
-        self,
-        *,
-        principal: str | None,
-        operator_id: str,
-        operation_id: str,
-        resolution: str,
-        reason: str,
-        evidence_reference: str,
-        recovery_epoch: str,
-        observed_state: str,
-        accounted_facts: dict,
-    ) -> dict:
-        if principal != "operator" or operator_id != principal:
-            raise PermissionError(
-                "Separate authenticated operator capability required; "
-                "identity must match principal"
-            )
-        if (
-            resolution != "TERMINAL_ACCOUNTED"
-            or not reason.strip()
-            or not evidence_reference.strip()
-        ):
-            raise ValueError(
-                "TERMINAL_ACCOUNTED requires reason and verified broker evidence"
-            )
-        with self.lock:
-            row = self.store.lookup(operation_id)
-            if row is None:
-                raise ValueError("Operation is not owned by this journal")
-            if recovery_epoch != self.store.epoch or observed_state != row["state"]:
-                raise ExecutionConflict("Stale recovery epoch or observed state")
-            request = json.loads(row["request"])
-            target = (
-                row["broker_order_id"]
-                if row["kind"] == "PLACE"
-                else request.get("order_id")
-            )
-            if not target or evidence_reference != "broker-order:" + str(target):
-                raise ValueError(
-                    "Evidence must identify the recorded broker order; "
-                    "candidates do not establish ownership"
-                )
-            matches = [
-                o
-                for o in self.observations(row)
-                if str(o.get("order_id")) == str(target)
-            ]
-            if not matches:
-                raise ValueError(
-                    "No verifiable broker evidence; absence cannot account "
-                    "for an operation"
-                )
-            final = matches[0]
-            if any(
-                any(
-                    o.get(key) != final.get(key)
-                    for key in (
-                        "order_status",
-                        "dealt_qty",
-                        "dealt_avg_price",
-                        "code",
-                        "qty",
-                        "price",
-                        "trd_side",
-                    )
-                )
-                for o in matches
-            ):
-                raise ValueError("Broker observations disagree; review again")
-            status = final.get("order_status")
-            if status not in TERMINAL_BROKER:
-                raise ValueError("Broker order is not terminal")
-            facts = {
-                "final_status": status,
-                "filled_quantity": final.get("dealt_qty"),
-                "average_fill_price": final.get("dealt_avg_price"),
-                "remaining_executable_quantity": 0,
-            }
-            for key, value in facts.items():
-                if value is None or accounted_facts.get(key) != value:
-                    raise ValueError(
-                        f"Accounted fact {key} does not match broker evidence"
-                    )
-            # Record actual account position, not the unsupported claim that a fill
-            # necessarily represents the whole current position.
-            positions = self.service.get_positions(
-                code=str(final["code"]),
-                trd_env="SIMULATE",
-                acc_id=int(row["account"]),
-                refresh_cache=True,
-            )
-            current_position = sum(
-                Decimal(str(p["qty"]))
-                for p in positions
-                if p.get("code") == final["code"]
-            )
-            if (
-                Decimal(str(accounted_facts.get("resulting_position")))
-                != current_position
-            ):
-                raise ValueError(
-                    "Resulting position does not match broker position evidence"
-                )
-            self.store.acknowledge(
-                operation_id,
-                operator_id=principal,
-                recovery_epoch=recovery_epoch,
-                observed_state=observed_state,
-                reason=reason,
-                evidence_reference=evidence_reference,
-                accounted_facts=accounted_facts,
-            )
-            result = self.store.lookup(operation_id)
-            assert result is not None
-            return self.result(result)
+        return self.recovery.check(operation_id)

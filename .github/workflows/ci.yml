@@ -163,10 +163,7 @@ jobs:
         with:
           node-version: "22"
       - name: Validate every spec and active change
-        run: |
-          bash -n scripts/update-openspec.sh
-          bash -n scripts/validate-openspec.sh
-          bash scripts/validate-openspec.sh
+        run: npx --yes @fission-ai/openspec@1.14.1 validate --all --strict
 
   test:
     name: Run Tests and Lint
