@@ -174,7 +174,6 @@ def target(broker):
         "trd_side": "BUY",
         "order_type": "NORMAL",
         "time_in_force": "DAY",
-        "fill_outside_rth": False,
         "session": "RTH",
         "order_status": "SUBMITTED",
         "dealt_qty": 0,
@@ -190,6 +189,116 @@ def mutate(paper, token="modify", kind="MODIFY", **patch):
         admission_epoch=paper.store.epoch,
         acc_id="0",
     )
+
+
+def test_placement_uses_documented_session_without_deprecated_argument(rig):
+    paper, _, broker, store = rig
+    result = place(paper)
+    assert result["state"] == "ACKNOWLEDGED"
+    assert len(broker.calls) == 1
+    kind, request = broker.calls[0]
+    assert kind == "PLACE"
+    assert request["session"] == "RTH" and request["time_in_force"] == "DAY"
+    assert "fill_outside_rth" not in request
+    row = store.lookup("place")
+    assert row is not None and row["marker"] == 1
+
+
+@pytest.mark.parametrize("kind", ["MODIFY", "CANCEL"])
+@pytest.mark.parametrize(
+    "legacy_fields",
+    [
+        {},
+        {"fill_outside_rth": "N/A"},
+        {"fill_outside_rth": False},
+        {"fill_outside_rth": 0},
+        {"fill_outside_rth": True},
+        {"fill_outside_rth": 1},
+        {"fill_outside_rth": None},
+        {"fill_outside_rth": "arbitrary legacy value"},
+    ],
+)
+def test_documented_rth_session_permits_one_dispatch(rig, kind, legacy_fields):
+    paper, service, broker, store = rig
+    target(broker)
+    broker.orders["77"].update(legacy_fields)
+    patch = {"price": "2.20"} if kind == "MODIFY" else {}
+    result = mutate(paper, kind=kind, **patch)
+    assert result["state"] == "ACKNOWLEDGED"
+    assert len(broker.calls) == 1
+    assert broker.calls[0][0] == kind
+    assert service.target_reads == 1
+    assert {key: broker.orders["77"][key] for key in legacy_fields} == legacy_fields
+    if not legacy_fields:
+        assert "fill_outside_rth" not in broker.orders["77"]
+    assert "fill_outside_rth" not in broker.calls[0][1]
+    row = store.lookup("modify")
+    assert row is not None and row["marker"] == 1
+    assert json.loads(row["request"]) == {"order_id": "77", **patch}
+    if kind == "MODIFY":
+        assert broker.calls[0][1]["qty"] == 2
+        assert broker.calls[0][1]["price"] == "2.20"
+    assert mutate(paper, kind=kind, **patch) == result
+    assert len(broker.calls) == 1 and service.target_reads == 1
+
+
+@pytest.mark.parametrize("kind", ["MODIFY", "CANCEL"])
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"session": "NONE"},
+        {"session": "NONE", "fill_outside_rth": False},
+        {"session": "NONE", "fill_outside_rth": 0},
+        {"session": "N/A"},
+        {"session": None},
+        {"session": ""},
+        {"session": "rth"},
+        {"session": " RTH "},
+        {"session": "ETH"},
+        {"session": "OVERNIGHT"},
+        {"session": "ALL"},
+        {"session": "ETH", "fill_outside_rth": False},
+        {"session": "OVERNIGHT", "fill_outside_rth": False},
+        {"session": "ALL", "fill_outside_rth": False},
+        {"time_in_force": "GTC"},
+        {"time_in_force": None},
+        {"order_type": "MARKET"},
+        {"order_type": None},
+    ],
+)
+def test_ambiguous_or_out_of_scope_target_evidence_is_not_sent(rig, kind, patch):
+    paper, _, broker, store = rig
+    target(broker)
+    broker.orders["77"].update(patch)
+    arguments = {"price": "2.20"} if kind == "MODIFY" else {}
+    with pytest.raises(OrderNotSentError) as refusal:
+        mutate(paper, kind=kind, **arguments)
+    assert "outside verified DAY/regular-hours paper scope" in str(refusal.value)
+    assert broker.calls == []
+    row = store.lookup("modify")
+    assert row is not None and row["state"] == "REFUSED"
+    assert row["disposition"] == "NOT_SENT" and row["marker"] == 0
+    # Later eligible session evidence cannot revive a refused intent.
+    broker.orders["77"].update(session="RTH", time_in_force="DAY", order_type="NORMAL")
+    assert mutate(paper, kind=kind, **arguments)["state"] == "REFUSED"
+    assert store.lookup("modify") == row
+    assert broker.calls == []
+
+
+@pytest.mark.parametrize("kind", ["MODIFY", "CANCEL"])
+@pytest.mark.parametrize("missing", ["session", "time_in_force", "order_type"])
+def test_missing_target_scope_field_is_not_sent(rig, kind, missing):
+    paper, _, broker, store = rig
+    target(broker)
+    broker.orders["77"].pop(missing)
+    arguments = {"price": "2.20"} if kind == "MODIFY" else {}
+    with pytest.raises(OrderNotSentError) as refusal:
+        mutate(paper, kind=kind, **arguments)
+    assert "outside verified DAY/regular-hours paper scope" in str(refusal.value)
+    assert broker.calls == []
+    row = store.lookup("modify")
+    assert row is not None and row["state"] == "REFUSED"
+    assert row["disposition"] == "NOT_SENT" and row["marker"] == 0
 
 
 def test_duplicate_decimal_identity_frozen_account_and_conflicts(rig):
@@ -800,6 +909,9 @@ class DelayedObservationBroker(Broker):
         self.orders[order_id] = self.pending_observations.pop(order_id)
 
 
+@pytest.mark.parametrize(
+    "legacy_fields", [{}, {"fill_outside_rth": "N/A"}, {"fill_outside_rth": True}]
+)
 @pytest.mark.parametrize("restart", [False, True])
 @pytest.mark.parametrize(
     "first_patch,next_patch",
@@ -809,13 +921,13 @@ class DelayedObservationBroker(Broker):
     ],
 )
 def test_acknowledgement_does_not_authorize_merge_from_old_order_fields(
-    rig, restart, first_patch, next_patch
+    rig, restart, first_patch, next_patch, legacy_fields
 ):
     paper, service, original, store = rig
     broker = DelayedObservationBroker(original.path)
     service.trade_ctx = broker
     target(broker)
-    broker.orders["77"].update(qty=100, price=50)
+    broker.orders["77"].update(qty=100, price=50, **legacy_fields)
     first = mutate(paper, "first-change", **first_patch)
     assert first["state"] == "ACKNOWLEDGED"
     assert first["receipt"] == {"order_id": "77"}

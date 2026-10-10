@@ -9,7 +9,7 @@ from contextlib import ExitStack
 from decimal import Decimal, localcontext
 from typing import TYPE_CHECKING, Any
 
-from moomoo import RET_OK
+from moomoo import RET_OK, Session
 
 from moomoo_mcp.services.admission import AdmissionPlan, prepare_paper_call
 from moomoo_mcp.services.broker_dispatch import QuotaRequest
@@ -444,12 +444,10 @@ class PaperExecution:
             order = self.service._fetch_order(
                 "paper " + kind, params["order_id"], "SIMULATE", account
             )
-            # Broker facts are evidence; absent required fields fail closed.
             if (
                 order.get("time_in_force") != "DAY"
                 or order.get("order_type") != "NORMAL"
-                or order.get("fill_outside_rth") not in (False, 0)
-                or order.get("session") not in ("RTH", "NONE")
+                or order.get("session") != Session.RTH
             ):
                 raise ValueError(
                     "Target order is outside verified DAY/regular-hours paper scope"
@@ -519,8 +517,7 @@ class PaperExecution:
                 "trd_side": params["trd_side"],
                 "order_type": "NORMAL",
                 "time_in_force": "DAY",
-                "fill_outside_rth": False,
-                "session": "RTH",
+                "session": Session.RTH,
                 "adjust_limit": 0,
                 "trd_env": "SIMULATE",
                 "acc_id": account,
