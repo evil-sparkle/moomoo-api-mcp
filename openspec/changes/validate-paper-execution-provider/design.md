@@ -34,6 +34,10 @@ or changing the existing recovery contract to make a test pass.
    no second application-level mutation invocation. A direct Python harness does
    not establish an external agent client's caller-chain behavior. Scope live
    evidence to the tested client and caller chain.
+   For the separately authorized Mac first-phase lifecycle on 2026-10-09,
+   the operator selected this agent as the direct authenticated MCP caller.
+   Task 2.3 remains unperformed; later standing bounded authorization
+   supersedes that initial scope.
 5. Preserve unresolved records and stop on uncertainty. Reconcile with orders and
    history, then use the separate operator capability only with verified evidence.
    A missing match or indefinite block is an honest test outcome.
@@ -45,7 +49,8 @@ or changing the existing recovery contract to make a test pass.
 - Controlled response loss may leave execution blocked → retain the journal;
   use evidence-backed recovery, never a new database against the same account.
 - External caller access may be unavailable → leave its test unchecked, with
-  the missing prerequisite recorded.
+  the missing prerequisite recorded; it does not block an independently
+  authorized direct-agent phase.
 - Retention changes over time → date observations and scope them to the tested
   account, market, SDK and OpenD versions.
 

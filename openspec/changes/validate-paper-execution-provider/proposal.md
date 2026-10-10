@@ -36,8 +36,13 @@ Any discovered behavior change needs a separate implementation change.
 
 Requires the completed Stage 2 binary, a separately authorized paper environment,
 its original journal, an operator capability, and access to the intended caller
-chain. No REAL orders, deployment, account reset, or journal replacement is
-authorized by this plan. Evidence belongs in this change's verification record.
+for the selected phase. Any MCP-compatible agent or client may be selected; no
+particular product or messaging integration is required. On 2026-10-09 the
+operator selected this agent as the direct MCP caller for the Mac first-phase
+lifecycle. The `M04` caller retry test remains unperformed. Subsequent standing
+bounded paper-order/fault authorization supersedes the first-phase-only scope. No REAL orders, production deployment, account reset, or
+journal replacement is authorized by this plan. Evidence
+belongs in this change's verification record.
 
 ## Modification visibility acceptance
 
