@@ -259,7 +259,7 @@ mcp = FastMCP(
     # connections per tool call.
     stateless_http=True,
     # One JSON body per request instead of an SSE stream, for clients that only
-    # read JSON (zeroclaw). The SDK then answers with the result alone and drops
+    # read JSON. The SDK then answers with the result alone and drops
     # every notification a tool emits during the call, so ctx.info / ctx.warning
     # never reach an HTTP client; anything a caller needs belongs in the result.
     json_response=True,

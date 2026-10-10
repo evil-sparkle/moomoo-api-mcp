@@ -27,7 +27,7 @@ execution-journal volume, or existing local-client path.
 
 #### Scenario: Existing local client uses MCP
 
-- **WHEN** ZeroClaw or another authorized host-local client calls the MCP endpoint
+- **WHEN** any authorized host-local MCP client calls the MCP endpoint
 - **THEN** it SHALL use the same loopback address, authentication, tools, and
   restart behavior as before the optional integration
 

@@ -220,7 +220,7 @@ a real paper account (task group 1).
 
 - **REAL execution.** Nothing here enables or certifies it. Paper records can never
   be promoted into live execution.
-- **Stage 3**, prepared orders bound to a trusted Telegram approval.
+- **Stage 3**, prepared orders bound to a trusted operator approval.
 - **Stage 4**, a persistent operator pause, a notification outbox, readiness
   reporting.
 - Combo, market, stop and trailing-stop mutations; multi-leg packages; fractional
@@ -287,7 +287,7 @@ a real paper account (task group 1).
   `MCP_AUTH_TOKEN` and never given to the agent; `.env.example`, `docker-compose.yml`,
   `Dockerfile`, [State and restart reference](../../../../docs/deploy-vps.md#state-and-restart-reference), `docs/deploy-vps.md`, and the
   `openspec/config.yaml` context.
-- **Agent (ZeroClaw)**: paper write tool calls must carry a stable `operation_id`
+- **MCP agent clients**: paper write tool calls must carry a stable `operation_id`
   and active `admission_epoch` that survive a retry, and prices as decimal strings.
 - **Dependencies**: none. Standard library `sqlite3` and `fcntl` only.
 
@@ -298,7 +298,7 @@ from live validation. The original retention observation (task 1.4) and manual
 acceptance (tasks 11.1–11.2, `M01`–`M04`) are preserved, uncompleted, in
 `validate-paper-execution-provider`. Development completion requires automated
 `U01`–`U20` and isolated container `C01`–`C04` verification. It does not claim live
-provider acceptance, measured after-close retention or ZeroClaw/Telegram retry
+provider acceptance, measured after-close retention or MCP agent-client retry
 propagation. The runtime safety contracts and their scope remain unchanged.
 
 ## Confirmed mode scope (2026-09-23)

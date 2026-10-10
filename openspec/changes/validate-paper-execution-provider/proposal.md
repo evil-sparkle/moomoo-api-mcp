@@ -3,7 +3,8 @@
 ## Why
 
 Automated journal tests establish application behavior but cannot establish live
-paper-provider behavior or whether ZeroClaw and Telegram preserve retry identity.
+paper-provider behavior or whether MCP agent clients preserve retry identity
+through their actual caller chains.
 The operator authorized separating this validation from Stage 2 development on
 2026-09-23, so development can be archived without claiming live acceptance.
 
@@ -13,7 +14,10 @@ The operator authorized separating this validation from Stage 2 development on
   and historical order queries after trading close.
 - Preserve former tasks 11.1 and 11.2 (`M01`–`M04`): run a bounded journaled
   paper lifecycle, controlled response-loss recovery, and end-to-end retry-token
-  propagation through ZeroClaw and Telegram.
+  propagation through an authorized MCP agent client's actual retry chain.
+- Apply the same execution contract to any compliant MCP agent client, independent
+  of agent framework or messaging channel. Record the tested client/version,
+  transport and any intermediary; scope live evidence to that tested caller chain.
 - Record dated, redacted evidence and limitations. These tasks remain unperformed
   until separately authorized and actually observed.
 
