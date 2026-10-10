@@ -89,9 +89,14 @@ split from Stage 2 development on 2026-09-23.
   Standing bounded authorization supersedes the original first-phase-only
   scope. Successful MCP reads alone do not establish retry identity or
   duplicate suppression.
-- [ ] 2.4 Publish a dated verification record distinguishing observed results,
+- [x] 2.4 Publish a dated verification record distinguishing observed results,
   limitations and incomplete checks. Verify all claims against captured evidence
   and retain any unresolved operation instead of resetting its journal.
+  The 2026-10-11 record includes merged-main image deployment, fresh hourly
+  provider/journal/account observations, independently verified offline test
+  instrumentation, retained evidence and the four incomplete live criteria.
+  This completes dated publication; it does not establish provider acceptance
+  for tasks 2.1, 2.2, 2.3 or 2.5. See [current evidence](verification.md).
 
 - [ ] 2.5 Under separately authorized paper-test bounds, submit a quantity reduction
   followed immediately by a price-only modification (`M02` visibility timing).

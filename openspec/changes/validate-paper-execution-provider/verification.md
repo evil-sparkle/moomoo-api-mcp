@@ -317,3 +317,264 @@ durably acknowledged retry outside market hours when no SDK dispatch occurs.
 Unknown/refused intents are never replayed. Task 1.2 specifically measures
 after-close retention. Advance order submission remains a separate historical
 observation and does not complete the full provider lifecycle.
+
+## Merged-main Mac image deployment — 2026-10-11
+
+The operator authorized replacing the Mac paper image with the merged-main
+runtime. Remote main was fetched safely and remained
+`e2bb7cfab1a71929808d49b2b61a96a7ddc2eb5a`.
+[Main CI run 38088219078](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/38088219078)
+completed successfully, including application checks, container smoke and image
+publication. Its published image digest was
+`sha256:8c45b7443ce0c111b5ea0b1cdf62a05e06b898c519a3cb5e4208d6906e8f293e`.
+The Mac could not authenticate the ECR pull. The interactive caller therefore
+built locally from exactly that committed source, using 39 allowlisted tracked
+Docker inputs without private configuration or credentials in the build context.
+This is a local build of CI-checked source, not the CI-published artifact.
+
+The active local tag is `moomoo-paper-test:main-e2bb7cf`, pinned by image ID
+`sha256:25779f3f9b16e521bc8092926aa97ccddddc3088deb41be7f994d10b4c45b0cb`.
+The platform is `linux/amd64`, service UID remains 10001, and all 33 packaged
+source files match merged main. Build-input manifest SHA-256 is
+`241da1a9b2f019b739872c3b5a24cd27876aa0d2af8ffd9c0cc10c4eae3e6077`.
+The exact source label and manifest label were verified before activation.
+SDK/OpenD artifact versions remain 10.10.7008; the gateway reports API 1010.
+OpenD binary SHA-256 is unchanged:
+`e05b901dbe9107061b954a7fe3c059916c4a1e580d8f0a57277d402438898601`.
+
+The shared hourly lock covered build, backup, one container recreation and
+verification. Only `moomoo-paper-test-mac` was recreated, retaining the same
+Compose project, loopback `127.0.0.1:18080`, unpublished OpenD port and original
+`moomoo-paper-test-mac_execution-data` / `moomoo-paper-test-mac_opend-data`
+volumes. SIMULATE/US, the exact one-account allowlist ending 0047, USD 336 cap,
+quantity cap 2, remembered login and automatic journal creation 0 are unchanged.
+No credential file was inspected or changed. No VPS or production deployment ran.
+
+Main includes the schema-3 automatic recovery implementation. Before recreation,
+a consistent schema-2 SQLite backup was created in the execution volume with
+mode 0600, integrity `ok`, three operations and SHA-256
+`04a811114defb53877ac337a40ea321f7e5c2fac72bdb224163dc209c2017169`.
+Startup atomically migrated the original journal from schema 2 to 3. Its identity
+and original inode were retained. Hash comparison over every original operation
+column verified all three stored operations, their admission epochs, states,
+dispatch markers, receipts and evidence unchanged. Original identity/intent/result
+files and cancellation marker hashes also match. Added columns have expected
+null/zero defaults, and the new recovery-check table is empty. Previous journal
+epochs remain, with exactly one new executor epoch; no existing intent was retagged
+or replayed. Whole-row hashes across different schemas are not claimed identical.
+
+The first post-recreation probe reached authenticated MCP after approximately
+eight seconds, while OpenD was still starting. It accurately reported disconnected
+broker access, so the activation helper stopped its verification sequence without
+another recreation. A subsequent read-only probe at 2026-10-10 22:00:56 UTC
+(2026-10-11 06:00:56 SGT) observed remembered login and connected quote/trade
+services. Final read-only verification completed at 06:01:17 SGT. The journal
+is READY, integrity `ok`, with three operations, zero in-flight/blocking/review
+records, zero recovery checks and zero recovery audits. No order, fault injection,
+automatic mutation retry or recovery acknowledgement was performed.
+
+Normal MCP authentication and host-loopback access are verified. Anonymous access
+returns HTTP 401. Current main intentionally removes the separate operator token
+and manual recovery override; the retained legacy operator credential also returns
+401. Recovery is process-owned, read-only and durably audited against broker
+evidence. Historical operator-capability checks in task 1.1 describe the earlier
+revision. Tasks 2.2/2.5 must use an orchestration method consistent with the current
+automatic recovery contract; the retired override must not be reintroduced to
+make validation pass.
+
+Fresh account observations returned zero current orders and zero positions.
+The original test order is no longer in the current-order list; historical orders
+still return exact order reference `8da2eefedf3ef77e` as CANCELLED_ALL, quantity one,
+limit USD 1.00, NORMAL/DAY/RTH, zero fills, with no unrelated history rows.
+This extends the history-retention lower bound without measuring current-list
+expiry. Provider market state was AFTER_HOURS_END. The operator's previously
+confirmed sole-writer arrangement remains the exclusivity basis; Docker isolation
+does not independently establish brokerage-account exclusivity.
+
+The canonical local Compose helper now verifies and selects this exact image.
+The hourly prompt/readiness record uses the new source/image/schema and normal
+authentication. The source/image blocker is resolved; standing bounded paper
+authorization remains, with fresh account/journal/session checks before every
+mutation sequence. A concurrent runner invocation was verified to skip under the
+shared lock. No acceptance sequence ran during deployment. Tasks 2.1–2.5 remain
+unchecked. Live mutation sequences require freshly confirmed regular US trading;
+fault/visibility cases additionally require safely bounded, locally verified
+orchestration against current main. No new PR is needed for this environment work.
+
+Private redacted evidence is retained under `env/paper-test-mac/`:
+`main-image-e2bb7cf-provenance.json`, `main-image-e2bb7cf-journal-backup.json`,
+`main-image-e2bb7cf-preactivation.json`, `main-image-e2bb7cf-postactivation-probe.json`,
+`main-image-e2bb7cf-poststartup-probe.json`, `main-image-e2bb7cf-after.json` and
+`main-image-e2bb7cf-activation-result.json`. These operational files and the
+journal backup remain outside Git.
+
+## Hourly continuation — 2026-10-11 06:09 SGT
+
+OpenSpec apply reports 2/7 tasks complete; 1.1/1.2 remain complete and 2.1–2.5
+remain unchecked. The latest merged-main deployment section supersedes the older
+image, separate-operator-authentication and analysis-only handoff blockers.
+Standing bounded paper-order/fault authority remains valid. Existing edits and
+all historical evidence are preserved.
+
+Read-only inspection confirmed the expected main-e2bb7cf image
+`sha256:25779f3f9b16e521bc8092926aa97ccddddc3088deb41be7f994d10b4c45b0cb`,
+linux/amd64, running with zero restarts in the orbstack Mac stack. Both original
+named volumes and loopback port 18080 remain intact. The shared runner lock was
+held. The container process listing showed OpenD and two Python processes,
+consistent with the service/supervisor baseline. This does not independently
+audit remote account use; the operator's other-client READ_ONLY confirmation
+remains the sole-writer basis.
+
+Authenticated, journaled MCP reads completed at 2026-10-10 22:09:35 UTC.
+They freshly verified SIMULATE/US, the single exact allowlisted account ending
+0047, USD 336 cap, quantity cap two, automatic journal creation zero, remembered
+login, SDK 10.10.7008 and gateway API 1010. The original schema-3 journal is READY,
+integrity `ok`, with three operations and zero in-flight/blocking/review/recovery
+check/recovery audit records. Identity/inode, all original operation fields and
+stored epochs, original evidence and cancellation markers match the deployment
+baseline. The freshly read admission epoch also matches that baseline; its
+redacted reference is `75552440ab12dc9f`.
+
+Fresh current orders and positions are empty. Historical orders contain only
+the original order reference `8da2eefedf3ef77e`: CANCELLED_ALL, BUY one US.AAPL
+share, NORMAL/DAY/RTH at USD 1.00, zero fills. Its continued historical presence
+is a retention lower bound; the empty current list does not prove absence or
+measure expiry. No unexpected account activity was observed.
+
+At 22:09:34 UTC the provider reported US.AAPL `AFTER_HOURS_END`. The run stops
+before mutation. A single calendar read for 10–20 October returned 12 October
+2026 as the next US trading day, type `WHOLE`, in market-local dates. Resume
+read-only preflight at **2026-10-12T14:00:00Z**. This is an estimated clock slot,
+not authorization to dispatch: reconfirm the provider calendar, regular session,
+image/account/current epoch, journal and fresh orders/positions then.
+
+No provider mutation, caller retry, fault, recovery acknowledgement, restart,
+deployment, new intent or marker was performed. No historical helper was run.
+Unchanged local tests were not repeated. Task 2.1 still needs a new bounded
+place/modify/cancel lifecycle; 2.3 needs factual caller identity propagation and
+SDK dispatch suppression. Before live 2.2/2.5 use, conservative orchestration
+must be locally verified against main's automatic, durably audited recovery
+contract. The historical manual operator-recovery wording is not permission to
+call or reintroduce the retired override. No fault capability, response-loss
+recovery or modification visibility timing is claimed by this read-only run.
+Task 2.4 awaits the complete acceptance record.
+
+Redacted evidence:
+`env/paper-test-mac/hourly-validation/20261010T220935Z.read-only-evidence.json`.
+No runtime code, runner, prompt or operator-authority file was changed. No PR,
+push, merge or archive was performed.
+
+## Offline orchestration preparation and dated publication — 2026-10-11
+
+After the hourly run stopped at AFTER_HOURS_END, the interactive caller held
+the shared runner lock and prepared external test instrumentation for the
+remaining response-loss/retry checks. Packaged main source and the live container
+were unchanged; the instrumentation has not been activated in the Mac stack.
+All helper files and operational proof records remain private and Git-ignored.
+
+`stage2_validation_observer.py` records entry at the actual SDK place/modify
+boundary and can discard one successful SDK response for an explicitly bound
+tagged placement. It uses exact account/operation/epoch/target/quantity/price
+bindings, an expiry, durable exclusive per-operation claims, one global loss
+claim and conservative campaign ceilings. An unexpected second SDK entry is
+logged as a failure even when the observer prevents forwarding. It records the
+shipping journal's committed outcome and actual gate state; it does not write
+execution records or replace automatic recovery.
+
+`stage2_acknowledged_retry.py` provides a selected MCP-compatible caller path:
+two identical calls for a previously durable ACK, one caller-local stored-reply
+loss and unchanged payload, operation ID and admission epoch. Transport failures,
+refused/unknown intents or changed journal/SDK-entry evidence stop the check.
+The live transport and snapshots must still be connected during provider testing.
+
+At 2026-10-10 22:17:50 UTC, 18 instrumentation/caller checks passed inside the
+exact pinned main image with networking disabled and neither original volume
+mounted. Coverage includes finite/exact paper bounds, wrong-account/REAL refusal,
+one response-loss ceiling, duplicate claims across observer restart, campaign
+budgets, actual SDK-class installation, real temporary schema-3 SQLite blocking,
+identical caller retry and rejection of changed SDK-count/uncertain evidence.
+The temporary fixture journal had no brokerage connection. A separate isolated
+READ_ONLY bootstrap check served 34 registered MCP tools through the normal
+package entry point, exposed no retired recovery override and recorded zero SDK
+mutation entries. No installed dependencies or packaged application files were
+patched to make these checks pass. These are offline orchestration evidence;
+they do not complete live response-loss, caller retry or provider visibility.
+
+The private campaign plan records a first intended live window of 12 October
+2026, 22:00–23:00 SGT, conditional on fresh provider-confirmed regular trading.
+Serial limits are five new US.AAPL BUY orders, 17 SDK mutation calls, 22 trading
+MCP requests, one SDK reply loss, one caller-local stored-reply loss and at most
+three test container recreations, preserving the pinned image and original
+journal/volumes. Quantities are one/two shares and limits USD 1.00–1.01; flat
+baselines and one outstanding order bound intended simultaneous gross purchase
+exposure to USD 2.02. The first lifecycle retains its one-share/three-intent
+bound. No phase may reset evidence, replay an unknown/refused intent or fabricate
+provider lag. Automatic recovery must supply reliable durable broker accounting
+before uncertain-phase cleanup; an absence assumption alone does not suffice.
+
+Current acceptance status:
+
+| Task | Verified result and remaining limitation |
+| --- | --- |
+| 2.1 / M01–M02 | New-main setup/readiness verified; successful new place/price-modify/cancel lifecycle remains unperformed. |
+| 2.2 / M03 | Bounded external SDK reply-loss/gate observation prepared and checked offline; live uncertainty, durable blocking and automatic broker recovery/audit remain unperformed. |
+| 2.3 / M04 | Caller retry and SDK-entry observer prepared and checked offline; two actual MCP retry calls and measured zero additional SDK entries remain unperformed. |
+| 2.4 | This dated record publishes observed results, limitations and unfinished checks, with captured evidence retained. |
+| 2.5 / M02 timing | Smaller two-to-one-share cases are bounded; live forward/reverse visibility and a restart during genuine provider lag remain unperformed. |
+
+Task 2.4's stated criterion is publication distinguishing incomplete checks; it
+does not require those checks to have passed first. Its checkbox is complete.
+Progress is now 3/7, with tasks 2.1, 2.2, 2.3 and 2.5 still unchecked. No live
+order, caller retry, response loss, recovery acknowledgement or process restart
+was performed during this preparation. No journal/volume/evidence reset occurred.
+
+Private preparation evidence: `env/paper-test-mac/stage2-observer-offline-verification.json`
+records the tested image, helper hashes, isolated setup and checks.
+`env/paper-test-mac/stage2-validation-campaign.md` records execution ceilings,
+activation/restoration preflight, per-intent bindings, stop conditions and the
+conditional visibility limitation. The hourly handoff uses these artifacts and
+preserves standing authorization. Fresh regular-session confirmation is still
+required before activation followed by any live mutation sequence.
+
+The private hourly runner now samples one redacted, read-only `check_health`
+result before its unchanged-input gate. Automatic recovery can change broker/
+journal state without editing source files; this observation permits renewed
+analysis when that evidence changes. Two live read-only samples verified a
+connected READY journal with zero blocking/in-flight operations and an identical
+fingerprint for unchanged facts. Observation timestamps are excluded, so stable
+state does not trigger repeated model work. The sample performs no order, retry,
+fault or recovery override. The scheduler still refuses to replay uncertain
+operations; a changed recovery result is evidence to assess, not new mutation
+authority. Its code and state are private operational artifacts outside Git.
+
+## Main documentation update and final continuation checks — 2026-10-11
+
+The verification branch was rebased onto main
+`d34140847cd693834d87b880856e917426760cdc`, retaining its framework-independent
+MCP agent-client criteria. Relative to main, the branch changes only this
+validation change's proposal, design, tasks and dated verification record.
+
+The deployed image remains pinned to the already verified selected source
+`e2bb7cfab1a71929808d49b2b61a96a7ddc2eb5a`. Between that source and the new main,
+the only runtime/build-input difference is a comment in `server.py`; a direct
+Python AST comparison is identical. Tests, dependencies, Dockerfiles and
+workflows have no differences. Packaged file hashes are proven against the
+selected e2bb7cf source, not claimed equal to the newer comment revision. No
+container recreation or further image build accompanied this documentation update.
+
+The six prepared helper/overlay hashes match the retained offline proof and all
+are private, Git-ignored files. Exactly one hourly cron entry remains at minute
+00. An invocation while the interactive preparation lock was held skipped before
+starting another validation run, verifying exclusive continuation. The handoff
+retains four live criteria and the planned 12 October 22:00 SGT regular-session
+preflight. Caller acceptance must identify the actual tested MCP agent/client,
+version, transport and intermediary; the offline harness alone cannot complete
+that caller-chain criterion. No agent framework or messaging channel is required.
+
+A final read-only continuation check again confirmed authenticated MCP broker
+connectivity, READY state and zero blocking/in-flight operations. SQLite integrity
+is `ok`, exactly the original three operations remain, the original journal inode
+and both named volumes are preserved, and the external observer directory is
+absent from the live stack. The pinned image and loopback-only MCP mapping are
+unchanged. Strict OpenSpec validation passes; refreshed apply instructions report
+3/7 complete with precisely 2.1, 2.2, 2.3 and 2.5 outstanding.
