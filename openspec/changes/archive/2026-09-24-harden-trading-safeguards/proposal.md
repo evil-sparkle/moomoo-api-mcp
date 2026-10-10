@@ -91,7 +91,7 @@ journal and the approval workflow on top of it.
 
 - Stage 2: the persistent execution journal, operation IDs, duplicate suppression
   and reconciliation.
-- Stage 3: prepared orders bound to a trusted Telegram approval.
+- Stage 3: prepared orders bound to a trusted operator approval.
 - Stage 4: a persistent operator pause, readiness reporting, a notification outbox,
   subscription reuse, and module and CI restructuring.
 - Maximum-loss risk for short options and combos. The combo cap in this change
@@ -161,6 +161,6 @@ None.
   - The live VPS `.env` must gain `MOOMOO_REAL_ACC_IDS`, and
     `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` if a cap is used, before upgrading.
     Without them the new image refuses to start.
-- **Agent (ZeroClaw)**: write tool calls must pass `trd_env`. Tool descriptions
+- **MCP agent clients**: write tool calls must pass `trd_env`. Tool descriptions
   change.
 - **Dependencies**: none new.

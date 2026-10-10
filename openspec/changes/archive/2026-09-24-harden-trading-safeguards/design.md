@@ -594,10 +594,10 @@ Stage 1.1 market selection. See `verification.md` for the command/result record.
 7. **Rollback:** check the target image's configuration requirements and trading
    safeguards before deployment. Earlier images may require different configuration
    and restore startup auto-unlock.
-8. Update the ZeroClaw agent prompt or skills for two changes: write tools now
+8. Update MCP agent clients' prompts or skills for two changes: write tools now
    require `trd_env`, and `modify_order`/`cancel_order` now resolve the account
    before dispatch, so a call that relied on the gateway's own default for
-   `acc_id="0"` must name an account when more than one is eligible. Teach it that
+   `acc_id="0"` must name an account when more than one is eligible. Teach clients that
    `lock_trade` is how an operator clears a halt, and that a refused lock leaves the
    halt in place.
 9. If a notional cap is configured, confirm the traded markets appear in the verified

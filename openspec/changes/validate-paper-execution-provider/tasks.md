@@ -8,8 +8,8 @@ split from Stage 2 development on 2026-09-23.
 
 - [ ] 1.1 Record exact separately authorized paper-test bounds and confirm the
   Stage 2 commit, SDK/OpenD versions, isolated account, original journal, operator
-  capability and caller-chain access. Verify the authorization and redacted setup
-  are recorded before any provider mutation.
+  capability, MCP agent client and caller-chain access. Verify the authorization
+  and redacted setup are recorded before any provider mutation.
 - [x] 1.2 Measure how long a terminal DAY order remains queryable using current
   and historical order queries after close (former Stage 2 task 1.4). Verify by
   recording timestamps and both observed windows; distinguish lower bounds from
@@ -31,9 +31,12 @@ split from Stage 2 development on 2026-09-23.
   loss during a paper mutation and reconcile (`M03`; former 11.2). Verify no replay,
   truthful uncertainty, durable blocking and evidence-backed operator recovery;
   retain the unresolved journal if evidence cannot release it.
-- [ ] 2.3 Exercise the real ZeroClaw/Telegram retry chain (`M04`; former 11.2).
+- [ ] 2.3 Exercise an authorized MCP agent client's actual retry chain (`M04`;
+  former 11.2). Record the client/version, MCP transport and any intermediary.
   Verify unchanged operation ID and admission epoch reach the service across a
-  retry and that the application makes no second SDK mutation invocation.
+  retry and that the application makes no second SDK mutation invocation. The
+  contract applies to any compliant MCP agent client; scope the observed result
+  to the tested client and caller chain.
 - [ ] 2.4 Publish a dated verification record distinguishing observed results,
   limitations and incomplete checks. Verify all claims against captured evidence
   and retain any unresolved operation instead of resetting its journal.

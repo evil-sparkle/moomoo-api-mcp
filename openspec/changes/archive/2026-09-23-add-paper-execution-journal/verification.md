@@ -2,8 +2,8 @@
 
 The operator authorized archiving completed development with live provider
 validation retained in `validate-paper-execution-provider`. No live broker order,
-provider login, deployed configuration change, or ZeroClaw/Telegram experiment was
-performed in this development run. REAL-order journaling remains deferred.
+provider login, deployed configuration change, or MCP agent-client retry experiment
+was performed in this development run. REAL-order journaling remains deferred.
 
 ## Verified development scope
 
@@ -83,7 +83,7 @@ uses one stable named paper volume without changing the OpenD authorization moun
 ## Remaining validation
 
 After-close retention, live lifecycle checks, controlled response-loss recovery,
-and ZeroClaw/Telegram identity propagation remain incomplete in the active
+and MCP agent-client identity propagation remain incomplete in the active
 follow-up. Automated fake-broker and container results do not verify those paths.
 
 ## PR review adaptation — acknowledgement versus observed modification

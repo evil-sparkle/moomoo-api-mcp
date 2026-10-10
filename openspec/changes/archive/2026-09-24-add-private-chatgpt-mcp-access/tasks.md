@@ -8,7 +8,7 @@
 - [x] 1.2 Classify subscription, order, lock/unlock, and operator actions as
   mutations while keeping pure queries and previews read-only; verify existing
   tool tests and the new annotation matrix pass without changing tool names,
-  schemas, or ZeroClaw-visible behavior.
+  schemas, or MCP client-visible behavior.
 - [x] 1.3 Document that annotations and ChatGPT UI behavior are advisory and that
   no supported per-connection ChatGPT tool allowlist was found; verify the
   runbook points to server-enforced `READ_ONLY` as the authorization boundary.
@@ -116,7 +116,7 @@
   change unarchived.
 - [x] 6.4 Review the final diff for authentication bypass, secret leakage, public
   or wildcard exposure, accidental trading enablement, OpenD/journal volume
-  changes, ZeroClaw regression, and restart coupling; verify searches and focused
+  changes, MCP client regressions, and restart coupling; verify searches and focused
   tests find no violation and leave credentialed web/iPad checks pending unless
   the owner actually ran them.
 

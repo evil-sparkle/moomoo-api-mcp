@@ -6,7 +6,7 @@ See `proposal.md` for motivation. The production Compose stack is one container:
 OpenD listens on container loopback at `127.0.0.1:11111`, the MCP process listens
 inside the container, and Docker publishes only `127.0.0.1:8000` on the host.
 Streamable HTTP is stateless, bearer authenticated, and protected by FastMCP's
-Host and Origin checks. ZeroClaw and other local clients already use that endpoint.
+Host and Origin checks. Existing local MCP clients already use that endpoint.
 
 The official sources were reviewed on 2026-09-24:
 
@@ -53,7 +53,8 @@ so the server's existing trading policy remains the relevant boundary.
   tunnel Manage/admin credentials to the daemon.
 - Proving ChatGPT account eligibility, workspace association, or native-iPad
   availability in automated repository tests.
-- Making Tailscale part of the product data path or changing ZeroClaw's path.
+- Making Tailscale part of the product data path or changing existing local MCP
+  clients' paths.
 
 ## Decisions
 

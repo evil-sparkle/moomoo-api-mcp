@@ -9,7 +9,7 @@ no deal queries, and same-session order fields; none proves the journal end to e
 ## Goals / Non-Goals
 
 **Goals:** Collect reproducible live evidence for retention, journaled lifecycle,
-uncertain outcomes, and preserved caller identity.
+uncertain outcomes, and preserved caller identity across MCP agent clients.
 
 **Non-goals:** Runtime changes, REAL execution, strategy evaluation, journal reset,
 or changing the existing recovery contract to make a test pass.
@@ -27,9 +27,13 @@ or changing the existing recovery contract to make a test pass.
 3. Run lifecycle and response-loss checks against the unchanged shipping service
    and journal. Record operation IDs, epochs, broker evidence and durable states.
    Do not retry with refreshed tokens or manufacture a successful outcome.
-4. Exercise the real ZeroClaw/Telegram path. Preserve the exact token on retries
-   and demonstrate no second application-level mutation invocation. A direct
-   Python harness does not establish caller-chain behavior.
+4. Exercise an authorized MCP agent client's actual retry path. The contract
+   applies to any compliant MCP agent client, independent of agent framework or
+   messaging channel. Record the client/version, MCP transport and any intermediary.
+   Preserve the exact operation ID and admission epoch on retries and demonstrate
+   no second application-level mutation invocation. A direct Python harness does
+   not establish an external agent client's caller-chain behavior. Scope live
+   evidence to the tested client and caller chain.
 5. Preserve unresolved records and stop on uncertainty. Reconcile with orders and
    history, then use the separate operator capability only with verified evidence.
    A missing match or indefinite block is an honest test outcome.

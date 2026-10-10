@@ -881,7 +881,7 @@ from live validation. The original retention observation (task 1.4) and manual
 acceptance (tasks 11.1–11.2, `M01`–`M04`) are preserved, uncompleted, in
 `validate-paper-execution-provider`. Development completion requires automated
 `U01`–`U20` and isolated container `C01`–`C04` verification. It does not claim live
-provider acceptance, measured after-close retention or ZeroClaw/Telegram retry
+provider acceptance, measured after-close retention or MCP agent-client retry
 propagation. The runtime safety contracts and their scope remain unchanged.
 
 ## Implementation decisions confirmed on 2026-09-23
