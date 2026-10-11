@@ -448,6 +448,8 @@ class TestFastMCPSecurity:
             mock_create.assert_called_once_with(
                 auth_token="my-secret-token",
                 allow_chatgpt_tunnel_host=False,
+                operator_auth_token="",
+                operator_id="",
             )
             mock_uvicorn_run.assert_called_once_with(
                 mock_app, host="127.0.0.1", port=8000

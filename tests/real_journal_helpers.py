@@ -15,6 +15,7 @@ import pytest
 from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.real_execution import RealExecution
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_policy import InstrumentFacts
 
 MUTATIONS = ("place_order", "place_combo_order", "modify_order", "cancel_order")
 
@@ -39,6 +40,22 @@ def real_journal_legacy_calls(monkeypatch, tmp_path):
     @wraps(original_init)
     def initialize(service, *args, **kwargs):
         original_init(service, *args, **kwargs)
+        if (
+            service.instrument_lookup is None
+            and not service.policy.notional_cap_configured
+        ):
+            # These legacy doubles exercise journal/routing/locking, with
+            # explicit stock metadata now needed independently of monetary caps.
+            service.instrument_lookup = lambda codes: [
+                InstrumentFacts(
+                    code=code,
+                    classification="STOCK",
+                    monetary_multiplier=1,
+                    last_price=150,
+                    lot_size=1,
+                )
+                for code in codes
+            ]
         if service.real is None:
             store = ExecutionStore(
                 tmp_path / "real-journals" / str(len(stores)) / "real.sqlite3",

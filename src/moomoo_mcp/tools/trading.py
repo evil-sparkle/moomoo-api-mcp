@@ -35,6 +35,8 @@ async def place_order(
     remark: str = "",
     operation_id: str | None = None,
     admission_epoch: str | None = None,
+    approval_id: str | None = None,
+    session: str = "N/A",
 ) -> dict:
     """Place a new trading order.
 
@@ -121,7 +123,8 @@ async def place_order(
         time_in_force: Time in force for the order. Default 'DAY'.
             - 'DAY': Order valid for current trading day only.
             - 'GTC': Good-Til-Cancelled, order remains active until filled or cancelled.
-        adjust_limit: Adjust limit percentage (0-100). Default 0.
+        adjust_limit: Signed price-adjustment ratio. For example, 0.015 allows
+            adjustment upward by at most 1.5%; -0.01 allows 1% downward. Default 0.
         aux_price: Trigger price for stop/if-touched order types (required for STOP,
             STOP_LIMIT, MARKET_IF_TOUCHED, LIMIT_IF_TOUCHED).
         trail_type: Trailing type for trailing stop orders (required for TRAILING_STOP,
@@ -132,6 +135,9 @@ async def place_order(
         acc_id: Account ID from get_accounts(), or '0' to resolve one when
             exactly one account is eligible.
         remark: Optional order note/remark.
+        session: US stock/ETF session - N/A (SDK default), RTH, ETH, OVERNIGHT
+            or ALL. Explicit non-RTH sessions require NORMAL limit orders.
+            Paper accepts only its existing RTH scope.
 
     Returns:
         Dictionary with order details including order_id, order_status and
@@ -157,7 +163,9 @@ async def place_order(
             acc_id=acc_id,
             operation_id=operation_id,
             admission_epoch=admission_epoch,
+            approval_id=approval_id,
             remark=remark,
+            session=session,
         )
     )
 
@@ -175,6 +183,7 @@ async def place_combo_order(
     remark: str = "",
     operation_id: str | None = None,
     admission_epoch: str | None = None,
+    approval_id: str | None = None,
 ) -> dict:
     """Place a multi-leg option strategy (vertical spread, straddle, etc.) as a
     single atomic order.
@@ -289,6 +298,7 @@ async def place_combo_order(
             remark=remark,
             operation_id=operation_id,
             admission_epoch=admission_epoch,
+            approval_id=approval_id,
         )
     )
 
@@ -383,6 +393,7 @@ async def modify_order(
     acc_id: str = "0",
     operation_id: str | None = None,
     admission_epoch: str | None = None,
+    approval_id: str | None = None,
 ) -> dict:
     """Modify an existing order.
 
@@ -473,6 +484,7 @@ async def modify_order(
             acc_id=acc_id,
             operation_id=operation_id,
             admission_epoch=admission_epoch,
+            approval_id=approval_id,
         )
     )
 
@@ -485,6 +497,7 @@ async def cancel_order(
     acc_id: str = "0",
     operation_id: str | None = None,
     admission_epoch: str | None = None,
+    approval_id: str | None = None,
 ) -> dict:
     """Cancel an existing order.
 
@@ -554,6 +567,7 @@ async def cancel_order(
             acc_id=acc_id,
             operation_id=operation_id,
             admission_epoch=admission_epoch,
+            approval_id=approval_id,
         )
     )
 

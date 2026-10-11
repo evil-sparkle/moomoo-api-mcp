@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from moomoo import SecurityFirm
@@ -90,6 +90,10 @@ class Settings:
     allow_chatgpt_tunnel_host: bool = False
     real_journal_path: str | None = None
     create_real_journal: bool = False
+    controls_path: str | None = None
+    create_controls: bool = False
+    operator_auth_token: str = field(default="", repr=False)
+    operator_id: str = ""
 
     @property
     def has_trade_credential(self) -> bool:
@@ -280,6 +284,49 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
                 "distinct directories"
             )
 
+    controls_path = None
+    create_controls = False
+    operator_token = (env.get("MOOMOO_OPERATOR_AUTH_TOKEN") or "").strip()
+    operator_id = (env.get("MOOMOO_OPERATOR_ID") or "").strip()
+    if operator_token:
+        if not auth_token:
+            raise TradingModeConfigError(
+                "MCP_AUTH_TOKEN is required with an operator channel"
+            )
+        if operator_token == auth_token:
+            raise TradingModeConfigError(
+                "MOOMOO_OPERATOR_AUTH_TOKEN must differ from MCP_AUTH_TOKEN"
+            )
+        if not operator_token.isascii() or any(
+            not character.isprintable() or character.isspace()
+            for character in operator_token
+        ):
+            raise TradingModeConfigError("MOOMOO_OPERATOR_AUTH_TOKEN is invalid")
+        if not operator_id or len(operator_id) > 128 or not operator_id.isprintable():
+            raise TradingModeConfigError("MOOMOO_OPERATOR_ID is required and bounded")
+    if policy.mode is not TradingMode.READ_ONLY:
+        controls_path = (env.get("MOOMOO_TRADING_CONTROLS_PATH") or "").strip() or None
+        creation = (env.get("MOOMOO_CREATE_TRADING_CONTROLS") or "0").strip()
+        if creation not in {"0", "1"}:
+            raise TradingModeConfigError(
+                "MOOMOO_CREATE_TRADING_CONTROLS must be 0 or 1"
+            )
+        create_controls = creation == "1"
+        if (
+            policy.require_approval or policy.max_daily_notional or operator_token
+        ) and not controls_path:
+            raise TradingModeConfigError("MOOMOO_TRADING_CONTROLS_PATH is required")
+        if policy.require_approval and not operator_token:
+            raise TradingModeConfigError(
+                "MOOMOO_OPERATOR_AUTH_TOKEN is required for approvals"
+            )
+        if controls_path:
+            for journal in (journal_path, real_journal_path):
+                if journal and Path(controls_path).resolve() == Path(journal).resolve():
+                    raise TradingModeConfigError(
+                        "Trading controls must use distinct storage"
+                    )
+
     return Settings(
         opend_host=(env.get(ENV_OPEND_HOST) or "").strip() or DEFAULT_HOST,
         opend_port=_load_port(env),
@@ -298,6 +345,10 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         allow_chatgpt_tunnel_host=load_chatgpt_tunnel_host(env),
         real_journal_path=real_journal_path,
         create_real_journal=create_real_journal,
+        controls_path=controls_path,
+        create_controls=create_controls,
+        operator_auth_token=operator_token,
+        operator_id=operator_id,
     )
 
 

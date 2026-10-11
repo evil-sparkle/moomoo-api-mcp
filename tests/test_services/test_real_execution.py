@@ -23,7 +23,11 @@ from moomoo_mcp.services.execution_store import (
 )
 from moomoo_mcp.services.order_errors import OrderNotSentError
 from moomoo_mcp.services.trade_service import TradeService
-from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
+from moomoo_mcp.services.trading_policy import (
+    InstrumentFacts,
+    TradingMode,
+    TradingPolicy,
+)
 from tests.rate_limit_clock import FakeClock
 
 
@@ -126,10 +130,26 @@ def rig(tmp_path):
     path = tmp_path / "real" / "execution.db"
     store = ExecutionStore(path, create=True, environment="REAL")
     broker = Broker(path)
+    classifications = {
+        "US.AAPL": "STOCK",
+        "HK.00700": "STOCK",
+        "US.AAPL260116C150000": "DRVT",
+        "US.AAPL260116C155000": "DRVT",
+    }
     service = TradeService(
         policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123})),
         real_execution_store=store,
         dispatcher=BrokerRequestDispatcher(clock=broker.clock),
+        instrument_lookup=lambda codes: [
+            InstrumentFacts(
+                code=code,
+                classification=classifications[code],
+                monetary_multiplier=100 if classifications[code] == "DRVT" else 1,
+                last_price=150,
+                lot_size=1,
+            )
+            for code in codes
+        ],
     )
     service.trade_ctx = cast(OpenSecTradeContext, broker)
     assert service.real is not None
@@ -256,6 +276,76 @@ def test_existing_real_markets_and_order_types_remain_journaled(
     result = place(service, code=code, order_type=order_type, price=price, **extra)
     assert result["state"] == "ACKNOWLEDGED"
     assert len(broker.calls) == 1 and store.lookup("operation")["marker"] == 1
+
+
+def test_explicit_real_session_reaches_sdk_and_conflicts_on_changed_retry(rig):
+    service, broker, store = rig
+    first = place(service, session="ETH")
+    assert first["state"] == "ACKNOWLEDGED"
+    assert broker.calls[0][1]["session"] == "ETH"
+    assert json.loads(store.lookup("operation")["merged_request"])["session"] == "ETH"
+    assert place(service, session="eth") == first
+    with pytest.raises(ExecutionConflict):
+        place(service, session="RTH")
+    assert len(broker.calls) == 1
+
+
+def test_real_default_session_is_omitted_from_old_canonical_and_evidence(rig):
+    service, broker, store = rig
+    first = place(service)
+    row = store.lookup("operation")
+    assert "session" not in json.loads(row["canonical"])["params"]
+    assert "session" not in json.loads(row["merged_request"])
+    assert broker.calls[0][1]["session"] == "N/A"
+    service.trade_ctx = None
+    assert place(service, session="NONE") == first
+    assert len(broker.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"price": 150.001},
+        {"session": "ETH", "order_type": "MARKET", "price": 0},
+        {"session": "RTH", "code": "HK.00700"},
+    ],
+)
+def test_real_instrument_and_session_refusals_are_never_dispatched(rig, patch):
+    service, broker, store = rig
+    with pytest.raises(OrderNotSentError):
+        place(service, **patch)
+    assert broker.calls == []
+    assert store.lookup("operation")["marker"] == 0
+
+
+def test_real_missing_classification_refuses_without_a_notional_cap(rig):
+    service, broker, store = rig
+    service.instrument_lookup = lambda codes: [InstrumentFacts(code=codes[0])]
+    with pytest.raises(OrderNotSentError) as error:
+        place(service)
+    assert "classification" in str(error.value)
+    assert broker.calls == []
+    assert store.lookup("operation")["marker"] == 0
+
+
+def test_exposing_modification_never_truncates_fractional_broker_quantity(rig):
+    service, broker, store = rig
+    result = place(service)
+    identity = result["order_id"]
+    broker.orders[identity]["qty"] = 2.5
+    with pytest.raises(OrderNotSentError) as error:
+        service.modify_order(
+            identity,
+            "NORMAL",
+            price=151,
+            trd_env="REAL",
+            acc_id="123",
+            operation_id="modify-fractional",
+            admission_epoch=store.epoch,
+        )
+    assert "whole" in str(error.value)
+    assert len(broker.calls) == 1
+    assert store.lookup("modify-fractional")["marker"] == 0
 
 
 def test_combo_identity_and_nested_leg_conflict(rig):

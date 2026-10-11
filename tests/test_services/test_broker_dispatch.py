@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import inspect
 from pathlib import Path
 from threading import Event
 from unittest.mock import Mock
@@ -16,6 +17,7 @@ from moomoo_mcp.services.broker_dispatch import (
     QuotaRequest,
 )
 from moomoo_mcp.services.rate_limit import ProviderRateLimitError
+from moomoo_mcp.services.trade_queries import SDK_QUERY_OPERATIONS, TradeQueryService
 from tests.rate_limit_clock import FakeClock
 
 
@@ -227,6 +229,7 @@ def test_runtime_sdk_calls_have_registered_dispatch_gates():
             if not isinstance(parent, ast.Call) or node.attr in {
                 "close",
                 "set_sync_query_connect_timeout",
+                "set_handler",  # Local callback registration, not a broker request.
             }:
                 continue
             assert node.attr in registered, (path, node.lineno, node.attr)
@@ -242,6 +245,26 @@ def test_runtime_sdk_calls_have_registered_dispatch_gates():
                 isinstance(parent.args[0], ast.Constant)
                 and parent.args[0].value == node.attr
             )
+    # The extracted query service dispatches its closed operation inventory
+    # dynamically. Verify that the same operation identifies both the quota
+    # gate and SDK method, rather than exempting all getattr-based dispatch.
+    query_tree = ast.parse(inspect.getsource(TradeQueryService))
+    gated = [
+        node
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "call"
+    ]
+    assert len(gated) == 1
+    gate = gated[0]
+    assert isinstance(gate.args[0], ast.Name) and gate.args[0].id == "operation"
+    sdk = gate.args[1]
+    assert isinstance(sdk, ast.Call)
+    assert isinstance(sdk.func, ast.Name) and sdk.func.id == "getattr"
+    assert isinstance(sdk.args[1], ast.Name) and sdk.args[1].id == "operation"
+    assert registered.issuperset(SDK_QUERY_OPERATIONS)
+    observed.update(SDK_QUERY_OPERATIONS)
     assert observed == registered
 
 

@@ -8,17 +8,22 @@ from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import ExitStack, contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import wraps
 from numbers import Integral
 from typing import Any
 
 from moomoo import (
+    RET_ERROR,
     RET_OK,
     ComboLeg,
     OpenSecTradeContext,
     OrderStatus,
+    OrderType,
     SecurityFirm,
+    Session,
+    TimeInForce,
     TrdMarket,
 )
 
@@ -37,6 +42,12 @@ from moomoo_mcp.services.health import (
     failure,
     run_detached,
 )
+from moomoo_mcp.services.instrument_rules import (
+    normalize_order_session,
+    validate_instrument_order,
+    validate_order_session,
+    whole_quantity,
+)
 from moomoo_mcp.services.instruments import InstrumentLookup
 from moomoo_mcp.services.order_errors import (
     OrderNotSentError,
@@ -48,8 +59,29 @@ from moomoo_mcp.services.order_errors import (
     receipt_unreadable_message,
 )
 from moomoo_mcp.services.paper_execution import PaperExecution
+from moomoo_mcp.services.query_contracts import (
+    OrderFeeResult,
+    OrderQueryResult,
+    QueryPage,
+)
 from moomoo_mcp.services.real_execution import RealExecution
 from moomoo_mcp.services.sdk_response import as_frame
+from moomoo_mcp.services.trade_events import (
+    DealEventHandler,
+    OrderEventHandler,
+    TradeEventBuffer,
+)
+from moomoo_mcp.services.trade_preparation import (
+    assess_control_facts,
+    check_dispatch_controls,
+    confirm_dispatch_controls,
+    mutation_context,
+    prepare_request,
+    single_preview,
+)
+from moomoo_mcp.services.trade_queries import TradeQueryService
+from moomoo_mcp.services.trading_capabilities import inspect_trading_capabilities
+from moomoo_mcp.services.trading_controls import TradingControls
 from moomoo_mcp.services.trading_market import (
     DEFAULT_TRADING_MARKET,
     TRADING_MARKET_FILTERS,
@@ -215,9 +247,12 @@ def journal_real_mutation(method: Callable[..., dict]) -> Callable[..., dict]:
         bound.apply_defaults()
         params = dict(bound.arguments)
         params.pop("self")
+        params = deepcopy(params)
+        approval_id = params.pop("approval_id", None)
         environment = str(params["trd_env"]).strip().upper()
         if environment != "REAL":
-            return method(self, *args, **kwargs)
+            with mutation_context(self, method.__name__, params, approval_id):
+                return method(self, **params)
         with not_sent(method.__name__):
             self.policy.check_write(method.__name__, environment)
             if self.real is None:
@@ -225,9 +260,10 @@ def journal_real_mutation(method: Callable[..., dict]) -> Callable[..., dict]:
                     "Persistent REAL journal is not configured; no unjournaled "
                     "REAL writes are permitted"
                 )
-        return self.real.execute(
-            method.__name__, params, lambda request: method(self, **request)
-        )
+        with mutation_context(self, method.__name__, params, approval_id):
+            return self.real.execute(
+                method.__name__, params, lambda request: method(self, **request)
+            )
 
     return execute
 
@@ -249,6 +285,7 @@ class TradeService:
         real_execution_store: ExecutionStore | None = None,
         simulated_account_allowlist: frozenset[int] = frozenset(),
         dispatcher: BrokerRequestDispatcher | None = None,
+        trading_controls: TradingControls | None = None,
     ):
         """Initialize TradeService.
 
@@ -267,10 +304,9 @@ class TradeService:
                 configuration is validated once at startup and a test states
                 what it is testing instead of patching os.environ.
             trade_password_md5: Stored hashed trade credential, or None.
-            instrument_lookup: Resolves order codes to the facts the notional
-                assessment needs. Called only when a notional cap is configured,
-                so an unconfigured deployment pays no quote latency and takes on
-                no quote dependency.
+            instrument_lookup: Resolves exact classification, lot information,
+                and fresh valuation facts. Single-leg placement and exposing
+                modifications require metadata even without monetary caps.
         """
         self.host = host
         self.port = port
@@ -286,10 +322,19 @@ class TradeService:
             )
         self.trading_market = candidate_market
         self.policy = policy or TradingPolicy()
+        self.trading_controls = trading_controls
+        self._control_local = threading.local()
+        if (
+            (self.policy.require_approval or self.policy.max_daily_notional)
+            and self.policy.mode is not TradingMode.READ_ONLY
+            and trading_controls is None
+        ):
+            raise ValueError("Configured trading controls require durable storage")
         self.trade_password = trade_password
         self.trade_password_md5 = trade_password_md5
         self.instrument_lookup = instrument_lookup
         self.trade_ctx: OpenSecTradeContext | None = None
+        self.queries = TradeQueryService(self)
         self._trade_probe = BoundedProbe("trade")
         self._journal_probe = BoundedProbe("journal")
         self._real_journal_probe = BoundedProbe("real-journal")
@@ -298,6 +343,7 @@ class TradeService:
         self._connect_future: Future | None = None
         self._closed = False
         self._execution = _ExecutionState()
+        self.events = TradeEventBuffer()
         self.paper = (
             PaperExecution(self, execution_store, simulated_account_allowlist)
             if execution_store is not None
@@ -313,8 +359,89 @@ class TradeService:
     def prepare_admission(self, method: str, params: dict[str, Any]) -> AdmissionPlan:
         return prepare_trade_call(self, method, params)
 
+    def _assess_order(self, operation: str, facts: OrderFacts) -> None:
+        assess_control_facts(self, operation, facts)
+
+    def _check_dispatch_controls(self, account: int, environment: str) -> None:
+        check_dispatch_controls(self, account, environment)
+
+    def _confirm_dispatch_controls(self) -> None:
+        confirm_dispatch_controls(self)
+
+    def prepare_trade_request(
+        self, method: str, parameters: dict, ttl_seconds: int = 300
+    ) -> dict:
+        """Persist exact review intent; trusted approval is a separate HTTP action."""
+        return prepare_request(self, method, parameters, ttl_seconds=ttl_seconds)
+
+    def get_prepared_trade(self, request_id: str) -> dict:
+        if self.trading_controls is None:
+            raise ValueError("Durable trading controls are not configured")
+        return self.trading_controls.get(request_id)
+
+    def preview_order(
+        self,
+        code: str,
+        price: float | str,
+        qty: int,
+        trd_side: str,
+        trd_env: str,
+        order_type: str = "NORMAL",
+        time_in_force: str = "DAY",
+        adjust_limit: float = 0,
+        aux_price: float | None = None,
+        trail_type: str | None = None,
+        trail_value: float | None = None,
+        trail_spread: float | None = None,
+        acc_id: int | str = "0",
+        session: str = Session.NONE,
+    ) -> dict:
+        """Observe validated intent and broker capacity without admitting a write."""
+        return single_preview(
+            self,
+            {
+                "code": code,
+                "price": price,
+                "qty": qty,
+                "trd_side": trd_side,
+                "trd_env": trd_env,
+                "order_type": order_type,
+                "time_in_force": time_in_force,
+                "adjust_limit": adjust_limit,
+                "aux_price": aux_price,
+                "trail_type": trail_type,
+                "trail_value": trail_value,
+                "trail_spread": trail_spread,
+                "acc_id": acc_id,
+                "session": session,
+            },
+        )
+
     def recover_admission(self, method: str, params: dict[str, Any]) -> dict | None:
         return recover_paper_admission(self, method, params)
+
+    def get_trading_capabilities(
+        self, code: str, trd_env: str, acc_id: int | str = "0"
+    ) -> dict[str, Any]:
+        return inspect_trading_capabilities(self, code, trd_env, acc_id)
+
+    def get_trade_events(
+        self,
+        trd_env: str,
+        acc_id: int | str = "0",
+        *,
+        after_sequence: int = 0,
+        event_epoch: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        environment, account = self.resolve_read_account(trd_env, acc_id)
+        return self.events.read(
+            environment,
+            account,
+            after_sequence=after_sequence,
+            event_epoch=event_epoch,
+            limit=limit,
+        )
 
     @property
     def has_trade_credential(self) -> bool:
@@ -550,6 +677,14 @@ class TradeService:
 
         trade_ctx = OpenSecTradeContext(**kwargs)
         trade_ctx.set_sync_query_connect_timeout(SYNC_CONNECT_TIMEOUT_SECONDS)
+        try:
+            handlers = (OrderEventHandler(self.events), DealEventHandler(self.events))
+            for handler in handlers:
+                if trade_ctx.set_handler(handler) == RET_ERROR:
+                    raise RuntimeError("Could not register trade callback handler")
+        except BaseException:
+            trade_ctx.close()
+            raise
         self._watch_reconnects(trade_ctx)
 
         with self._connect_lock:
@@ -585,6 +720,7 @@ class TradeService:
         reconnected = trade_ctx.on_api_socket_reconnected
 
         def on_api_socket_reconnected():
+            self.events.mark_reconnect()
             result = reconnected()
             self._enforce_gateway_lock(trade_ctx, "reconnecting")
             return result
@@ -659,6 +795,7 @@ class TradeService:
 
         with self._connect_lock:
             self._closed = False
+            self.events.resume()
             future = self._connect_future
             if future is None or future.done():
                 future = run_detached(self._open_trade_context, "trade-connect")
@@ -693,6 +830,7 @@ class TradeService:
         The worker is a daemon thread, so the interpreter can exit while the
         constructor is still retrying.
         """
+        self.events.close()
         if self.paper is not None:
             self.paper.recovery.stop()
         if self.real is not None:
@@ -716,6 +854,8 @@ class TradeService:
             self.paper.store.close()
         if self.real is not None:
             self.real.store.close()
+        if self.trading_controls is not None:
+            self.trading_controls.close()
 
     def probe_trade(self) -> dict[str, Any]:
         """Actively check trade connectivity with a read-only account listing.
@@ -1051,6 +1191,7 @@ class TradeService:
         adjust_limit: float = 0,
         trd_env: str = "SIMULATE",
         acc_id: int | str = "0",
+        session: str = Session.NONE,
     ) -> dict:
         """Get maximum tradable quantity for a stock.
 
@@ -1067,6 +1208,7 @@ class TradeService:
             Dictionary with max quantities for buy/sell.
         """
         trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
+        selected_session = normalize_order_session(session, trd_env="REAL")
 
         if not self.trade_ctx:
             raise RuntimeError("Trade context not connected")
@@ -1083,6 +1225,7 @@ class TradeService:
             adjust_limit=adjust_limit,  # pyright: ignore[reportArgumentType]
             trd_env=trd_env,
             acc_id=acc_id,
+            session=selected_session,
         )
         if ret != RET_OK:
             raise RuntimeError(f"acctradinginfo_query failed: {data}")
@@ -1382,6 +1525,8 @@ class TradeService:
             admission.enter_context(
                 self._admit_write(operation, sdk_operation, account_id, uses_jit)
             )
+            with not_sent(operation):
+                check_dispatch_controls(self, account_id, str(trd_env).strip().upper())
             if uses_jit:
                 try:
                     assert self.trade_ctx is not None
@@ -1484,16 +1629,16 @@ class TradeService:
     def _instrument_facts(
         self, operation: str, codes: Sequence[str]
     ) -> list[InstrumentFacts]:
-        """Look up the facts the notional assessment needs.
+        """Look up the classification, rules and valuation facts an order needs.
 
         Raises:
-            ValueError: If no lookup is wired, which with a cap configured means
-                the order cannot be valued and must be refused.
+            ValueError: If no lookup is wired, so the instrument cannot be
+                verified and the order must be refused.
         """
         if self.instrument_lookup is None:
             raise ValueError(
-                f"{operation} cannot be valued against the configured notional "
-                "cap: this service has no instrument lookup wired, so the "
+                f"{operation} cannot verify its instrument rules or valuation: "
+                "this service has no instrument lookup wired, so the "
                 "instrument's price and classification are unavailable."
             )
         return list(self.instrument_lookup(codes))
@@ -1508,14 +1653,24 @@ class TradeService:
         qty: int,
         price: float | None,
         aux_price: float | None,
+        session: str = Session.NONE,
     ) -> OrderFacts:
         """Build the assessment input for a single-leg order."""
-        legs: list[LegFacts] = []
-        if self.policy.notional_cap_configured:
-            facts = self._instrument_facts(operation, [code])
-            legs = [LegFacts(instrument=facts[0])]
-        else:
-            legs = [LegFacts(instrument=InstrumentFacts(code=code))]
+        facts = self._instrument_facts(operation, [code])
+        if len(facts) != 1 or facts[0].code != code:
+            raise ValueError(
+                f"{operation}: exact instrument classification is unavailable"
+            )
+        validate_instrument_order(
+            operation,
+            instrument=facts[0],
+            qty=qty,
+            order_type=order_type,
+            price=price,
+            aux_price=aux_price,
+        )
+        validate_order_session(code, facts[0].classification, order_type, session)
+        legs = [LegFacts(instrument=facts[0])]
         return OrderFacts(
             order_type=order_type,
             trd_side=trd_side,
@@ -1592,6 +1747,8 @@ class TradeService:
         remark: str = "",
         operation_id: str | None = None,
         admission_epoch: str | None = None,
+        approval_id: str | None = None,  # noqa: ARG002 - journal wrapper
+        session: str = Session.NONE,
     ) -> dict:
         """Place a new trading order.
 
@@ -1619,6 +1776,9 @@ class TradeService:
             acc_id: Account ID, or '0' to resolve one when exactly one is
                 eligible.
             remark: Order remark/note.
+            session: US equity session (N/A, RTH, ETH, OVERNIGHT or ALL).
+                N/A preserves the SDK default. Non-RTH explicit sessions are
+                limited to NORMAL US stock/ETF orders. Paper accepts RTH only.
 
         Returns:
             The gateway's receipt, plus the resolved ``acc_id`` and ``trd_env``.
@@ -1631,6 +1791,8 @@ class TradeService:
                 and its receipt could not be read.
         """
         if str(trd_env).strip().upper() == "SIMULATE":
+            with not_sent("place_order"):
+                normalize_order_session(session, trd_env=trd_env)
             return self._paper_execute(
                 "PLACE",
                 {
@@ -1672,6 +1834,10 @@ class TradeService:
                 trail_type=trail_type,
                 trail_value=trail_value,
             )
+            selected_session = normalize_order_session(session, trd_env=trd_env)
+            time_in_force = validate_choice(
+                "time_in_force", time_in_force, ("DAY", "GTC")
+            )
 
             if not self.trade_ctx:
                 raise RuntimeError("Trade context not connected")
@@ -1683,7 +1849,7 @@ class TradeService:
             resolved_acc_id = self._resolve_account(
                 trd_env, self._get_market_from_code(code), acc_id
             )
-            self.policy.assess_order(
+            self._assess_order(
                 operation,
                 self._single_leg_facts(
                     operation,
@@ -1693,6 +1859,7 @@ class TradeService:
                     qty=qty,
                     price=price,
                     aux_price=aux_price,
+                    session=selected_session,
                 ),
             )
 
@@ -1721,6 +1888,7 @@ class TradeService:
                 trd_env=trd_env,
                 acc_id=resolved_acc_id,
                 remark=remark,
+                session=selected_session,
             ),
             lambda data: self._first_record(operation, data),
             adds_exposure=True,
@@ -1741,6 +1909,11 @@ class TradeService:
                 "trd_env": trd_env,
                 "acc_id": resolved_acc_id,
                 "remark": remark,
+                **(
+                    {"session": selected_session}
+                    if selected_session != Session.NONE
+                    else {}
+                ),
             },
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
@@ -1898,7 +2071,7 @@ class TradeService:
         """Build the assessment input for a combo package."""
         codes = [str(leg.code) for leg in legs]
         leg_facts: list[LegFacts] = []
-        if self.policy.notional_cap_configured:
+        if self.policy.notional_cap_configured or self.policy.max_daily_notional:
             facts = {
                 instrument.code: instrument
                 for instrument in self._instrument_facts(operation, codes)
@@ -1945,6 +2118,7 @@ class TradeService:
         remark: str = "",
         operation_id: str | None = None,
         admission_epoch: str | None = None,
+        approval_id: str | None = None,  # noqa: ARG002 - journal wrapper
     ) -> dict:
         """Place a multi-leg option strategy as a single atomic order.
 
@@ -1993,6 +2167,10 @@ class TradeService:
             validate_order_values(
                 operation, order_type=order_type, qty=qty, combo_price=price
             )
+            if order_type not in {OrderType.NORMAL, OrderType.MARKET}:
+                raise ValueError("Combo submissions support NORMAL and MARKET only")
+            if time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}:
+                raise ValueError("Combo submissions support DAY and GTC only")
 
             if not self.trade_ctx:
                 raise RuntimeError("Trade context not connected")
@@ -2003,7 +2181,7 @@ class TradeService:
             resolved_acc_id = self._resolve_account(
                 trd_env, self._get_market_from_code(legs[0].code), acc_id
             )
-            self.policy.assess_order(
+            self._assess_order(
                 operation, self._combo_facts(operation, legs, price, qty, order_type)
             )
 
@@ -2210,6 +2388,7 @@ class TradeService:
         acc_id: int | str = "0",
         operation_id: str | None = None,
         admission_epoch: str | None = None,
+        approval_id: str | None = None,  # noqa: ARG002 - journal wrapper
     ) -> dict:
         """Modify an existing order.
 
@@ -2296,6 +2475,7 @@ class TradeService:
                     operation, order_id, trd_env, resolved_acc_id
                 )
                 merged_qty = qty if qty is not None else existing.get("qty")
+                validated_qty = whole_quantity(operation, merged_qty)
                 merged_price = price if price is not None else existing.get("price")
                 dispatch_qty, dispatch_price = merged_qty, merged_price
                 existing_type = str(existing.get("order_type") or "NORMAL")
@@ -2303,7 +2483,7 @@ class TradeService:
                 validate_order_values(
                     operation,
                     order_type=existing_type,
-                    qty=int(merged_qty) if merged_qty is not None else None,
+                    qty=validated_qty,
                     price=merged_price,
                     # Normalized first: an order with no trigger price reports
                     # the SDK's 'N/A' sentinel, which means absent rather than
@@ -2311,14 +2491,14 @@ class TradeService:
                     # of a plain limit order.
                     aux_price=existing_aux,
                 )
-                self.policy.assess_order(
+                self._assess_order(
                     operation,
                     self._single_leg_facts(
                         operation,
                         code=str(existing.get("code")),
                         order_type=existing_type,
                         trd_side=str(existing.get("trd_side") or ""),
-                        qty=int(merged_qty) if merged_qty is not None else 0,
+                        qty=validated_qty,
                         price=(
                             float(merged_price) if merged_price is not None else None
                         ),
@@ -2386,6 +2566,7 @@ class TradeService:
         acc_id: int | str = "0",
         operation_id: str | None = None,
         admission_epoch: str | None = None,
+        approval_id: str | None = None,  # noqa: ARG002 - journal wrapper
     ) -> dict:
         """Cancel an existing order.
 
@@ -2466,51 +2647,10 @@ class TradeService:
         acc_id: int | str = "0",
         refresh_cache: bool = False,
     ) -> list[dict]:
-        """Get list of today's orders.
-
-        Args:
-            code: Filter by stock code.
-            status_filter_list: Filter by order statuses (as strings).
-                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING,
-                SUBMIT_FAILED, SUBMITTED, FILLED_PART, FILLED_ALL,
-                CANCELLING_PART, CANCELLING_ALL, CANCELLED_PART,
-                CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
-            trd_env: Trading environment.
-            acc_id: Account ID.
-            refresh_cache: Whether to refresh cache.
-
-        Returns:
-            List of order dictionaries. Returns empty list if no orders found.
-        """
-        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
-
-        if not self.trade_ctx:
-            raise RuntimeError("Trade context not connected")
-
-        # Convert string status values to OrderStatus enum values
-        converted_status_filter = self._convert_status_filter(status_filter_list)
-
-        ret, data = self.dispatcher.call(
-            "order_list_query",
-            self.trade_ctx.order_list_query,
-            code=code,
-            status_filter_list=converted_status_filter,
-            trd_env=trd_env,
-            acc_id=acc_id,
-            refresh_cache=refresh_cache,
+        """Compatibility list of provider current orders, including open orders."""
+        return self.queries.get_orders(
+            code, status_filter_list, trd_env, acc_id, refresh_cache
         )
-        if ret != RET_OK:
-            raise RuntimeError(f"order_list_query failed: {data}")
-
-        # Handle None or empty DataFrame gracefully
-        if data is None:
-            return []
-
-        frame = as_frame("order_list_query", data)
-        if frame.empty:
-            return []
-
-        return _plain_combo_legs(frame.to_dict("records"))
 
     def get_deals(
         self,
@@ -2519,34 +2659,8 @@ class TradeService:
         acc_id: int | str = "0",
         refresh_cache: bool = False,
     ) -> list[dict]:
-        """Get list of today's deals (executed trades).
-
-        Args:
-            code: Filter by stock code.
-            trd_env: Trading environment.
-            acc_id: Account ID.
-            refresh_cache: Whether to refresh cache.
-
-        Returns:
-            List of deal dictionaries.
-        """
-        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
-
-        if not self.trade_ctx:
-            raise RuntimeError("Trade context not connected")
-
-        ret, data = self.dispatcher.call(
-            "deal_list_query",
-            self.trade_ctx.deal_list_query,
-            code=code,
-            trd_env=trd_env,
-            acc_id=acc_id,
-            refresh_cache=refresh_cache,
-        )
-        if ret != RET_OK:
-            raise RuntimeError(f"deal_list_query failed: {data}")
-
-        return as_frame("deal_list_query", data).to_dict("records")
+        """Compatibility list of today's REAL executed deals."""
+        return self.queries.get_deals(code, trd_env, acc_id, refresh_cache)
 
     def get_history_orders(
         self,
@@ -2557,54 +2671,10 @@ class TradeService:
         trd_env: str = "SIMULATE",
         acc_id: int | str = "0",
     ) -> list[dict]:
-        """Get historical orders.
-
-        Args:
-            code: Filter by stock code.
-            status_filter_list: Filter by order statuses (as strings).
-                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING,
-                SUBMIT_FAILED, SUBMITTED, FILLED_PART, FILLED_ALL,
-                CANCELLING_PART, CANCELLING_ALL, CANCELLED_PART,
-                CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
-            start: Start date (YYYY-MM-DD).
-            end: End date (YYYY-MM-DD).
-            trd_env: Trading environment.
-            acc_id: Account ID.
-
-        Returns:
-            List of historical order dictionaries.
-            Returns empty list if no orders found.
-        """
-        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
-
-        if not self.trade_ctx:
-            raise RuntimeError("Trade context not connected")
-
-        # Convert string status values to OrderStatus enum values
-        converted_status_filter = self._convert_status_filter(status_filter_list)
-
-        ret, data = self.dispatcher.call(
-            "history_order_list_query",
-            self.trade_ctx.history_order_list_query,
-            code=code,
-            status_filter_list=converted_status_filter,
-            start=start,
-            end=end,
-            trd_env=trd_env,
-            acc_id=acc_id,
+        """Compatibility historical order rows; preserve recovery callers."""
+        return self.queries.get_history_orders(
+            code, status_filter_list, start, end, trd_env, acc_id
         )
-        if ret != RET_OK:
-            raise RuntimeError(f"history_order_list_query failed: {data}")
-
-        # Handle None or empty DataFrame gracefully
-        if data is None:
-            return []
-
-        frame = as_frame("history_order_list_query", data)
-        if frame.empty:
-            return []
-
-        return _plain_combo_legs(frame.to_dict("records"))
 
     def get_history_deals(
         self,
@@ -2614,33 +2684,137 @@ class TradeService:
         trd_env: str = "SIMULATE",
         acc_id: int | str = "0",
     ) -> list[dict]:
-        """Get historical deals (executed trades).
+        """Compatibility list of historical REAL executed deals."""
+        return self.queries.get_history_deals(code, start, end, trd_env, acc_id)
 
-        Args:
-            code: Filter by stock code.
-            start: Start date (YYYY-MM-DD).
-            end: End date (YYYY-MM-DD).
-            trd_env: Trading environment.
-            acc_id: Account ID.
-
-        Returns:
-            List of historical deal dictionaries.
-        """
-        trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
-
-        if not self.trade_ctx:
-            raise RuntimeError("Trade context not connected")
-
-        ret, data = self.dispatcher.call(
-            "history_deal_list_query",
-            self.trade_ctx.history_deal_list_query,
+    def get_order(
+        self,
+        order_id: str,
+        *,
+        source: str = "CURRENT",
+        code: str = "",
+        start: str = "",
+        end: str = "",
+        trd_env: str = "REAL",
+        acc_id: int | str = "0",
+        refresh_cache: bool = False,
+    ) -> OrderQueryResult:
+        """Exact order lookup, with explicit bounded scope for historical reads."""
+        return self.queries.get_order(
+            order_id,
+            source=source,
             code=code,
             start=start,
             end=end,
             trd_env=trd_env,
             acc_id=acc_id,
+            refresh_cache=refresh_cache,
         )
-        if ret != RET_OK:
-            raise RuntimeError(f"history_deal_list_query failed: {data}")
 
-        return as_frame("history_deal_list_query", data).to_dict("records")
+    def get_order_fees(
+        self,
+        order_id_list: list[str],
+        *,
+        trd_env: str = "REAL",
+        acc_id: int | str = "0",
+    ) -> list[OrderFeeResult]:
+        """Actual fees for at most 400 exact IDs in supported REAL accounts."""
+        return self.queries.get_order_fees(
+            order_id_list, trd_env=trd_env, acc_id=acc_id
+        )
+
+    def get_orders_page(
+        self,
+        code: str = "",
+        status_filter_list: list[str] | None = None,
+        trd_env: str = "REAL",
+        acc_id: int | str = "0",
+        refresh_cache: bool = False,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> QueryPage:
+        """A bounded immutable snapshot of current order rows."""
+        return self.queries.page(
+            "get_orders_page",
+            {
+                "code": code,
+                "status_filter_list": status_filter_list,
+                "trd_env": trd_env,
+                "acc_id": acc_id,
+                "refresh_cache": refresh_cache,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
+    def get_deals_page(
+        self,
+        code: str = "",
+        trd_env: str = "REAL",
+        acc_id: int | str = "0",
+        refresh_cache: bool = False,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> QueryPage:
+        """A bounded immutable snapshot of today's REAL deal rows."""
+        return self.queries.page(
+            "get_deals_page",
+            {
+                "code": code,
+                "trd_env": trd_env,
+                "acc_id": acc_id,
+                "refresh_cache": refresh_cache,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
+    def get_history_orders_page(
+        self,
+        code: str = "",
+        status_filter_list: list[str] | None = None,
+        start: str = "",
+        end: str = "",
+        trd_env: str = "REAL",
+        acc_id: int | str = "0",
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> QueryPage:
+        """A bounded immutable snapshot of historical order rows."""
+        return self.queries.page(
+            "get_history_orders_page",
+            {
+                "code": code,
+                "status_filter_list": status_filter_list,
+                "start": start,
+                "end": end,
+                "trd_env": trd_env,
+                "acc_id": acc_id,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
+
+    def get_history_deals_page(
+        self,
+        code: str = "",
+        start: str = "",
+        end: str = "",
+        trd_env: str = "REAL",
+        acc_id: int | str = "0",
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> QueryPage:
+        """A bounded immutable snapshot of historical REAL deal rows."""
+        return self.queries.page(
+            "get_history_deals_page",
+            {
+                "code": code,
+                "start": start,
+                "end": end,
+                "trd_env": trd_env,
+                "acc_id": acc_id,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )

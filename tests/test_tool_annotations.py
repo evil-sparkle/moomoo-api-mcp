@@ -29,6 +29,16 @@ READ_ONLY = {
     "get_user_security",
     "get_user_security_group",
     "preview_combo_order",
+    "preview_order",
+    "get_trading_capabilities",
+    "get_trade_events",
+    "get_prepared_trade",
+    "get_order",
+    "get_order_fees",
+    "get_orders_page",
+    "get_deals_page",
+    "get_history_orders_page",
+    "get_history_deals_page",
 }
 MUTATING = {
     "get_order_book",  # auto-subscribes before reading
@@ -36,6 +46,7 @@ MUTATING = {
     "lock_trade",
     "reconcile_execution",
     "unsubscribe_market_data",
+    "prepare_trade_request",
 }
 CONSEQUENTIAL = {
     "cancel_order",

@@ -85,10 +85,16 @@ class Broker:
 
 
 class Service:
+    _assess_order = TradeService._assess_order
+    _check_dispatch_controls = TradeService._check_dispatch_controls
+    _confirm_dispatch_controls = TradeService._confirm_dispatch_controls
+
     def __init__(self, broker):
         self.trade_ctx = broker
         self.dispatcher = BrokerRequestDispatcher(clock=lambda: self.trade_ctx.clock())
         self.policy = TradingPolicy(TradingMode.SIMULATE)
+        self._control_local = threading.local()
+        self.trading_controls = None
         self.accounts = [
             {"acc_id": 123, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]}
         ]
@@ -611,7 +617,8 @@ def test_unallowlisted_explicit_account_refused_before_discovery(rig):
 
 def test_decimal_precision_survives_storage_and_detects_last_digit_conflict(rig):
     paper, _, broker, store = rig
-    price = "1.100000000000000000000000000000000000001"
+    # Legal cent price with long caller precision stays exact in the journal.
+    price = "1.100000000000000000000000000000000000000"
     first = place(paper, price=price)
     row = store.lookup("place")
     assert json.loads(row["request"])["price"] == price
@@ -620,6 +627,35 @@ def test_decimal_precision_survives_storage_and_detects_last_digit_conflict(rig)
     assert place(paper, price=price + "0") == first
     with pytest.raises(ExecutionConflict):
         place(paper, price=price[:-1] + "2")
+
+
+def test_explicit_paper_rth_preserves_default_retry_identity(rig):
+    paper, service, broker, store = rig
+    first = place(paper)
+    account_reads = service.account_reads
+    assert place(paper, session="RTH") == first
+    assert "session" not in json.loads(store.lookup("place")["canonical"])["params"]
+    assert service.account_reads == account_reads
+    assert len(broker.calls) == 1
+
+
+@pytest.mark.parametrize("session", ["ETH", "OVERNIGHT", "ALL"])
+def test_paper_wider_sessions_refuse_before_admission(rig, session):
+    paper, service, broker, store = rig
+    with pytest.raises(OrderNotSentError) as error:
+        place(paper, session=session)
+    assert "RTH" in str(error.value)
+    assert service.account_reads == 0
+    assert broker.calls == []
+    assert store.lookup("place") is None
+
+
+def test_paper_off_grid_price_is_stored_as_unsent_refusal(rig):
+    paper, _, broker, store = rig
+    with pytest.raises(OrderNotSentError):
+        place(paper, price="1.001")
+    assert store.lookup("place")["marker"] == 0
+    assert broker.calls == []
 
 
 def test_contradictory_exact_identity_observations_remain_unresolved(rig, monkeypatch):

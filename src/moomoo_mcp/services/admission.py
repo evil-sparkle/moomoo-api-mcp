@@ -10,7 +10,15 @@ from typing import TYPE_CHECKING, Any
 
 from moomoo_mcp.services.broker_dispatch import QuotaRequest
 from moomoo_mcp.services.execution_identity import validate_token
+from moomoo_mcp.services.instrument_rules import normalize_order_session
 from moomoo_mcp.services.order_errors import not_sent
+from moomoo_mcp.services.query_snapshots import QuerySnapshots
+from moomoo_mcp.services.trade_queries import (
+    PAGE_OPERATIONS,
+    require_real,
+    validate_fee_request,
+    validate_lookup,
+)
 from moomoo_mcp.services.validation import (
     validate_choice,
     validate_date_range,
@@ -99,6 +107,8 @@ def prepare_market_call(
 
 def _paper_parameters(method: str, params: dict[str, Any]) -> tuple[str, dict]:
     if method == "place_order":
+        # Default and explicit RTH both retain the pre-session paper identity.
+        normalize_order_session(params.get("session", "N/A"), trd_env="SIMULATE")
         fields = (
             "code",
             "price",
@@ -137,6 +147,72 @@ def _paper_parameters(method: str, params: dict[str, Any]) -> tuple[str, dict]:
 def prepare_trade_call(
     service: "TradeService", method: str, params: dict[str, Any]
 ) -> AdmissionPlan:
+    if method in {"preview_order", "prepare_trade_request"}:
+        from moomoo_mcp.services.trade_preparation import (
+            bound_parameters,
+            validate_preparation,
+        )
+
+        prepared_method = (
+            params["method"] if method == "prepare_trade_request" else "place_order"
+        )
+        request_params = (
+            bound_parameters(service, prepared_method, params["parameters"])
+            if method == "prepare_trade_request"
+            else params
+        )
+        environment = request_params["trd_env"]
+        if method == "prepare_trade_request":
+            validate_preparation(service, prepared_method, request_params)
+            params["parameters"] = request_params
+        _, account = service.resolve_read_account(environment, request_params["acc_id"])
+        requests = []
+        if prepared_method == "place_order":
+            requests.extend(
+                [
+                    QuotaRequest("get_market_snapshot"),
+                    QuotaRequest("acctradinginfo_query", account),
+                ]
+            )
+        elif prepared_method == "place_combo_order":
+            if (
+                service.policy.notional_cap_configured
+                or service.policy.max_daily_notional
+            ):
+                requests.append(QuotaRequest("get_market_snapshot"))
+            requests.append(QuotaRequest("comboorder_tradinginfo_query", account))
+        else:
+            requests.append(QuotaRequest("order_list_query", account))
+            if prepared_method == "modify_order" and request_params[
+                "modify_order_op"
+            ] in {"NORMAL", "ENABLE"}:
+                requests.append(QuotaRequest("get_market_snapshot"))
+        return AdmissionPlan(requests)
+    if method in PAGE_OPERATIONS:
+        QuerySnapshots.validate_limit(params["limit"])
+        if "deals" in method:
+            require_real(params["trd_env"])
+        # Snapshot continuations resolve no account and perform no SDK call.
+        if params.get("cursor") is not None:
+            return AdmissionPlan()
+        _, account = service.resolve_read_account(params["trd_env"], params["acc_id"])
+        if "status_filter_list" in params:
+            service._convert_status_filter(params["status_filter_list"])
+        request = service.dispatcher.request(
+            PAGE_OPERATIONS[method],
+            acc_id=account,
+            refresh_cache=params.get("refresh_cache", False),
+        )
+        # Preserve the original account selector for immutable cursor binding.
+        return AdmissionPlan([request] if request is not None else [])
+    if method in {"get_deals", "get_history_deals"}:
+        require_real(params["trd_env"])
+    if method == "get_order":
+        params["source"] = validate_lookup(
+            params["source"], params["order_id"], params["start"], params["end"]
+        )
+    if method == "get_order_fees":
+        validate_fee_request(params["order_id_list"], params["trd_env"])
     reads = {
         "get_assets": "accinfo_query",
         "get_positions": "position_list_query",
@@ -144,6 +220,12 @@ def prepare_trade_call(
         "get_deals": "deal_list_query",
         "get_history_orders": "history_order_list_query",
         "get_history_deals": "history_deal_list_query",
+        "get_order": (
+            "history_order_list_query"
+            if params.get("source") == "HISTORY"
+            else "order_list_query"
+        ),
+        "get_order_fees": "order_fee_query",
         "get_max_tradable": "acctradinginfo_query",
         "get_cash_flow": "get_acc_cash_flow",
         "get_margin_ratio": "get_margin_ratio",
@@ -255,7 +337,11 @@ def prepare_trade_call(
                 account = service._resolve_account(
                     environment, market, params["acc_id"]
                 )
-                if exposing and service.policy.notional_cap_configured:
+                if exposing and (
+                    method in {"place_order", "modify_order"}
+                    or service.policy.notional_cap_configured
+                    or bool(service.policy.max_daily_notional)
+                ):
                     plan.requests.append(QuotaRequest("get_market_snapshot"))
                 if method == "modify_order" and exposing:
                     plan.requests.append(QuotaRequest("order_list_query", account))
@@ -283,6 +369,9 @@ def prepare_trade_call(
                     params["trd_env"], params["acc_id"]
                 )
                 params["trd_env"], params["acc_id"] = environment, account
+            if method == "get_order_fees":
+                assert account is not None
+                service.queries.check_fee_account(account)
             request = service.dispatcher.request(operation, **params)
             if request is not None:
                 plan.requests.append(request)

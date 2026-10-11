@@ -1,4 +1,4 @@
-"""The instrument facts the notional assessment needs, gathered from the gateway.
+"""Instrument validation and valuation facts gathered from the gateway.
 
 :meth:`TradingPolicy.assess_order` is pure arithmetic over numbers. This is what
 turns a gateway into those numbers, and it is deliberately the only place that
@@ -26,7 +26,12 @@ module can produce an unknown outcome.
 from __future__ import annotations
 
 import math
+import threading
+import time
+import weakref
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from moomoo import RET_OK, OpenQuoteContext
@@ -54,6 +59,13 @@ InstrumentLookup = Callable[[Sequence[str]], list[InstrumentFacts]]
 
 class InstrumentLookupError(RuntimeError):
     """A valuation fact could not be established for one of the order's codes."""
+
+
+@dataclass(frozen=True)
+class _StaticFacts:
+    classification: str
+    lot_size: float | None
+    expires_at: float
 
 
 def normalize_quote(value: Any) -> float | None:
@@ -109,6 +121,9 @@ class InstrumentAdapter:
         quote_ctx_provider: Callable[[], OpenQuoteContext | None],
         *,
         dispatcher: BrokerRequestDispatcher | None = None,
+        metadata_ttl: float = 300.0,
+        metadata_capacity: int = 2048,
+        clock: Callable[[], float] = time.monotonic,
     ):
         """
         Args:
@@ -117,9 +132,32 @@ class InstrumentAdapter:
                 itself because the connection is opened lazily and replaced on
                 reconnect; holding the object would pin the one that existed at
                 wiring time.
+            metadata_ttl: Maximum age of static classification/lot metadata in
+                seconds. Zero disables reuse. Price and multiplier snapshots
+                are requested anew on every lookup regardless of this value.
+            metadata_capacity: Maximum number of cached static instruments.
+            clock: Monotonic clock used only for metadata expiry.
         """
         self._quote_ctx_provider = quote_ctx_provider
         self.dispatcher = dispatcher or BrokerRequestDispatcher()
+        if (
+            isinstance(metadata_ttl, bool)
+            or not math.isfinite(metadata_ttl)
+            or metadata_ttl < 0
+        ):
+            raise ValueError("metadata_ttl must be a finite non-negative number")
+        if (
+            isinstance(metadata_capacity, bool)
+            or not isinstance(metadata_capacity, int)
+            or metadata_capacity < 1
+        ):
+            raise ValueError("metadata_capacity must be positive")
+        self._metadata_ttl = metadata_ttl
+        self._metadata_capacity = metadata_capacity
+        self._clock = clock
+        self._metadata_lock = threading.Lock()
+        self._metadata_context: weakref.ReferenceType[OpenQuoteContext] | None = None
+        self._metadata: OrderedDict[str, _StaticFacts] = OrderedDict()
 
     def __call__(self, codes: Sequence[str]) -> list[InstrumentFacts]:
         """Gather the valuation facts for ``codes``, in the order given.
@@ -140,7 +178,7 @@ class InstrumentAdapter:
             )
 
         snapshots = self._snapshots(quote_ctx, wanted)
-        classifications = self._classifications(quote_ctx, wanted)
+        static = self._static_facts(quote_ctx, wanted)
 
         facts: list[InstrumentFacts] = []
         for code in wanted:
@@ -150,13 +188,13 @@ class InstrumentAdapter:
                     f"get_market_snapshot did not return {code}, so its price "
                     "is unknown"
                 )
-            classification = classifications.get(code)
-            if classification is None:
+            metadata = static.get(code)
+            if metadata is None:
                 raise InstrumentLookupError(
                     f"get_stock_basicinfo did not return {code}, so its security "
                     "classification is unknown and it cannot be valued"
                 )
-            facts.append(self._facts(code, classification, snapshot))
+            facts.append(self._facts(code, metadata, snapshot))
         return facts
 
     def _snapshots(
@@ -168,9 +206,52 @@ class InstrumentAdapter:
         rows = _rows("get_market_snapshot", ret, data)
         return {str(row.get("code")): row for row in rows}
 
+    def _static_facts(
+        self, quote_ctx: OpenQuoteContext, codes: list[str]
+    ) -> dict[str, _StaticFacts]:
+        """Cache only basic classification/lot metadata, never market quotes.
+
+        The weak reference neither pins a retired context nor mistakes a reused
+        object ID for the old connection. A static miss is serialized so several
+        simultaneous orders cannot fan out identical reference-data requests.
+        Missing rows and failures are never cached as successful metadata.
+        """
+        with self._metadata_lock:
+            previous = self._metadata_context() if self._metadata_context else None
+            cacheable = True
+            if previous is not quote_ctx:
+                self._metadata.clear()
+                try:
+                    self._metadata_context = weakref.ref(quote_ctx)
+                except TypeError:
+                    self._metadata_context = None
+                    cacheable = False
+            now = self._clock()
+            expired = [
+                code for code, item in self._metadata.items() if item.expires_at <= now
+            ]
+            for code in expired:
+                del self._metadata[code]
+            found = {
+                code: self._metadata[code] for code in codes if code in self._metadata
+            }
+            for code in found:
+                self._metadata.move_to_end(code)
+            missing = [code for code in codes if code not in found]
+            if missing:
+                fresh = self._classifications(quote_ctx, missing)
+                found.update(fresh)
+                if cacheable and self._metadata_ttl > 0:
+                    for code, item in fresh.items():
+                        self._metadata[code] = item
+                        self._metadata.move_to_end(code)
+                    while len(self._metadata) > self._metadata_capacity:
+                        self._metadata.popitem(last=False)
+            return found
+
     def _classifications(
         self, quote_ctx: OpenQuoteContext, codes: list[str]
-    ) -> dict[str, str]:
+    ) -> dict[str, _StaticFacts]:
         """Ask for the classification of exactly these codes, in one call.
 
         One call per market, not one per candidate type. With a non-empty
@@ -198,7 +279,7 @@ class InstrumentAdapter:
                 )
             by_market.setdefault(market.strip().upper(), []).append(code)
 
-        found: dict[str, str] = {}
+        found: dict[str, _StaticFacts] = {}
         for market, group in by_market.items():
             # stock_type is ignored while code_list is non-empty, as above. It
             # is passed only because the parameter is positional-ish in the SDK
@@ -215,13 +296,18 @@ class InstrumentAdapter:
             for row in rows:
                 code = str(row.get("code"))
                 reported = row.get("stock_type")
-                if code in group and isinstance(reported, str) and reported:
-                    found[code] = reported.strip().upper()
+                if code in group and isinstance(reported, str) and reported.strip():
+                    found[code] = _StaticFacts(
+                        classification=reported.strip().upper(),
+                        lot_size=normalize_quote(row.get("lot_size")),
+                        expires_at=self._clock() + self._metadata_ttl,
+                    )
         return found
 
     def _facts(
-        self, code: str, classification: str, snapshot: dict[str, Any]
+        self, code: str, metadata: _StaticFacts, snapshot: dict[str, Any]
     ) -> InstrumentFacts:
+        classification = metadata.classification
         multiplier = self._monetary_multiplier(code, classification, snapshot)
         return InstrumentFacts(
             code=code,
@@ -235,6 +321,7 @@ class InstrumentAdapter:
             # table supplies it. Left as None so that a future SDK which does
             # report one takes precedence without any other change.
             currency=None,
+            lot_size=metadata.lot_size,
         )
 
     def _monetary_multiplier(
