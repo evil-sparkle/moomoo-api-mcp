@@ -24,6 +24,9 @@ from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.offload import run_blocking
 from tests.conftest import call_mcp_tool
+from tests.real_journal_helpers import (
+    real_journal_legacy_calls as real_journal_legacy_calls,
+)
 
 SERVICE_NAMES = {"trade_service", "market_data_service", "moomoo_service"}
 
@@ -34,6 +37,8 @@ NON_BLOCKING_METHODS = {
     "start_health_check",
     "start_journal_health",
     "collect_journal_health",
+    "start_real_journal_health",
+    "collect_real_journal_health",
 }
 
 # Governed async methods await admission and offload SDK execution themselves.

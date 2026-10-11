@@ -15,7 +15,7 @@ from moomoo_mcp.services.execution_identity import canonicalize_request
 from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.instruments import InstrumentAdapter
 from moomoo_mcp.services.market_data_service import MarketDataService
-from moomoo_mcp.services.order_errors import OrderNotSentError, OrderOutcomeUnknownError
+from moomoo_mcp.services.order_errors import OrderNotSentError
 from moomoo_mcp.services.paper_execution import PaperExecution
 from moomoo_mcp.services.rate_limit import ProviderRateLimitError
 from moomoo_mcp.services.trade_service import TradeService
@@ -23,6 +23,9 @@ from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.offload import run_blocking
 from tests.conftest import call_mcp_tool
 from tests.rate_limit_clock import FakeClock
+from tests.real_journal_helpers import (
+    real_journal_legacy_calls as real_journal_legacy_calls,
+)
 
 
 @pytest.fixture
@@ -88,6 +91,14 @@ async def wait_until(predicate):
             await asyncio.sleep(0)
 
     await asyncio.wait_for(wait(), 3)
+
+
+def real_tokens(trade, operation_id):
+    """Carry one caller identity across admission, execution and retry."""
+    return {
+        "operation_id": operation_id,
+        "admission_epoch": trade.real.store.epoch,
+    }
 
 
 async def test_default_and_explicit_accounts_share_fresh_order_admission(
@@ -251,7 +262,13 @@ async def test_all_live_mutations_admit_before_unlock_or_internal_reads(
     trade.trade_password = "test-only"
     held = trade.dispatcher.limiter(QuotaRequest(operation, 123)).reserve()
     task = asyncio.create_task(
-        run_blocking(getattr(trade, method), **params, trd_env="REAL", acc_id="123")
+        run_blocking(
+            getattr(trade, method),
+            **params,
+            trd_env="REAL",
+            acc_id="123",
+            **real_tokens(trade, "quota-" + method),
+        )
     )
     try:
         await clock.wait_for_sleepers()
@@ -350,6 +367,7 @@ async def test_live_write_exhausted_unlock_capacity_is_not_sent(
 ):
     trade = governed.trade_service
     trade.trade_password = "test-only"
+    tokens = real_tokens(trade, "unlock-capacity")
     ctx = trade.trade_ctx
     for _ in range(9):
         trade.dispatcher.call("unlock_trade", ctx.unlock_trade, is_unlock=False)
@@ -364,6 +382,7 @@ async def test_live_write_exhausted_unlock_capacity_is_not_sent(
                 "BUY",
                 trd_env="REAL",
                 acc_id="123",
+                **tokens,
             )
         )
         await clock.wait_for_sleepers()
@@ -373,7 +392,9 @@ async def test_live_write_exhausted_unlock_capacity_is_not_sent(
             await task
     else:
         with pytest.raises(OrderNotSentError, match="unlock_trade rate limit"):
-            trade.place_order("US.AAPL", 1.0, 1, "BUY", trd_env="REAL", acc_id="123")
+            trade.place_order(
+                "US.AAPL", 1.0, 1, "BUY", trd_env="REAL", acc_id="123", **tokens
+            )
     ctx.place_order.assert_not_called()
     ctx.unlock_trade.assert_not_called()
     # A failed bundle returns the unused placement permit.
@@ -384,16 +405,37 @@ async def test_provider_write_error_is_unknown_and_never_replayed(governed):
     trade = governed.trade_service
     trade.trade_password = "test-only"
     trade.trade_ctx.place_order.return_value = (RET_ERROR, "response lost")
-    with pytest.raises(OrderOutcomeUnknownError):
-        await run_blocking(
-            trade.place_order, "US.AAPL", 1.0, 1, "BUY", trd_env="REAL", acc_id="123"
-        )
+    tokens = real_tokens(trade, "lost-response")
+    result = await run_blocking(
+        trade.place_order,
+        "US.AAPL",
+        1.0,
+        1,
+        "BUY",
+        trd_env="REAL",
+        acc_id="123",
+        **tokens,
+    )
+    assert result["state"] == "UNKNOWN_OUTCOME"
+    assert "response lost" in result["error"]
     trade.trade_ctx.place_order.assert_called_once()
     assert [
         call.kwargs["is_unlock"] for call in trade.trade_ctx.unlock_trade.call_args_list
     ] == [True, False]
     with pytest.raises(ProviderRateLimitError):
         trade.dispatcher.limiter(QuotaRequest("place_order", 123)).reserve()
+    duplicate = await run_blocking(
+        trade.place_order,
+        "US.AAPL",
+        1.0,
+        1,
+        "BUY",
+        trd_env="REAL",
+        acc_id="123",
+        **tokens,
+    )
+    assert duplicate == result
+    trade.trade_ctx.place_order.assert_called_once()
 
 
 async def test_cancelled_live_worker_still_relocks(governed):
@@ -420,7 +462,14 @@ async def test_cancelled_live_worker_still_relocks(governed):
     trade.trade_ctx.unlock_trade.side_effect = lock
     task = asyncio.create_task(
         run_blocking(
-            trade.place_order, "US.AAPL", 1.0, 1, "BUY", trd_env="REAL", acc_id="123"
+            trade.place_order,
+            "US.AAPL",
+            1.0,
+            1,
+            "BUY",
+            trd_env="REAL",
+            acc_id="123",
+            **real_tokens(trade, "cancelled-worker"),
         )
     )
     try:

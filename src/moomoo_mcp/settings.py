@@ -19,6 +19,7 @@ import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from moomoo import SecurityFirm
 
@@ -87,6 +88,8 @@ class Settings:
     create_journal: bool = False
     journal_lock_wait_ms: int = 5000
     allow_chatgpt_tunnel_host: bool = False
+    real_journal_path: str | None = None
+    create_real_journal: bool = False
 
     @property
     def has_trade_credential(self) -> bool:
@@ -207,6 +210,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     journal_path = None
     create_journal = False
     lock_wait = 5000
+    real_journal_path = None
+    create_real_journal = False
     if policy.mode is not TradingMode.READ_ONLY:
         raw_ids = (env.get("MOOMOO_SIMULATED_ACC_IDS") or "").strip()
         if raw_ids:
@@ -256,6 +261,25 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
                     "MOOMOO_TRADING_MARKET must be US or NONE for paper execution"
                 )
 
+    if policy.mode is TradingMode.REAL:
+        real_journal_path = (env.get("MOOMOO_REAL_JOURNAL_PATH") or "").strip() or None
+        if not real_journal_path:
+            raise TradingModeConfigError(
+                "MOOMOO_REAL_JOURNAL_PATH is required for durable REAL execution"
+            )
+        creation = (env.get("MOOMOO_CREATE_REAL_JOURNAL") or "0").strip()
+        if creation not in {"0", "1"}:
+            raise TradingModeConfigError("MOOMOO_CREATE_REAL_JOURNAL must be 0 or 1")
+        create_real_journal = creation == "1"
+        if journal_path and (
+            Path(journal_path).resolve().parent
+            == Path(real_journal_path).resolve().parent
+        ):
+            raise TradingModeConfigError(
+                "MOOMOO_REAL_JOURNAL_PATH and MOOMOO_JOURNAL_PATH must use "
+                "distinct directories"
+            )
+
     return Settings(
         opend_host=(env.get(ENV_OPEND_HOST) or "").strip() or DEFAULT_HOST,
         opend_port=_load_port(env),
@@ -272,6 +296,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         create_journal=create_journal,
         journal_lock_wait_ms=lock_wait,
         allow_chatgpt_tunnel_host=load_chatgpt_tunnel_host(env),
+        real_journal_path=real_journal_path,
+        create_real_journal=create_real_journal,
     )
 
 

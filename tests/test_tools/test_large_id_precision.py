@@ -13,6 +13,9 @@ from moomoo_mcp.tools.serialization import (
     IdentifierSerializationError,
     serialize_identifiers,
 )
+from tests.real_journal_helpers import (
+    real_journal_legacy_calls as real_journal_legacy_calls,
+)
 
 # Above 2**53, so a double-precision client cannot represent it exactly.
 UNSAFE_ID = 9007199254740993

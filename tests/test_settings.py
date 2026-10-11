@@ -26,7 +26,11 @@ SIMULATE_ENV = {
     "MOOMOO_JOURNAL_PATH": "/unused/paper.sqlite3",
 }
 
-REAL_ENV = {"MOOMOO_TRADING_MODE": "REAL", "MOOMOO_REAL_ACC_IDS": "456"}
+REAL_ENV = {
+    "MOOMOO_TRADING_MODE": "REAL",
+    "MOOMOO_REAL_ACC_IDS": "456",
+    "MOOMOO_REAL_JOURNAL_PATH": "/unused/real/execution.db",
+}
 
 
 class TestDefaults:

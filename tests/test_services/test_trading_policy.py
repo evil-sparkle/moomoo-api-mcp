@@ -19,6 +19,9 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
     TradingPolicyError,
 )
+from tests.real_journal_helpers import (
+    real_journal_legacy_calls as real_journal_legacy_calls,
+)
 
 ALL_MODES = list(TradingMode)
 ENVIRONMENTS = ["REAL", "SIMULATE"]

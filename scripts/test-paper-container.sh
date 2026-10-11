@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# C01-C04: disposable containers/volumes, no gateway and no provider traffic.
+# Paper C01-C04 and REAL R01: disposable containers/volumes, no provider traffic.
 # Usage: scripts/test-paper-container.sh IMAGE [RECREATED_IMAGE]
 # Supply two independently built app images to exercise an image replacement.
 set -euo pipefail
@@ -16,7 +16,7 @@ cp tests/fixtures/paper_container_checks.py "$fixture_dir/checks.py"
 chmod 644 "$fixture_dir/checks.py"
 fixture="$fixture_dir/checks.py"
 cleanup() {
-  for action in seed recreated holder contender restore dirty read-only; do
+  for action in seed recreated real-seed real-recreated holder contender restore dirty read-only; do
     docker rm -f "$project-$action" >/dev/null 2>&1 || true
   done
   docker volume rm "$execution_volume" "$device_volume" >/dev/null 2>&1 || true
@@ -40,6 +40,14 @@ docker run --rm --name "$project-seed" --network none \
   --mount "type=bind,src=$fixture,dst=/tmp/paper_container_checks.py,readonly" \
   --entrypoint python "$image" /tmp/paper_container_checks.py seed
 run recreated
+# REAL uses a separate journal directory in the disposable execution volume.
+# The original image writes it, and the replacement image checks durable retry.
+docker run --rm --name "$project-real-seed" --network none \
+  --mount "type=volume,src=$execution_volume,dst=/var/lib/moomoo-mcp/data" \
+  --mount "type=volume,src=$device_volume,dst=/home/opend/.com.moomoo.OpenD" \
+  --mount "type=bind,src=$fixture,dst=/tmp/paper_container_checks.py,readonly" \
+  --entrypoint python "$image" /tmp/paper_container_checks.py real-seed
+run real-recreated
 docker run -d --name "$holder" --network none \
   --mount "type=volume,src=$execution_volume,dst=/var/lib/moomoo-mcp/data" \
   --mount "type=bind,src=$fixture,dst=/tmp/paper_container_checks.py,readonly" \
@@ -54,4 +62,4 @@ run dirty
 docker run --rm --name "$project-read-only" --network none \
   --mount "type=bind,src=$fixture,dst=/tmp/paper_container_checks.py,readonly" \
   --entrypoint python "$recreated_image" /tmp/paper_container_checks.py read-only
-printf '%s\n' 'C01-C04 passed (isolated container checks; live provider validation is separate).'
+printf '%s\n' 'C01-C04 and R01 passed (isolated containers; live provider validation is separate).'

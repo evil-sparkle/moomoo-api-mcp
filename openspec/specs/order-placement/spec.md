@@ -37,6 +37,10 @@ A placement that is journaled paper execution SHALL additionally:
 - be restricted to the version 1 paper scope in `trading-policy` › Version 1 Paper
   Execution Scope. Order types outside that scope are refused rather than dispatched.
 
+Every REAL placement SHALL additionally carry caller-owned `operation_id` and
+server-issued `admission_epoch` under the `real-execution` contract, using its
+separate journal and preserving supported REAL numeric parameters and order types.
+
 The result of a journaled placement SHALL report the operation's local state
 alongside the broker receipt, and SHALL keep the two distinguishable.
 
@@ -44,7 +48,8 @@ alongside the broker receipt, and SHALL keep the two distinguishable.
 
 - **GIVEN** the user wants to buy 100 shares of HK.00700 at 350.0
 - **WHEN** they call `place_order(code='HK.00700', trd_side='BUY', qty=100,
-  price=350.0, order_type='NORMAL', trd_env='REAL', acc_id='<allowed account>')`
+  price=350.0, order_type='NORMAL', trd_env='REAL', acc_id='<allowed account>',
+  operation_id='<caller ID>', admission_epoch='<REAL epoch>')`
 - **THEN** the order SHALL be submitted to Moomoo
 - **AND** the tool SHALL return the order ID, the `acc_id` and the `trd_env`
 
@@ -53,7 +58,8 @@ alongside the broker receipt, and SHALL keep the two distinguishable.
 - **GIVEN** the user wants to buy 100 shares of US.AAPL at market price outside
   journaled paper execution
 - **WHEN** they call `place_order(code='US.AAPL', trd_side='BUY', qty=100,
-  price=0.0, order_type='MARKET', trd_env='REAL', acc_id='<allowed account>')`
+  price=0.0, order_type='MARKET', trd_env='REAL', acc_id='<allowed account>',
+  operation_id='<caller ID>', admission_epoch='<REAL epoch>')`
 - **THEN** the order SHALL be submitted
 - **AND** the tool SHALL return the order ID
 
@@ -148,7 +154,9 @@ An explicit `acc_id` SHALL be used as given, subject to the REAL account allowli
 
 Order-mutating operations include placements, combo placements, modifications and
 cancellations. Each reports exactly one of three outcomes. The server SHALL claim
-that a request was sent only when the gateway acknowledged it.
+that a request was sent only when the gateway acknowledged it. Journaled mutations
+SHALL expose this classification and any error in a durable structured execution
+result; pre-dispatch refusals SHALL remain explicit not-sent errors.
 
 #### Scenario: Mutation dispatch evidence contract
 
@@ -159,7 +167,7 @@ that a request was sent only when the gateway acknowledged it.
   request. This is an acknowledgement from the gateway. It does not mean the order
   was filled.
   - When the response can be read, the operation SHALL return it as the receipt.
-  - When it cannot be read, the operation SHALL fail with an error stating three
+  - When it cannot be read, the operation SHALL report acknowledged failure with an error stating three
     things: the gateway acknowledged the request, the receipt, including any order
     identifier, could not be read, and the request SHALL NOT be resent. The error
     SHALL tell the caller to find the order with `get_orders`.
@@ -173,7 +181,8 @@ that a request was sent only when the gateway acknowledged it.
   reliably distinguish a broker rejection from a timeout or a transport failure. The
   error SHALL state that the request may have been sent and that its outcome is
   unknown, and SHALL include the gateway's message. It SHALL tell the caller to check
-  `get_orders` before any retry. It SHALL NOT state that the request reached the
+  `get_orders` or reconciliation before a new trading decision; identical token
+  retries SHALL only return stored state. It SHALL NOT state that the request reached the
   gateway or the broker.
 - **Not sent.** The operation was refused before the order-mutating gateway call
   started. Causes include policy, validation, limits, account resolution, the
@@ -191,19 +200,19 @@ The system SHALL NOT retry an order-mutating request itself.
 
 - **WHEN** the gateway returns an error code for a placement request
 - **THEN** the error SHALL state that the request may have been sent and its outcome
-  is unknown, and that `get_orders` must be checked before retrying
+  is unknown, and that broker evidence must be checked before a new decision
 - **AND** the server SHALL NOT resend the request
 
 #### Scenario: SDK exception during dispatch
 
 - **WHEN** the SDK raises while the placement call is in progress
-- **THEN** the call SHALL fail as outcome unknown, not as a rejection
+- **THEN** the result SHALL report outcome unknown, not a broker rejection
 
 #### Scenario: Unreadable acknowledged response
 
 - **WHEN** the gateway returns a success code for a placement, but the response
   cannot be converted
-- **THEN** the call SHALL fail with an error stating that the gateway acknowledged
+- **THEN** the result SHALL include an error stating that the gateway acknowledged
   the request and that its receipt could not be read
 - **AND** the error SHALL NOT describe the outcome as unknown or rejected
 
@@ -211,8 +220,9 @@ The system SHALL NOT retry an order-mutating request itself.
 
 Journaled paper placements SHALL use the persisted order tag as the broker remark
 and return server-owned recovery context. Caller remarks SHALL remain in the
-immutable journal request. REAL order remarks and dispatch classification SHALL
-retain their existing behavior.
+immutable journal request. REAL placements SHALL also use durable correlation
+tags under the REAL execution contract, preserving their dispatch classification
+inside durable execution results.
 
 #### Scenario: Paper remark is reserved for correlation
 - **WHEN** a paper placement with a caller remark is dispatched

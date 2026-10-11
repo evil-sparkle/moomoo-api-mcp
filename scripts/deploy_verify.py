@@ -172,6 +172,30 @@ def paper_overlay() -> str:
     return "docker-compose.paper.yml" if mode.strip().upper() == "SIMULATE" else ""
 
 
+def execution_overlays() -> list[str]:
+    """Select environment-owned storage without changing gateway persistence."""
+    services = resolve_services(BASE_COMPOSE_CONFIG)
+    environment = services[SERVICE].get("environment", {})
+    if not isinstance(environment, dict):
+        raise ConfigError(f"{SERVICE} has invalid environment settings.")
+    mode = environment.get("MOOMOO_TRADING_MODE") or "READ_ONLY"
+    if not isinstance(mode, str):
+        raise ConfigError(f"{SERVICE} has an invalid trading mode.")
+    mode = mode.strip().upper()
+    if mode == "SIMULATE":
+        return ["docker-compose.paper.yml"]
+    if mode == "REAL":
+        paper_accounts = environment.get("MOOMOO_SIMULATED_ACC_IDS") or ""
+        if not isinstance(paper_accounts, str):
+            raise ConfigError("MOOMOO_SIMULATED_ACC_IDS has an invalid value.")
+        return (["docker-compose.paper.yml"] if paper_accounts.strip() else []) + [
+            "docker-compose.real.yml"
+        ]
+    if mode == "READ_ONLY":
+        return []
+    raise ConfigError(f"{SERVICE} has an invalid trading mode.")
+
+
 def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
     """Return the token Compose resolves for the service; "" means no auth.
 
@@ -595,6 +619,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.add_parser(
         "paper-overlay", help="print only the paper overlay needed without a tunnel"
     )
+    commands.add_parser(
+        "execution-overlays", help="print the storage overlays needed without a tunnel"
+    )
     verify_parser = commands.add_parser(
         "verify", help="send an authenticated MCP initialize and validate the result"
     )
@@ -622,6 +649,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "paper-overlay":
             print(paper_overlay())
+            return 0
+        if args.command == "execution-overlays":
+            for overlay in execution_overlays():
+                print(overlay)
             return 0
         token = resolve_token()
         if args.command == "check-config":

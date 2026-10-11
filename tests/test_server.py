@@ -18,7 +18,11 @@ from moomoo_mcp.services.trading_policy import (
 REAL_POLICY = TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123}))
 # REAL mode requires its account allowlist, so every REAL environment here
 # carries one.
-REAL_ENV = {ENV_VAR: "REAL", "MOOMOO_REAL_ACC_IDS": "123"}
+REAL_ENV = {
+    ENV_VAR: "REAL",
+    "MOOMOO_REAL_ACC_IDS": "123",
+    "MOOMOO_REAL_JOURNAL_PATH": "/unused/real/execution.db",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -273,15 +277,22 @@ class TestStartupTradingMode:
 
     @pytest.mark.asyncio
     async def test_real_mode_with_a_password_does_not_unlock_at_startup(
-        self,
+        self, tmp_path
     ) -> None:
         """The credential is handed to the service for just-in-time use."""
         captured, trade_service = await self._start(
-            {**REAL_ENV, "MOOMOO_TRADE_PASSWORD": "hunter2"}
+            {
+                **REAL_ENV,
+                "MOOMOO_TRADE_PASSWORD": "hunter2",
+                "MOOMOO_REAL_JOURNAL_PATH": str(tmp_path / "real" / "execution.db"),
+                "MOOMOO_CREATE_REAL_JOURNAL": "1",
+            }
         )
 
         trade_service.unlock_trade.assert_not_called()
         assert captured["trade_password"] == "hunter2"
+        assert captured["real_execution_store"].environment == "REAL"
+        captured["real_execution_store"].close()
 
     @pytest.mark.asyncio
     async def test_real_mode_without_an_allowlist_fails_startup(self) -> None:

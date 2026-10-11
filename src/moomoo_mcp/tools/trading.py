@@ -45,6 +45,10 @@ async def place_order(
     Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
     regular hours. Journal or recovery blocking also refuses cancellations.
     REAL-mode servers use the same configured paper journal for SIMULATE writes.
+    REAL mutations require the same caller-owned tokens using the epoch from
+    check_health.real_execution_journal, with numeric prices and a separate REAL
+    journal. Preserve both tokens and the exact request on every retry. Recovery
+    only queries broker evidence; it never resubmits or assumes a REAL order absent.
 
     CRITICAL: You MUST ask the user for explicit confirmation before calling this
     tool, especially if `trd_env` is 'REAL'. Display the full order details to the
@@ -169,9 +173,17 @@ async def place_combo_order(
     time_in_force: str = "DAY",
     acc_id: str = "0",
     remark: str = "",
+    operation_id: str | None = None,
+    admission_epoch: str | None = None,
 ) -> dict:
     """Place a multi-leg option strategy (vertical spread, straddle, etc.) as a
     single atomic order.
+
+    REAL placements require a caller-owned operation_id and admission_epoch from
+    check_health.real_execution_journal. Preserve both tokens and the exact request
+    across retries. Identical retries return stored state or IN_FLIGHT, without
+    another broker mutation. Recovery never resubmits or assumes a REAL order absent.
+    Paper combo execution remains unsupported.
 
     CRITICAL: You MUST ask the user for explicit confirmation before calling this
     tool, especially if `trd_env` is 'REAL'. Display EVERY leg (code, side, ratio)
@@ -275,6 +287,8 @@ async def place_combo_order(
             trd_env=trd_env,
             acc_id=acc_id,
             remark=remark,
+            operation_id=operation_id,
+            admission_epoch=admission_epoch,
         )
     )
 
@@ -379,6 +393,10 @@ async def modify_order(
     Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
     regular hours. Journal or recovery blocking also refuses cancellations.
     REAL-mode servers use the same configured paper journal for SIMULATE writes.
+    REAL mutations require the same caller-owned tokens using the epoch from
+    check_health.real_execution_journal, with numeric prices and a separate REAL
+    journal. Preserve both tokens and the exact request on every retry. Recovery
+    only queries broker evidence; it never resubmits or assumes a REAL order absent.
 
     CRITICAL: You MUST ask the user for explicit confirmation before calling this
     tool, especially if `trd_env` is 'REAL'. Display the order_id and the new
@@ -477,6 +495,10 @@ async def cancel_order(
     Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
     regular hours. Journal or recovery blocking also refuses cancellations.
     REAL-mode servers use the same configured paper journal for SIMULATE writes.
+    REAL mutations require the same caller-owned tokens using the epoch from
+    check_health.real_execution_journal, with numeric prices and a separate REAL
+    journal. Preserve both tokens and the exact request on every retry. Recovery
+    only queries broker evidence; it never resubmits or assumes a REAL order absent.
 
     CRITICAL: You MUST ask the user for explicit confirmation before calling this
     tool, especially if `trd_env` is 'REAL'. Display the order_id to the user
@@ -780,32 +802,48 @@ async def get_history_deals(
     )
 
 
+def _execution_for_environment(ctx: Context[ServerSession, AppContext], trd_env: str):
+    environment = trd_env.strip().upper()
+    if environment not in {"SIMULATE", "REAL"}:
+        raise ValueError("trd_env must be SIMULATE or REAL")
+    service = ctx.request_context.lifespan_context.trade_service
+    execution = service.paper if environment == "SIMULATE" else service.real
+    if execution is None:
+        raise ValueError(f"{environment} journal is not configured")
+    return execution
+
+
 @mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_execution(
-    ctx: Context[ServerSession, AppContext], operation_id: str
+    ctx: Context[ServerSession, AppContext],
+    operation_id: str,
+    trd_env: str = "SIMULATE",
 ) -> dict:
-    """Read durable paper status, order tag, recovery decision and check times."""
-    paper = ctx.request_context.lifespan_context.trade_service.paper
-    if paper is None:
-        raise ValueError("Paper journal is not configured")
-    row = await run_blocking(paper.store.lookup, operation_id)
+    """Read durable status, correlation and recovery evidence in the selected journal.
+
+    Select REAL explicitly for live operations; SIMULATE remains the default.
+    Operation IDs are owned independently by each environment's journal.
+    """
+    execution = _execution_for_environment(ctx, trd_env)
+    row = await run_blocking(execution.store.lookup, operation_id)
     if row is None:
         raise ValueError("Operation is not owned by this journal")
-    return await run_blocking(paper.result, row)
+    return await run_blocking(execution.result, row)
 
 
 @mcp.tool(annotations=MUTATING_TOOL)
 async def reconcile_execution(
-    ctx: Context[ServerSession, AppContext], operation_id: str
+    ctx: Context[ServerSession, AppContext],
+    operation_id: str,
+    trd_env: str = "SIMULATE",
 ) -> dict:
-    """Query paper orders/history for one journal operation; never mutate orders.
+    """Query broker evidence for a journal operation; never mutate broker orders.
 
-    Recovery runs automatically inside the server. This tool advances a due check
-    using the same policy. Exact broker ID/tag and consistent order/position evidence
-    release the gate; only tagged placements may be assumed absent after five clean
-    negative rounds. Errors do not count and the original operation never replays.
+    Recovery runs automatically. Select REAL explicitly for live operations.
+    Exact broker identity and consistent evidence may account for the operation.
+    REAL never assumes absence or releases its gate after unsuccessful searches;
+    it never resubmits. Paper retains its tagged-placement absence policy after
+    five clean negative rounds. Errors never count as clean observations.
     """
-    paper = ctx.request_context.lifespan_context.trade_service.paper
-    if paper is None:
-        raise ValueError("Paper journal is not configured")
-    return await run_blocking(paper.reconcile, operation_id)
+    execution = _execution_for_environment(ctx, trd_env)
+    return await run_blocking(execution.reconcile, operation_id)
