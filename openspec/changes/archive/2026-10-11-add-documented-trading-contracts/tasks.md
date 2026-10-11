@@ -41,6 +41,7 @@
 
 - Full local mocked suite: 2,110 passed, 1 skipped, 106 subtests passed.
 - Focused cross-feature suite: 223 passed.
+- Rebuilt application image passed isolated C01-C04 paper and R01 REAL persistence probes, including acknowledged and unknown-outcome retries with no gateway calls.
 - Ruff lint and formatting pass; basedpyright reports zero errors.
 - All 32 main specifications pass strict OpenSpec validation.
 - Staged diff secret scan reports no leaks; final diff check passes.

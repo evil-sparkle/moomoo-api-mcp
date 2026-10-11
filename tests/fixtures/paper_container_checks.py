@@ -86,11 +86,28 @@ def real_service(store: ExecutionStore):
     import pandas as pd
 
     from moomoo_mcp.services.trade_service import TradeService
-    from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
+    from moomoo_mcp.services.trading_policy import (
+        InstrumentFacts,
+        TradingMode,
+        TradingPolicy,
+    )
+
+    def instrument_lookup(codes):
+        if list(codes) != ["US.FIXTURE"]:
+            raise ValueError("Container broker double only supports US.FIXTURE")
+        return [
+            InstrumentFacts(
+                code="US.FIXTURE",
+                classification="STOCK",
+                lot_size=1,
+                last_price=12.5,
+            )
+        ]
 
     service = TradeService(
         policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123})),
         trade_password="fixture-only",
+        instrument_lookup=instrument_lookup,
         real_execution_store=store,
     )
     context = MagicMock()
@@ -133,7 +150,7 @@ def real_place(service, operation_id: str, epoch: str):
 
 
 def real_seed() -> None:
-    from moomoo_mcp.services.real_execution import canonical_real_request
+    from moomoo_mcp.services.real_execution import ROUTING, canonical_real_request
 
     assert os.getuid() == 10001
     store = ExecutionStore(REAL_DB, create=True, environment="REAL")
@@ -163,7 +180,7 @@ def real_seed() -> None:
         request = {
             name: value
             for name, value in arguments.arguments.items()
-            if name not in {"trd_env", "acc_id", "operation_id", "admission_epoch"}
+            if name not in ROUTING
         }
         row, admitted = store.admit(
             "real-crashed",
@@ -202,6 +219,8 @@ def real_recreated() -> None:
         duplicate = real_place(service, "real-before-recreate", epoch)
         assert duplicate["state"] == "ACKNOWLEDGED"
         assert duplicate["order_id"] == "1234001"
+        crashed_duplicate = real_place(service, "real-crashed", epoch)
+        assert crashed_duplicate["state"] == "UNKNOWN_OUTCOME"
         assert context.method_calls == []
         service.trade_ctx = context
 
