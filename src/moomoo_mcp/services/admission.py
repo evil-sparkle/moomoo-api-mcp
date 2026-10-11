@@ -34,6 +34,9 @@ def recover_paper_admission(
     service: "TradeService", method: str, params: dict[str, Any]
 ) -> dict | None:
     """Read a concurrent journal admission after a quota wait, without replay."""
+    environment = str(params.get("trd_env", "")).strip().upper()
+    if environment == "REAL" and service.real is not None:
+        return service.real.retry(method, params)
     paper = service.paper
     if paper is None or str(params.get("trd_env", "")).strip().upper() != "SIMULATE":
         return None
@@ -162,6 +165,18 @@ def prepare_trade_call(
                 raise ValueError("Stored trade credentials require managed unlocking")
             if not params["password"] and not params["password_md5"]:
                 raise ValueError("unlock_trade requires a password or password_md5")
+        if method in writes and str(params["trd_env"]).strip().upper() == "REAL":
+            real = service.real
+            if real is None:
+                raise ValueError("Persistent REAL journal is not configured")
+            if real.retry(method, params) is not None:
+                return plan
+            real._validate_values(method, params)
+            if params["admission_epoch"] != real.store.epoch:
+                raise ValueError(
+                    "Unknown non-current-epoch token cannot be accounted for"
+                )
+            real.ready()
         # A journal retry returns its stored outcome even while disconnected.
         if service.trade_ctx is None and (
             method not in writes or str(params["trd_env"]).strip().upper() != "SIMULATE"

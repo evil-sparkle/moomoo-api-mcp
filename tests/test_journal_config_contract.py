@@ -72,6 +72,7 @@ def test_both_writable_modes_keep_the_same_paper_path(mode):
         paper_settings(
             MOOMOO_TRADING_MODE=mode,
             MOOMOO_REAL_ACC_IDS="987654",
+            MOOMOO_REAL_JOURNAL_PATH="/nonexistent-real-test-only/execution.db",
         )
     )
     assert settings.journal_path == "/nonexistent-test-only/execution.db"

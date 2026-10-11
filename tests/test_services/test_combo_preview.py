@@ -13,6 +13,9 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
     TradingPolicyError,
 )
+from tests.real_journal_helpers import (
+    real_journal_legacy_calls as real_journal_legacy_calls,
+)
 
 STRATEGY_LEG_ID = 3333333333333333333
 OTHER_LEG_ID = 4444444444444444444

@@ -41,6 +41,9 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
         - execution_journal: Journal readiness, pending_operation_ids and durable
           recovery_updates, including actual check times and assumed-absence decisions.
           Background recovery reports its result on the next tool reply.
+        - real_execution_journal: Independent REAL readiness, admission epoch,
+          pending IDs and broker recovery evidence. REAL recovery never assumes
+          absence or automatically resubmits an operation.
         - gateway_version: OpenD version when the gateway reports one, else null.
     """
     lifespan_context = ctx.request_context.lifespan_context
@@ -54,9 +57,15 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
     # answer while a stuck gateway is still being diagnosed.
     check = moomoo_service.start_health_check(trade_service=trade_service)
     journal_future = trade_service.start_journal_health()
-    await await_futures((*check.futures, journal_future), check.remaining())
+    real_journal_future = trade_service.start_real_journal_health()
+    await await_futures(
+        (*check.futures, journal_future, real_journal_future), check.remaining()
+    )
     status = check.result()
     status["execution_journal"] = trade_service.collect_journal_health(journal_future)
+    status["real_execution_journal"] = trade_service.collect_real_journal_health(
+        real_journal_future
+    )
 
     await ctx.info(f"Health check status: {status.get('status')}")
 

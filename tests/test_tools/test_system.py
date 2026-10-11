@@ -18,6 +18,7 @@ HEALTHY = {
     "trade_market": "NONE",
     "gateway_version": "9.2.5208",
     "execution_journal": {"state": "DISABLED"},
+    "real_execution_journal": {"state": "DISABLED"},
 }
 
 
@@ -27,6 +28,10 @@ def journal_health_mock(mock_trade_service):
     future.set_result({"state": "DISABLED"})
     mock_trade_service.start_journal_health.return_value = future
     mock_trade_service.collect_journal_health.return_value = {"state": "DISABLED"}
+    real_future = Future()
+    real_future.set_result({"state": "DISABLED"})
+    mock_trade_service.start_real_journal_health.return_value = real_future
+    mock_trade_service.collect_real_journal_health.return_value = {"state": "DISABLED"}
 
 
 def stub_health(mock_moomoo_service: MagicMock, payload: dict) -> MagicMock:

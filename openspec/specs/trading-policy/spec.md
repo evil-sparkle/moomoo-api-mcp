@@ -26,13 +26,14 @@ database, and SHALL NOT fail for want of one.
 A `SIMULATE` mutation SHALL be admitted under an explicit `SIMULATE` or `REAL`
 policy, using the same dedicated persistent paper database across mode changes.
 `REAL` permits real execution in addition to paper execution; it does not change
-the environment or storage identity of a paper operation. REAL-order journaling
-is deferred to a later stage and SHALL NOT write into the paper database.
+the environment or storage identity of a paper operation. REAL mutations SHALL
+use their separate environment-bound journal and SHALL NOT write into the paper
+database.
 When journal storage is required but unavailable or blocked, the mutation SHALL be
 refused. The system SHALL NOT fall back to dispatching it unjournaled.
 
-Paper journal blocking SHALL be independent of Stage 1's REAL relock halt
-(`ARMED`/`HALTED`). Calling `lock_trade` SHALL NOT clear paper journal failures.
+Paper and REAL journal blocking SHALL be independent of the REAL relock halt
+(`ARMED`/`HALTED`). Calling `lock_trade` SHALL NOT clear either journal's failures.
 
 The trading mode SHALL be determined by configuration alone. No tool argument,
 including the environment and account arguments a caller must supply, SHALL elevate
@@ -71,8 +72,8 @@ the configured mode or enable `REAL` execution.
 #### Scenario: Explicit real deployment
 
 - **WHEN** REAL mode receives a valid SIMULATE or REAL write
-- **THEN** policy permits the requested environment, subject to gateway checks,
-  without silently changing the environment.
+- **THEN** policy permits the requested environment, subject to its own journal
+  admission and gateway checks, without silently changing the environment.
 
 #### Scenario: Password does not enable trading mode
 

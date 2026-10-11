@@ -1,5 +1,6 @@
 """Trade service for managing Moomoo trading context and account operations."""
 
+import inspect
 import logging
 import math
 import threading
@@ -8,6 +9,7 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from functools import wraps
 from numbers import Integral
 from typing import Any
 
@@ -27,6 +29,7 @@ from moomoo_mcp.services.admission import (
 )
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher, QuotaRequest
 from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.services.execution_identity import validate_token
 from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.health import (
     SYNC_CONNECT_TIMEOUT_SECONDS,
@@ -45,6 +48,7 @@ from moomoo_mcp.services.order_errors import (
     receipt_unreadable_message,
 )
 from moomoo_mcp.services.paper_execution import PaperExecution
+from moomoo_mcp.services.real_execution import RealExecution
 from moomoo_mcp.services.sdk_response import as_frame
 from moomoo_mcp.services.trading_market import (
     DEFAULT_TRADING_MARKET,
@@ -201,6 +205,33 @@ class _ExecutionState:
             }
 
 
+def journal_real_mutation(method: Callable[..., dict]) -> Callable[..., dict]:
+    """Bind complete public arguments before any REAL mutation can be admitted."""
+    signature = inspect.signature(method)
+
+    @wraps(method)
+    def execute(self: "TradeService", *args: Any, **kwargs: Any) -> dict:
+        bound = signature.bind(self, *args, **kwargs)
+        bound.apply_defaults()
+        params = dict(bound.arguments)
+        params.pop("self")
+        environment = str(params["trd_env"]).strip().upper()
+        if environment != "REAL":
+            return method(self, *args, **kwargs)
+        with not_sent(method.__name__):
+            self.policy.check_write(method.__name__, environment)
+            if self.real is None:
+                raise ValueError(
+                    "Persistent REAL journal is not configured; no unjournaled "
+                    "REAL writes are permitted"
+                )
+        return self.real.execute(
+            method.__name__, params, lambda request: method(self, **request)
+        )
+
+    return execute
+
+
 class TradeService:
     """Service to manage Moomoo Trade API connections and account operations."""
 
@@ -215,6 +246,7 @@ class TradeService:
         trade_password_md5: str | None = None,
         instrument_lookup: InstrumentLookup | None = None,
         execution_store: ExecutionStore | None = None,
+        real_execution_store: ExecutionStore | None = None,
         simulated_account_allowlist: frozenset[int] = frozenset(),
         dispatcher: BrokerRequestDispatcher | None = None,
     ):
@@ -260,6 +292,7 @@ class TradeService:
         self.trade_ctx: OpenSecTradeContext | None = None
         self._trade_probe = BoundedProbe("trade")
         self._journal_probe = BoundedProbe("journal")
+        self._real_journal_probe = BoundedProbe("real-journal")
         self._connect_lock = threading.Lock()
         self._jit_lock = threading.RLock()
         self._connect_future: Future | None = None
@@ -269,6 +302,11 @@ class TradeService:
             PaperExecution(self, execution_store, simulated_account_allowlist)
             if execution_store is not None
             and self.policy.mode is not TradingMode.READ_ONLY
+            else None
+        )
+        self.real = (
+            RealExecution(self, real_execution_store)
+            if real_execution_store is not None and self.policy.mode is TradingMode.REAL
             else None
         )
 
@@ -641,6 +679,10 @@ class TradeService:
         if self.paper is not None:
             self.paper.recovery.start()
 
+    def start_real_recovery(self) -> None:
+        if self.real is not None:
+            self.real.recovery.start()
+
     def close(self) -> None:
         """Close the trade context and abandon any connection still in flight.
 
@@ -653,8 +695,11 @@ class TradeService:
         """
         if self.paper is not None:
             self.paper.recovery.stop()
+        if self.real is not None:
+            self.real.recovery.stop()
         self._trade_probe.close()
         self._journal_probe.close()
+        self._real_journal_probe.close()
         with self._connect_lock:
             # Set before releasing the lock so a worker that is still retrying
             # closes whatever it eventually builds instead of publishing it.
@@ -669,6 +714,8 @@ class TradeService:
             # Recovery is stopped; the store guard protects only short SQL units.
             # Do not wait indefinitely for a worker stuck in provider I/O.
             self.paper.store.close()
+        if self.real is not None:
+            self.real.store.close()
 
     def probe_trade(self) -> dict[str, Any]:
         """Actively check trade connectivity with a read-only account listing.
@@ -1276,6 +1323,7 @@ class TradeService:
         adds_exposure: bool,
         sdk_operation: str,
         account_id: int,
+        journal_request: dict | None = None,
     ) -> tuple[dict, str | None]:
         """Run one order-mutating gateway call, and classify what came back.
 
@@ -1308,6 +1356,11 @@ class TradeService:
                 and its response could not be read.
         """
         uses_jit = self._uses_jit_unlock(trd_env)
+        if str(trd_env).strip().upper() == "REAL":
+            with not_sent(operation):
+                if self.real is None or journal_request is None:
+                    raise ValueError("Durable REAL execution required")
+                self.real.require_active()
 
         with self._jit_lock, ExitStack() as admission:
             if adds_exposure:
@@ -1346,6 +1399,14 @@ class TradeService:
             receipt: dict = {}
             failure: BaseException | None = None
             try:
+                if str(trd_env).strip().upper() == "REAL":
+                    if self.real is None or journal_request is None:
+                        raise OrderNotSentError(
+                            not_sent_message(
+                                operation, "Durable REAL execution required"
+                            )
+                        )
+                    self.real.before_dispatch(journal_request)
                 try:
                     ret, data = call()
                 except Exception as exc:
@@ -1365,6 +1426,9 @@ class TradeService:
                         outcome_unknown_message(operation, str(data))
                     )
 
+                if str(trd_env).strip().upper() == "REAL":
+                    assert self.real is not None
+                    self.real.observe_acknowledgement(data)
                 try:
                     receipt = convert(data)
                 except Exception as exc:
@@ -1496,6 +1560,19 @@ class TradeService:
     def journal_health(self) -> dict:
         return self.paper.health() if self.paper else {"state": "DISABLED"}
 
+    def start_real_journal_health(self) -> Future:
+        return self._real_journal_probe.submit(self.real_journal_health)
+
+    def collect_real_journal_health(self, future: Future) -> dict:
+        result = self._real_journal_probe.collect(future, 0)
+        if "state" not in result:
+            return {"state": "JOURNAL_BLOCKED", "storage_error": result}
+        return result
+
+    def real_journal_health(self) -> dict:
+        return self.real.health() if self.real else {"state": "DISABLED"}
+
+    @journal_real_mutation
     def place_order(
         self,
         code: str,
@@ -1649,6 +1726,22 @@ class TradeService:
             adds_exposure=True,
             sdk_operation="place_order",
             account_id=resolved_acc_id,
+            journal_request={
+                "code": code,
+                "price": price,
+                "qty": qty,
+                "trd_side": trd_side,
+                "order_type": order_type,
+                "time_in_force": time_in_force,
+                "adjust_limit": adjust_limit,
+                "aux_price": aux_price,
+                "trail_type": trail_type,
+                "trail_value": trail_value,
+                "trail_spread": trail_spread,
+                "trd_env": trd_env,
+                "acc_id": resolved_acc_id,
+                "remark": remark,
+            },
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
@@ -1838,6 +1931,7 @@ class TradeService:
             is_combo=True,
         )
 
+    @journal_real_mutation
     def place_combo_order(
         self,
         combo_legs: list[dict],
@@ -1849,6 +1943,8 @@ class TradeService:
         trd_env: str,
         acc_id: int | str = "0",
         remark: str = "",
+        operation_id: str | None = None,
+        admission_epoch: str | None = None,
     ) -> dict:
         """Place a multi-leg option strategy as a single atomic order.
 
@@ -1893,6 +1989,7 @@ class TradeService:
         operation = "place_combo_order"
         with not_sent(operation):
             self.policy.check_write(operation, trd_env)
+            validate_token(operation_id, admission_epoch)
             validate_order_values(
                 operation, order_type=order_type, qty=qty, combo_price=price
             )
@@ -1932,6 +2029,16 @@ class TradeService:
             adds_exposure=True,
             sdk_operation="place_combo_order",
             account_id=resolved_acc_id,
+            journal_request={
+                "combo_legs": combo_legs,
+                "price": price,
+                "qty": qty,
+                "order_type": order_type,
+                "time_in_force": time_in_force,
+                "trd_env": trd_env,
+                "acc_id": resolved_acc_id,
+                "remark": remark,
+            },
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
@@ -2081,8 +2188,16 @@ class TradeService:
                 f"{trd_env} account, so the modification cannot be checked "
                 "against the configured limits."
             )
-        return matching[0]
+        if len(matching) != 1:
+            raise ValueError(
+                f"{operation}: broker returned ambiguous evidence for order {order_id}"
+            )
+        order = matching[0]
+        if str(trd_env).strip().upper() == "REAL" and self.real is not None:
+            self.real.validate_target(order)
+        return order
 
+    @journal_real_mutation
     def modify_order(
         self,
         order_id: str,
@@ -2157,6 +2272,10 @@ class TradeService:
             )
         requested_op = str(modify_order_op).strip().upper()
         operation = f"modify_order ({requested_op})"
+        dispatch_qty, dispatch_price = qty, price
+        if requested_op not in EXPOSING_MODIFY_OPS:
+            dispatch_qty = qty if qty is not None else 0
+            dispatch_price = price if price is not None else 0
 
         with not_sent(operation):
             self.policy.check_write(operation, trd_env)
@@ -2178,6 +2297,7 @@ class TradeService:
                 )
                 merged_qty = qty if qty is not None else existing.get("qty")
                 merged_price = price if price is not None else existing.get("price")
+                dispatch_qty, dispatch_price = merged_qty, merged_price
                 existing_type = str(existing.get("order_type") or "NORMAL")
                 existing_aux = self._optional_float(existing.get("aux_price"))
                 validate_order_values(
@@ -2215,10 +2335,10 @@ class TradeService:
             lambda: self.dispatcher.call(
                 "modify_order",
                 trade_ctx.modify_order,
-                modify_order_op=modify_order_op,
+                modify_order_op=requested_op,
                 order_id=order_id,
-                qty=qty,
-                price=price,
+                qty=dispatch_qty,
+                price=dispatch_price,
                 # The SDK defaults adjust_limit to 0, so it infers as int; the
                 # gateway takes a price-adjustment ratio, which is a float.
                 adjust_limit=adjust_limit,  # pyright: ignore[reportArgumentType]
@@ -2230,6 +2350,15 @@ class TradeService:
             adds_exposure=requested_op in EXPOSING_MODIFY_OPS,
             sdk_operation="modify_order",
             account_id=resolved_acc_id,
+            journal_request={
+                "modify_order_op": requested_op,
+                "order_id": order_id,
+                "qty": dispatch_qty,
+                "price": dispatch_price,
+                "adjust_limit": adjust_limit,
+                "trd_env": trd_env,
+                "acc_id": resolved_acc_id,
+            },
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 
@@ -2248,6 +2377,7 @@ class TradeService:
         number = float(value)
         return number if math.isfinite(number) else None
 
+    @journal_real_mutation
     def cancel_order(
         self,
         order_id: str,
@@ -2316,6 +2446,15 @@ class TradeService:
             adds_exposure=False,
             sdk_operation="modify_order",
             account_id=resolved_acc_id,
+            journal_request={
+                "modify_order_op": "CANCEL",
+                "order_id": order_id,
+                "qty": 0,
+                "price": 0,
+                "adjust_limit": 0,
+                "trd_env": trd_env,
+                "acc_id": resolved_acc_id,
+            },
         )
         return self._with_routing(receipt, resolved_acc_id, trd_env, relock_error)
 

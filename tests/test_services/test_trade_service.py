@@ -13,8 +13,6 @@ from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.instruments import InstrumentAdapter, InstrumentLookupError
 from moomoo_mcp.services.order_errors import (
     OrderNotSentError,
-    OrderOutcomeUnknownError,
-    OrderReceiptUnreadableError,
 )
 from moomoo_mcp.services.paper_execution import PaperExecution
 from moomoo_mcp.services.trade_service import TradeService
@@ -24,6 +22,9 @@ from moomoo_mcp.services.trading_policy import (
     TradingMode,
     TradingPolicy,
     TradingPolicyError,
+)
+from tests.real_journal_helpers import (
+    real_journal_legacy_calls as real_journal_legacy_calls,
 )
 
 # These tests exercise order writes, so they state that intent explicitly:
@@ -903,8 +904,8 @@ class TestJustInTimeUnlock:
         mock_trade_ctx.place_order.side_effect = ValueError("Order exploded")
         service = _credentialed_service(mock_trade_ctx)
 
-        with pytest.raises(OrderOutcomeUnknownError):
-            _place(service)
+        result = _place(service)
+        assert result["state"] == "UNKNOWN_OUTCOME"
 
         mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
 
@@ -970,7 +971,7 @@ class TestDispatchOutcomes:
         result = _place(service, trd_env="REAL")
 
         assert result["order_id"] == "1"
-        assert result["acc_id"] == 123
+        assert result["acc_id"] == "123"
         assert result["trd_env"] == "REAL"
         assert "gateway_relock_error" not in result
 
@@ -982,10 +983,10 @@ class TestDispatchOutcomes:
         service = TradeService(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
-        with pytest.raises(OrderOutcomeUnknownError) as excinfo:
-            _place(service, trd_env="REAL")
+        result = _place(service, trd_env="REAL")
+        assert result["state"] == "UNKNOWN_OUTCOME"
 
-        message = str(excinfo.value)
+        message = result["error"]
         assert "may have been sent" in message
         assert "outcome is unknown" in message
         assert "gateway said no" in message
@@ -996,8 +997,9 @@ class TestDispatchOutcomes:
         service = TradeService(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
-        with pytest.raises(OrderOutcomeUnknownError, match="socket timeout"):
-            _place(service, trd_env="REAL")
+        result = _place(service, trd_env="REAL")
+        assert result["state"] == "UNKNOWN_OUTCOME"
+        assert "socket timeout" in result["error"]
 
     def test_an_unreadable_success_forbids_a_resend(self, mock_trade_ctx):
         """The order exists and its identifier is lost. Resending would double
@@ -1006,10 +1008,10 @@ class TestDispatchOutcomes:
         service = TradeService(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
-        with pytest.raises(OrderReceiptUnreadableError) as excinfo:
-            _place(service, trd_env="REAL")
+        result = _place(service, trd_env="REAL")
+        assert result["state"] == "ACKNOWLEDGED"
 
-        message = str(excinfo.value)
+        message = result["error"]
         assert "acknowledged" in message
         assert "do not resend" in message.lower()
         assert "outcome is unknown" not in message
@@ -1018,7 +1020,7 @@ class TestDispatchOutcomes:
 class TestRelockAlwaysAttempted:
     """The gateway is unlocked right now; nothing may leave it that way."""
 
-    def test_an_unexpected_failure_still_relocks(self, mock_trade_ctx):
+    def test_an_unexpected_failure_still_relocks(self, mock_trade_ctx, monkeypatch):
         """A conversion that raises something the boundary does not classify.
 
         The relock lives in a `finally` precisely so that a path nobody
@@ -1031,19 +1033,12 @@ class TestRelockAlwaysAttempted:
         )
         service = _credentialed_service(mock_trade_ctx)
 
-        def exploding_convert(_data):
+        def exploding_convert(_kind, _data):
             raise KeyboardInterrupt("operator interrupted")
 
+        monkeypatch.setattr(service, "_first_record", exploding_convert)
         with pytest.raises(KeyboardInterrupt):
-            service._dispatch_write(
-                "REAL",
-                "place_order",
-                lambda: mock_trade_ctx.place_order(),
-                exploding_convert,
-                adds_exposure=True,
-                sdk_operation="place_order",
-                account_id=123,
-            )
+            _place(service)
 
         mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
 
@@ -1056,8 +1051,8 @@ class TestRelockAlwaysAttempted:
         mock_trade_ctx.place_order.return_value = (RET_ERROR, "gateway said no")
         service = _credentialed_service(mock_trade_ctx)
 
-        with pytest.raises(OrderOutcomeUnknownError):
-            _place(service)
+        result = _place(service)
+        assert result["state"] == "UNKNOWN_OUTCOME"
 
         assert order == ["unlock", "lock"]
 
@@ -1112,10 +1107,10 @@ class TestExecutionHalt:
         mock_trade_ctx.place_order.return_value = (RET_ERROR, "gateway said no")
         service = _credentialed_service(mock_trade_ctx)
 
-        with pytest.raises(OrderOutcomeUnknownError) as excinfo:
-            _place(service)
+        result = _place(service)
+        assert result["state"] == "UNKNOWN_OUTCOME"
 
-        message = str(excinfo.value)
+        message = result["error"]
         assert "may have been sent" in message
         assert "lock refused" in message
 
@@ -1518,8 +1513,9 @@ class TestHaltIsCheckedInsideTheLock:
 
         mock_trade_ctx.unlock_trade.side_effect = unlock_trade
         mock_trade_ctx.place_order.side_effect = slow_place_order
-        service._jit_lock = _LockArrival(  # type: ignore[assignment]
-            service._jit_lock, "writer-b", second_is_at_the_lock
+        assert service.real is not None
+        service.real.lock = _LockArrival(  # type: ignore[assignment]
+            service.real.lock, "writer-b", second_is_at_the_lock
         )
 
         first: dict = {}
@@ -1544,11 +1540,9 @@ class TestHaltIsCheckedInsideTheLock:
         writer_b = threading.Thread(target=run_second, name="writer-b")
         writer_b.start()
 
-        # Wait for proof, not for a duration: B has passed its own pre-dispatch
-        # checks — the service was ARMED when it looked — and has reached the
-        # lock A holds. A sleep here only assumed that, so on a loaded runner B
-        # could instead start after the halt and be turned away by the early
-        # check, leaving the test green with the in-lock check deleted.
+        # B reached the durable executor's serialization lock while A was
+        # dispatching. Once A halts, B must recheck the gateway halt before its
+        # own unlock or write.
         assert second_is_at_the_lock.wait(timeout=2)
 
         release_first.set()
@@ -1579,13 +1573,13 @@ class TestHaltIsCheckedInsideTheLock:
 
         mock_trade_ctx.modify_order.assert_called_once()
 
-    def test_the_in_lock_check_refuses_before_unlocking(self, mock_trade_ctx):
-        """A halted write must not even unlock the gateway."""
+    def test_an_unjournaled_dispatch_refuses_before_unlocking(self, mock_trade_ctx):
+        """The internal dispatch boundary cannot bypass durable execution."""
         service = _credentialed_service(mock_trade_ctx)
         service._execution.record_relock_failure("lock refused")
         mock_trade_ctx.reset_mock()
 
-        with pytest.raises(OrderNotSentError, match="halted"):
+        with pytest.raises(OrderNotSentError, match="Durable REAL execution required"):
             service._dispatch_write(
                 "REAL",
                 "place_order",
@@ -1609,10 +1603,10 @@ class TestAcknowledgedButEmptyReceipt:
         service = TradeService(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
-        with pytest.raises(OrderReceiptUnreadableError) as excinfo:
-            _place(service, trd_env="REAL")
+        result = _place(service, trd_env="REAL")
+        assert result["state"] == "ACKNOWLEDGED"
 
-        message = str(excinfo.value)
+        message = result["error"]
         assert "acknowledged" in message
         assert "do not resend" in message.lower()
         assert "get_orders" in message
@@ -1622,17 +1616,18 @@ class TestAcknowledgedButEmptyReceipt:
         service = TradeService(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
-        with pytest.raises(OrderReceiptUnreadableError, match="Do not resend"):
-            service.place_combo_order(
-                combo_legs=[
-                    {"code": "US.A", "trd_side": "BUY", "qty_ratio": 1},
-                    {"code": "US.B", "trd_side": "SELL", "qty_ratio": 1},
-                ],
-                price=2.5,
-                qty=1,
-                trd_env="REAL",
-                acc_id=123,
-            )
+        result = service.place_combo_order(
+            combo_legs=[
+                {"code": "US.A", "trd_side": "BUY", "qty_ratio": 1},
+                {"code": "US.B", "trd_side": "SELL", "qty_ratio": 1},
+            ],
+            price=2.5,
+            qty=1,
+            trd_env="REAL",
+            acc_id=123,
+        )
+        assert result["state"] == "ACKNOWLEDGED"
+        assert "Do not resend" in result["error"]
 
     def test_an_empty_modification_payload_is_an_unreadable_receipt(
         self, mock_trade_ctx
@@ -1641,8 +1636,9 @@ class TestAcknowledgedButEmptyReceipt:
         service = TradeService(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
-        with pytest.raises(OrderReceiptUnreadableError, match="Do not resend"):
-            service.cancel_order(order_id="123456", trd_env="REAL", acc_id=123)
+        result = service.cancel_order(order_id="123456", trd_env="REAL", acc_id=123)
+        assert result["state"] == "ACKNOWLEDGED"
+        assert "Do not resend" in result["error"]
 
 
 class TestLockAtRest:
@@ -2089,16 +2085,16 @@ class TestPlaceOrder:
 
         # A gateway error code cannot be told apart from a timeout, so the
         # outcome is unknown rather than a rejection.
-        with pytest.raises(OrderOutcomeUnknownError) as excinfo:
-            trade_service_with_mock.place_order(
-                code="US.AAPL",
-                price=150.0,
-                qty=100,
-                trd_side="BUY",
-                trd_env="REAL",
-            )
+        result = trade_service_with_mock.place_order(
+            code="US.AAPL",
+            price=150.0,
+            qty=100,
+            trd_side="BUY",
+            trd_env="REAL",
+        )
+        assert result["state"] == "UNKNOWN_OUTCOME"
 
-        message = str(excinfo.value)
+        message = result["error"]
         assert "may have been sent" in message
         assert "Order rejected" in message
 
@@ -2250,13 +2246,14 @@ class TestModifyOrder:
         """Test order modification failure."""
         mock_trade_ctx.modify_order.return_value = (-1, "Modification failed")
 
-        with pytest.raises(OrderOutcomeUnknownError, match="may have been sent"):
-            trade_service_with_mock.modify_order(
-                order_id="123456",
-                modify_order_op="NORMAL",
-                trd_env="REAL",
-                acc_id=123,
-            )
+        result = trade_service_with_mock.modify_order(
+            order_id="123456",
+            modify_order_op="NORMAL",
+            trd_env="REAL",
+            acc_id=123,
+        )
+        assert result["state"] == "UNKNOWN_OUTCOME"
+        assert "may have been sent" in result["error"]
 
 
 class TestCancelOrder:
@@ -2291,10 +2288,11 @@ class TestCancelOrder:
         """Test order cancellation failure."""
         mock_trade_ctx.modify_order.return_value = (-1, "Cancel failed")
 
-        with pytest.raises(OrderOutcomeUnknownError, match="may have been sent"):
-            trade_service_with_mock.cancel_order(
-                order_id="123456", trd_env="REAL", acc_id=123
-            )
+        result = trade_service_with_mock.cancel_order(
+            order_id="123456", trd_env="REAL", acc_id=123
+        )
+        assert result["state"] == "UNKNOWN_OUTCOME"
+        assert "may have been sent" in result["error"]
 
 
 class TestGetOrders:
@@ -2814,14 +2812,15 @@ class TestPlaceComboOrder:
         """Test a gateway error code surfaces as an unknown outcome."""
         mock_trade_ctx.place_combo_order.return_value = (-1, "Combo rejected")
 
-        with pytest.raises(OrderOutcomeUnknownError, match="may have been sent"):
-            trade_service_with_mock.place_combo_order(
-                combo_legs=self._legs(),
-                price=2.5,
-                qty=1,
-                trd_env="REAL",
-                acc_id=123,
-            )
+        result = trade_service_with_mock.place_combo_order(
+            combo_legs=self._legs(),
+            price=2.5,
+            qty=1,
+            trd_env="REAL",
+            acc_id=123,
+        )
+        assert result["state"] == "UNKNOWN_OUTCOME"
+        assert "may have been sent" in result["error"]
 
     def test_place_combo_order_no_context(self):
         """Test error when context not connected."""

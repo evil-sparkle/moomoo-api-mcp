@@ -19,6 +19,9 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
 )
 from tests.conftest import call_mcp_tool
+from tests.real_journal_helpers import (
+    real_journal_legacy_calls as real_journal_legacy_calls,
+)
 
 # Larger than 2**53: a client that parsed this as a number would round it.
 LARGE_ACC_ID = "987654321098765431"

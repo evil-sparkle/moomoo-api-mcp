@@ -22,6 +22,9 @@ from moomoo import RET_OK, ComboLeg
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from tests.conftest import call_mcp_tool
+from tests.real_journal_helpers import (
+    real_journal_legacy_calls as real_journal_legacy_calls,
+)
 
 ACCOUNT_ID = "987654321098765432"
 # Above 2**53, so a double-precision client cannot represent it exactly.

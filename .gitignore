@@ -111,6 +111,7 @@ docker-compose.*.yml
 !docker-compose.prod.yml
 !docker-compose.smoke.yml
 !docker-compose.paper.yml
+!docker-compose.real.yml
 !docker-compose.chatgpt.yml
 docs/deploy-*.md
 !docs/deploy-vps.md

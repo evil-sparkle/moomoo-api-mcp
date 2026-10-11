@@ -460,6 +460,7 @@ named directory in the checkout does not remove the Docker volume.
 | Gateway connections and quote subscriptions | Process-owned; SDK reconnects after gateway failure. Container replacement loses subscriptions. |
 | Trade halt (`ARMED`/`HALTED`) | MCP process memory; container replacement starts a new process. Restarting is not evidence an uncertain order was reconciled. |
 | Paper execution journal and recovery audit | Separate `execution-data` volume when configured; preserve it and its identity through mode changes, upgrades and restores. |
+| REAL execution journal and recovery audit | Separate `real-execution-data` volume in REAL mode; preserve independently of paper storage through mode changes, upgrades and restores. |
 | Container environment | Restart reuses existing values; use deployment to recreate containers after settings change. |
 
 When OpenD exits, the supervisor restarts it with bounded retries while MCP
@@ -474,7 +475,10 @@ write and re-locks afterward. A failed re-lock sets `HALTED`. Inspect
 with `gateway_relock_error` and `execution_halted: true`. Successful explicit
 `lock_trade` clears the halt; reconnect locking does not. Risk-increasing REAL
 writes are blocked while halted, while permitted cancellation and reduction
-operations remain available. Paper recovery gates are separate and durable.
+operations remain available when journal admission is ready. Paper and REAL
+recovery gates are separate and durable; an uncertain REAL operation can block
+new mutations, including cancellations. Clearing the relock halt does not clear
+an unresolved journal operation.
 
 The OpenD volume name depends on the saved Compose project. Inspect only mount
 metadata to locate it without exposing container credentials:
@@ -505,8 +509,8 @@ access permits server-enforced `READ_ONLY` or `SIMULATE`. In `READ_ONLY`, every
 order mutation is refused. In `SIMULATE`, supported paper orders are permitted
 for explicitly allowlisted simulated accounts through the persistent execution
 journal. Real-account, position and market-data reads remain available; real
-orders and trade unlocking are refused before any gateway write. Operator
-recovery requires its separate credential, which is never given to the tunnel.
+orders and trade unlocking are refused before any gateway write. Recovery runs
+inside the server; execution inspection uses ordinary MCP authentication.
 The ordinary MCP bearer follows the server's trading mode: disable the tunnel
 before changing the deployment to `REAL`.
 
@@ -658,15 +662,17 @@ in PRs or CI rather than treating it as permanent deployment status.
 
 Paper execution persists SIMULATE operations in a dedicated SQLite journal. When
 configured in SIMULATE or REAL mode, it uses the **same paper journal**. REAL mode
-permits real trading without disabling paper trading. Real orders are not
-journaled; a separate REAL journal is deferred. Do not share a database between
-paper and real execution.
+permits real trading without disabling configured paper trading. Real orders use
+the independent REAL journal described below. Never share a database or directory
+between paper and real execution.
 
 ### Deployment support boundary
 
 The production `scripts/deploy.sh` path supports paper execution in `SIMULATE`.
 Its shared `compose-prod.sh` wrapper selects `docker-compose.paper.yml` for that
-mode, including when the optional ChatGPT tunnel is disabled. Selected tunnels
+mode, including when the optional ChatGPT tunnel is disabled. REAL automatically
+selects `docker-compose.real.yml` and also retains the paper overlay when
+`MOOMOO_SIMULATED_ACC_IDS` is configured. Selected tunnels
 also include the paper overlay in `READ_ONLY`, preserving the project-scoped
 journal volume across mode changes without opening it in `READ_ONLY`.
 
@@ -677,9 +683,8 @@ Compose project and both persistent volumes through upgrades and rollback.
 Systemd and subsequent deployments use the same wrapper and mode selection.
 
 Use `deploy.sh` for production. The direct Compose examples below describe
-standalone development and test setups. Automatic production paper-overlay
-selection covers `SIMULATE`; `REAL` without a tunnel retains the base deployment
-files. Disable ChatGPT before switching to `REAL`, which the tunnel refuses.
+standalone development and test setups. Disable ChatGPT before switching to
+`REAL`, which the tunnel refuses.
 
 ### Standalone paper topology
 
@@ -820,3 +825,80 @@ observations match the earlier request. A durably refused operation stays refuse
 on retry; never change an uncertain operation's token to bypass recovery.
 See the [execution journal spec](../openspec/specs/execution-journal/spec.md) for
 identity, admission, observation and recovery requirements.
+
+## REAL execution and recovery
+
+REAL execution now requires durable persistence before the server listens. The
+production wrapper automatically adds `docker-compose.real.yml`, mounting the
+project-scoped `real-execution-data` volume at `/app/real-execution-data` and setting
+`MOOMOO_REAL_JOURNAL_PATH=/app/real-execution-data/execution.db`. The image prepares
+this directory for uid 10001. Paper storage keeps its existing path and volume;
+configure `MOOMOO_SIMULATED_ACC_IDS` to retain paper execution alongside REAL.
+Neither READ_ONLY nor SIMULATE opens REAL storage. Mode changes must preserve
+both named volumes and the original Compose project for later use.
+
+For a direct process, set `MOOMOO_REAL_JOURNAL_PATH` to a dedicated local POSIX
+filesystem directory that honors SQLite fsync and advisory locks. Paper and REAL
+cannot share a journal directory because each holds its own `execution.lock`.
+Opening a paper database as REAL, missing storage with creation disabled, corrupt
+storage and a competing executor all fail closed before HTTP startup. REAL keeps
+its existing account allowlist, order limits and managed unlock/relock policy.
+
+Upgrade clients before enabling REAL. Every placement, combo placement,
+modification and cancellation must supply a caller-generated `operation_id` and
+`admission_epoch` from `check_health.real_execution_journal`. Keep the original
+request, environment, account and both token fields on retries. New process epochs
+apply to new trading decisions; refreshing an uncertain operation's epoch or ID
+cannot recover its broker action. Existing REAL clients without these fields are
+refused. Prices remain numeric and existing REAL order types and markets retain
+their validation and policy restrictions.
+
+Set `MOOMOO_CREATE_REAL_JOURNAL=1` only for deliberate first provisioning. Once the
+journal exists, restore it to `0` before normal operation so a missing mount cannot
+silently create new history. Never initialize, replace or repoint a journal to
+clear an uncertain outcome. For standalone Compose, include the REAL overlay:
+
+```sh
+docker compose --project-name moomoo --env-file /path/to/operator-settings \
+  -f docker-compose.yml -f docker-compose.real.yml up -d
+```
+
+Include `docker-compose.paper.yml` before the REAL overlay when paper execution
+is configured, and `docker-compose.prod.yml` after the base when using production
+images. Preserve both execution volumes and `opend-data`; do not use
+`down --volumes` for upgrades, rollback or recovery. The online-backup and restore
+procedure above also applies independently to the REAL database, using its own
+path, backup filename and sidecars. Older executors that do not enforce REAL
+journaling must not resume REAL trading during a rollback; use READ_ONLY instead.
+
+Placements persist an opaque broker correlation tag as the order remark while
+retaining the caller's original remark in request identity. This tag supports
+matching; it is not broker-side deduplication. An identical retry returns durable
+status or IN_FLIGHT without a second SDK mutation, including while disconnected.
+ACKNOWLEDGED means gateway acceptance, not a fill, and may coexist with a relock
+failure. A storage failure after acknowledgement keeps locally observed evidence
+visible and blocks further journal admissions until healthy restart and accounting.
+
+REAL recovery starts with the process and performs read-only order/history and
+position queries. Exact order ID or tag plus consistent observable fields can
+account for an operation. Ambiguous matches, missing provider fields and complex
+order evidence that cannot be established stay pending. Repeated unsuccessful
+searches never assume a REAL order absent, release its recovery gate or create a
+replacement. The original operation never replays. An operation recovered before
+its dispatch marker may be refused as not dispatched; a committed marker means
+the result must be accounted for conservatively.
+
+Inspect `check_health.real_execution_journal` independently of paper readiness and
+gateway connectivity. `get_execution(operation_id, trd_env="REAL")` returns the
+stored outcome and recovery evidence; `reconcile_execution(operation_id,
+trd_env="REAL")` advances only a due check under the same schedule. Omitting the
+environment selects SIMULATE for existing callers. An explicit successful
+`lock_trade` clears the gateway relock halt, while unresolved journal operations
+retain their own gate.
+
+Automated tests cover storage, restart, duplicate suppression, admission, JIT
+unlock/relock and mocked broker recovery. They do not prove live provider
+visibility, retention, response-loss accounting, combo evidence or an actual
+real-money caller chain. This change does not deploy a service, unlock an account,
+or submit a live order. Provider-side exactly-once execution, automatic replacement
+and Stage 3 operator approval remain outside this contract.

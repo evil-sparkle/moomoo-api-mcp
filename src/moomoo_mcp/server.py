@@ -76,8 +76,38 @@ class AppContext:
 # The gateway connections belong to the process, not to a session. Built once,
 # under a lock, and handed to every session that follows.
 _services: AppContext | None = None
-_prepared_journal: tuple[Settings, ExecutionStore] | None = None
+_prepared_journal: (
+    tuple[Settings, ExecutionStore | None, ExecutionStore | None] | None
+) = None
 _services_lock = threading.Lock()
+
+
+def _open_execution_stores(
+    settings: Settings,
+) -> tuple[ExecutionStore | None, ExecutionStore | None]:
+    """Validate both environment-owned stores, releasing partial ownership."""
+    paper = None
+    real = None
+    try:
+        if settings.journal_path:
+            paper = ExecutionStore(
+                settings.journal_path,
+                create=settings.create_journal,
+                lock_wait_ms=settings.journal_lock_wait_ms,
+            )
+        if settings.real_journal_path:
+            real = ExecutionStore(
+                settings.real_journal_path,
+                create=settings.create_real_journal,
+                lock_wait_ms=settings.journal_lock_wait_ms,
+                environment="REAL",
+            )
+    except BaseException:
+        for store in (paper, real):
+            if store is not None:
+                store.close()
+        raise
+    return paper, real
 
 
 def _build_services(settings: Settings | None = None) -> AppContext:
@@ -100,18 +130,8 @@ def _build_services(settings: Settings | None = None) -> AppContext:
     if resolved.security_firm:
         logger.info(f"Using security firm: {resolved.security_firm}")
 
-    execution_store = (
-        prepared[1]
-        if prepared
-        else (
-            ExecutionStore(
-                resolved.journal_path,
-                create=resolved.create_journal,
-                lock_wait_ms=resolved.journal_lock_wait_ms,
-            )
-            if resolved.journal_path
-            else None
-        )
+    execution_store, real_execution_store = (
+        (prepared[1], prepared[2]) if prepared else _open_execution_stores(resolved)
     )
     dispatcher = BrokerRequestDispatcher()
     try:
@@ -119,8 +139,9 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             host=resolved.opend_host, port=resolved.opend_port, dispatcher=dispatcher
         )
     except BaseException:
-        if execution_store is not None:
-            execution_store.close()
+        for store in (execution_store, real_execution_store):
+            if store is not None:
+                store.close()
         raise
     try:
         trade_service = TradeService(
@@ -130,6 +151,7 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             trading_market=resolved.trading_market,
             policy=resolved.policy,
             execution_store=execution_store,
+            real_execution_store=real_execution_store,
             simulated_account_allowlist=resolved.simulated_account_allowlist,
             trade_password=resolved.trade_password,
             trade_password_md5=resolved.trade_password_md5,
@@ -142,8 +164,9 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             ),
         )
     except BaseException:
-        if execution_store is not None:
-            execution_store.close()
+        for store in (execution_store, real_execution_store):
+            if store is not None:
+                store.close()
         moomoo_service.close()
         raise
 
@@ -174,6 +197,7 @@ def _build_services(settings: Settings | None = None) -> AppContext:
         )
 
         trade_service.start_paper_recovery()
+        trade_service.start_real_recovery()
 
         return AppContext(
             moomoo_service=moomoo_service,
@@ -212,7 +236,9 @@ def close_services() -> None:
         prepared = _prepared_journal
         _prepared_journal = None
     if prepared is not None:
-        prepared[1].close()
+        for store in prepared[1:]:
+            if store is not None:
+                store.close()
 
     if services is not None:
         services.trade_service.close()
@@ -335,20 +361,16 @@ def main():
         logger.error(f"Refusing to start: {exc}")
         raise SystemExit(1) from exc
 
-    if settings.journal_path:
+    if settings.journal_path or settings.real_journal_path:
         # Fail storage startup before a transport can serve any request.
         global _prepared_journal
         with _services_lock:
             if _services is None and _prepared_journal is None:
-                # Validate/lock storage before listening. Paper recovery starts
+                # Validate/lock storage before listening. Recovery starts
                 # with the process, independent of the first client request.
                 _prepared_journal = (
                     settings,
-                    ExecutionStore(
-                        settings.journal_path,
-                        create=settings.create_journal,
-                        lock_wait_ms=settings.journal_lock_wait_ms,
-                    ),
+                    *_open_execution_stores(settings),
                 )
                 atexit.register(close_services)
         get_services()
@@ -363,11 +385,15 @@ def main():
 
     import uvicorn
 
-    app = create_streamable_http_app(
-        auth_token=settings.auth_token,
-        allow_chatgpt_tunnel_host=settings.allow_chatgpt_tunnel_host,
-    )
-    uvicorn.run(app, host=host, port=port)
+    try:
+        app = create_streamable_http_app(
+            auth_token=settings.auth_token,
+            allow_chatgpt_tunnel_host=settings.allow_chatgpt_tunnel_host,
+        )
+        uvicorn.run(app, host=host, port=port)
+    except BaseException:
+        close_services()
+        raise
 
 
 if __name__ == "__main__":

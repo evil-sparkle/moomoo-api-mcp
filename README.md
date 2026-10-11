@@ -290,10 +290,31 @@ password alone never enables REAL writes. Container operators should use the
 | `MOOMOO_SECURITY_FIRM`      | Your broker region (e.g., FUTUSG, FUTUINC)                            | `FUTUSG`      |
 | `MCP_TRANSPORT`             | Optional: Only `streamable-http` is accepted (stateless, JSON responses) | `streamable-http` |
 | `MOOMOO_REAL_ACC_IDS`       | **Required in `REAL` mode.** Comma-separated accounts REAL writes may target | `12345678` |
+| `MOOMOO_REAL_JOURNAL_PATH` | **Required in `REAL` mode.** Dedicated initialized REAL SQLite journal in a separate directory from paper storage | `/app/real-execution-data/execution.db` |
+| `MOOMOO_CREATE_REAL_JOURNAL` | `1` only for deliberate first initialization; default `0` refuses missing storage | `0` |
 | `MCP_AUTH_TOKEN`            | **Required** for the HTTP endpoint           | `secret-token`|
 | `MCP_ALLOW_UNAUTHENTICATED_HTTP` | Optional: `1` serves HTTP without a token, honoured only in `READ_ONLY` | `1`     |
 | `MOOMOO_MAX_ORDER_QTY`      | Optional: cap on quantity per order; for a combo, on the largest leg   | `500`         |
 | `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` | Notional caps, one per currency. Compose defaults to `USD:500` when unset or empty | `USD:500` |
+
+REAL placements, combo placements, modifications and cancellations require a
+caller-generated `operation_id` and the current `admission_epoch` from
+`check_health.real_execution_journal`. Preserve both fields and the exact request
+on every retry. Identical retries return the recorded outcome without another
+broker mutation. Each process restart issues a new epoch for new decisions;
+existing operations retain their original epoch and account. REAL prices remain
+numeric, while paper prices remain decimal strings.
+
+REAL recovery runs inside the server and queries broker orders, history and
+positions. Exact identity and consistent evidence can account for a request.
+Unsuccessful searches never establish absence, release an uncertain REAL gate,
+or trigger a replacement. Inspect live records with
+`get_execution(operation_id, trd_env="REAL")` or advance a due read-only check with
+`reconcile_execution(operation_id, trd_env="REAL")`. SIMULATE remains the default
+on these tools and retains its separate paper journal and recovery policy.
+See the [REAL journal migration procedure](docs/deploy-vps.md#real-execution-and-recovery)
+for persistent storage and initialization. Local tests establish application
+behavior; live provider recovery remains unverified. Stage 3 approval is separate.
 
 #### Order limits
 

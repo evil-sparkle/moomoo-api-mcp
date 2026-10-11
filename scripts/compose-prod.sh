@@ -34,10 +34,14 @@ if [ -f .chatgpt-deploy.json ]; then
     fi
   fi
 else
-  # Removing the tunnel must not remove local SIMULATE execution or its storage.
-  paper_file="$(python3 scripts/deploy_verify.py paper-overlay)"
-  if [ -n "$paper_file" ]; then
-    optional=(-f "$paper_file")
+  # Every writable mode selects its durable storage. Configured paper accounts
+  # retain their independent paper overlay alongside REAL execution.
+  execution_files="$(python3 scripts/deploy_verify.py execution-overlays)"
+  if [ -n "$execution_files" ]; then
+    mapfile -t storage_overlays <<< "$execution_files"
+    for overlay in "${storage_overlays[@]}"; do
+      optional+=(-f "$overlay")
+    done
   fi
 fi
 exec docker --context rootless compose --env-file .env --env-file .deploy.env \

@@ -1,4 +1,4 @@
-"""Durable paper execution records. No connection or transaction leaves this module."""
+"""Environment-bound execution records; connections stay within this module."""
 
 from __future__ import annotations
 
@@ -31,8 +31,16 @@ class ExecutionConflict(ValueError):
 
 class ExecutionStore:
     def __init__(
-        self, path: str | Path, *, create: bool = False, lock_wait_ms: int = 5000
+        self,
+        path: str | Path,
+        *,
+        create: bool = False,
+        lock_wait_ms: int = 5000,
+        environment: str = "SIMULATE",
     ):
+        if environment not in {"SIMULATE", "REAL"}:
+            raise ValueError("journal environment must be SIMULATE or REAL")
+        self.environment = environment
         self._path = Path(path).absolute()
         self._wait = lock_wait_ms
         self._failed: str | None = None
@@ -62,10 +70,10 @@ class ExecutionStore:
                 fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.close(fd)
                 with self._connection(verify=False) as conn:
-                    conn.executescript("""
+                    conn.executescript(f"""
 BEGIN IMMEDIATE;
-CREATE TABLE metadata (environment TEXT NOT NULL CHECK (environment = 'SIMULATE'));
-INSERT INTO metadata VALUES ('SIMULATE');
+CREATE TABLE metadata (environment TEXT NOT NULL CHECK (environment = '{environment}'));
+INSERT INTO metadata VALUES ('{environment}');
 CREATE TABLE epochs (epoch TEXT PRIMARY KEY, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE operations (
  operation_id TEXT PRIMARY KEY, admission_epoch TEXT NOT NULL REFERENCES epochs(epoch),
@@ -110,6 +118,12 @@ COMMIT;
                 connection = sqlite3.connect(probe)
                 try:
                     version = connection.execute("PRAGMA user_version").fetchone()[0]
+                    if version in (1, 2, SCHEMA_VERSION) and connection.execute(
+                        "SELECT environment FROM metadata"
+                    ).fetchall() != [(environment,)]:
+                        raise ExecutionStoreError(
+                            f"Journal environment is not {environment}"
+                        )
                 finally:
                     connection.close()
                 if version not in (1, 2, SCHEMA_VERSION):
@@ -121,9 +135,11 @@ COMMIT;
                 if conn.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                     raise ExecutionStoreError("Journal integrity check failed")
                 if conn.execute("SELECT environment FROM metadata").fetchall() != [
-                    ("SIMULATE",)
+                    (environment,)
                 ]:
-                    raise ExecutionStoreError("Journal environment is not SIMULATE")
+                    raise ExecutionStoreError(
+                        f"Journal environment is not {environment}"
+                    )
                 if version < SCHEMA_VERSION:
                     # Old acknowledgements carry no proof of broker visibility.
                     # Preserve them, conservatively unobserved, in an atomic upgrade.
@@ -215,6 +231,12 @@ CREATE TABLE recovery_checks (
                     != SCHEMA_VERSION
                 ):
                     raise sqlite3.DatabaseError("Journal schema changed during runtime")
+                if verify and conn.execute(
+                    "SELECT environment FROM metadata"
+                ).fetchall() != [(self.environment,)]:
+                    raise sqlite3.DatabaseError(
+                        "Journal environment changed during runtime"
+                    )
                 conn.execute("PRAGMA journal_mode = DELETE")
                 conn.execute("PRAGMA synchronous = EXTRA")
                 conn.execute("PRAGMA foreign_keys = ON")
@@ -322,7 +344,7 @@ CREATE TABLE recovery_checks (
                 or conn.execute("SELECT 1 FROM review_requirements LIMIT 1").fetchone()
             ):
                 raise ExecutionConflict(
-                    "Recovery review is outstanding or paper execution is blocked"
+                    "Recovery review is outstanding or execution is blocked"
                 )
             conn.execute(
                 (
@@ -338,7 +360,7 @@ CREATE TABLE recovery_checks (
                     canonical,
                     fingerprint_request(canonical),
                     json.dumps(request, allow_nan=False),
-                    str(uuid4()) if kind == "PLACE" else None,
+                    str(uuid4()) if kind in {"PLACE", "PLACE_COMBO"} else None,
                 ),
             )
             row = self._row(conn, operation_id)
@@ -421,7 +443,7 @@ CREATE TABLE recovery_checks (
         health = self.health()
         if health["state"] != "READY":
             raise ExecutionConflict(
-                f"Paper execution {health['state']}: "
+                f"{self.environment} execution {health['state']}: "
                 f"pending operations {health['pending_operation_ids']}; "
                 "automatic recovery or healthy storage restart is required; "
                 "see check_health/get_execution. No order was sent"
@@ -446,11 +468,11 @@ CREATE TABLE recovery_checks (
                 (operation_id,),
             )
 
-    @staticmethod
-    def recovery_context(row: dict) -> dict:
+    def recovery_context(self, row: dict) -> dict:
         checks = row["recovery_checks"]
         return {
             "operation_id": row["operation_id"],
+            "trd_env": self.environment,
             "order_tag": row["order_tag"],
             "disposition": row["recovery_disposition"],
             "pending": bool(row["recovery_pending"]),
@@ -462,7 +484,8 @@ CREATE TABLE recovery_checks (
             "successful_negative_checks": sum(
                 c["outcome"] == "NOT_FOUND" for c in checks
             ),
-            "required_negative_checks": 5,
+            "required_negative_checks": 5 if self.environment == "SIMULATE" else None,
+            "assumed_absence_allowed": self.environment == "SIMULATE",
             "last_check": {k: v for k, v in checks[-1].items() if k != "details"}
             if checks
             else None,
@@ -517,6 +540,8 @@ CREATE TABLE recovery_checks (
             if resolution is None:
                 return
             if resolution == ASSUMED_ABSENT:
+                if self.environment != "SIMULATE":
+                    raise ExecutionConflict("REAL recovery cannot assume absence")
                 count = conn.execute(
                     "SELECT COUNT(*) FROM recovery_checks WHERE operation_id=? AND "
                     "outcome='NOT_FOUND'",
@@ -538,6 +563,16 @@ CREATE TABLE recovery_checks (
                         "Assumed absence requires five tagged placement negatives"
                     )
                 state, disposition = "UNKNOWN_OUTCOME", "POSSIBLY_SENT"
+            elif resolution == "NOT_DISPATCHED":
+                if (
+                    self.environment != "REAL"
+                    or row["state"] != "ADMITTED"
+                    or row["marker"]
+                ):
+                    raise ExecutionConflict(
+                        "Not-dispatched recovery requires an unmarked REAL admission"
+                    )
+                state, disposition = "REFUSED", "NOT_SENT"
             elif resolution in {
                 "BROKER_CONFIRMED",
                 "CURRENT_STATE_ACCOUNTED",
@@ -568,7 +603,9 @@ CREATE TABLE recovery_checks (
                     details.get("reason", outcome),
                     "broker-order:" + str(receipt["order_id"])
                     if receipt
-                    else "order-tag:" + row["order_tag"],
+                    else "order-tag:" + row["order_tag"]
+                    if row["order_tag"]
+                    else "operation:" + operation_id,
                     json.dumps(accounted_facts or {}, allow_nan=False),
                     self.epoch,
                     observed_state,
@@ -598,6 +635,7 @@ CREATE TABLE recovery_checks (
     def health(self) -> dict:
         result: dict[str, Any] = {
             "state": "REVIEW_PENDING",
+            "trd_env": self.environment,
             "schema_version": SCHEMA_VERSION,
             "admission_epoch": self.epoch,
             "recovery_epoch": self.epoch,
