@@ -21,6 +21,9 @@ is not guaranteed. The instructions below run this repository's code.
 - **Account Management**: Comprehensive account summaries, assets, positions, and cash flow analysis.
 - **Trading**: Full order management including placing, modifying, and canceling
   orders, gated by an explicitly configured trading mode.
+- **Trading inspection and controls**: Documented capability discovery, single-order
+  previews, typed order/fee reads, bounded pages and callback observations, plus
+  optional durable operator approval, symbol restrictions and daily budgets.
 - **System Health**: Active, bounded health probes of the quote and trade connections to OpenD.
 - **Extensible Architecture**: Built on FastMCP for easy extension of trading capabilities.
 
@@ -102,6 +105,8 @@ See [contributor guidance](#contributing) for checks, hooks and OpenSpec workflo
 
 - [Production runbook](docs/deploy-vps.md): deployment, login, diagnostics,
   restarts, ChatGPT access and persistent-state recovery.
+- [Trading contracts](docs/trading-contracts.md): capabilities, validation,
+  sessions, previews, bounded query/event reads and the operator approval flow.
 - [Contributing](#contributing): development checks and OpenSpec regeneration.
 - [OpenSpec requirements](openspec/specs/): current architecture and behavioral
   contracts. Active changes track proposed work; archived changes record history.
@@ -203,15 +208,34 @@ validity flags are not independent financial reconciliation.
 
 ### Trading
 
+- `get_trading_capabilities`: Inspect documented support, deployment permissions
+  and advisory account/journal readiness separately; unknown support remains explicit.
+- `preview_order`: Compose instrument rules, conservative value and broker-reported
+  maximum quantities without placing, unlocking or admitting an order.
+- `prepare_trade_request` / `get_prepared_trade`: Persist exact mutation intent
+  and read its decision status. A separate authenticated operator HTTP channel
+  grants approval; ordinary MCP clients cannot approve.
 - `place_order`: Place a new order (Market, Limit, Stop, etc.).
 - `preview_combo_order`: Preview what a multi-leg package would do to an account — net liquidation value, initial and maintenance margin, option buying power, withdrawable amount, and buying-power decrease — using the broker's own calculation. Read-only: it places nothing, unlocks nothing, and reserves nothing, so it works in every trading mode. A field the broker did not report comes back as `null` rather than `0`. The values are point-in-time estimates, not a quote or an acceptance.
 - `place_combo_order`: Place a multi-leg option strategy (vertical spread, straddle, etc.) as a single atomic order. Use this rather than several `place_order` calls for any multi-leg strategy — the package fills as one unit, so a strategy can't be left half-executed. To **close** a strategy, first call `get_positions(show_option_strategy_view=True)` and pass each leg's `position_id`, which the API requires on closing orders.
 - `modify_order`: Modify price or quantity of an open order.
 - `cancel_order`: Cancel an open order.
-- `get_orders`: Get list of orders for the current day.
-- `get_deals`: Get list of executed trades (deals) for the current day.
+- `get_orders`: Get open orders and recent terminal orders from the provider's current scope.
+- `get_deals`: Get current executed trades (deals), for REAL accounts only.
 - `get_history_orders`: Search historical orders.
-- `get_history_deals`: Search historical deals.
+- `get_history_deals`: Search historical deals, for REAL accounts only.
+- `get_order`: Get one exact current order, or match it within an explicit
+  historical scope. An absent scoped result does not prove no order existed.
+- `get_order_fees`: Read actual fees for 1–400 order IDs; REAL only, excluding Moomoo CA.
+- `get_orders_page` / `get_deals_page` / `get_history_orders_page` /
+  `get_history_deals_page`: Read normalized immutable pages with account/filter
+  binding and bounded retention; continuations perform no broker query.
+- `get_trade_events`: Read bounded account-scoped callback observations. Orders
+  support REAL/SIMULATE; deals are REAL only. Events are ephemeral and never
+  supply journal recovery evidence.
+
+See [trading contracts](docs/trading-contracts.md) for exact bounds, session and
+instrument restrictions, optional controls configuration and operator review.
 
 #### History coverage and executions
 
@@ -236,7 +260,7 @@ A successful response, including an empty list, does not establish lifetime
 completeness: dates, account, code and order-status filters limit scope, and broker
 history availability has not been independently established. A code filter does
 not automatically include that underlying's derivatives. The provider documents
-historical deals for REAL accounts; SIMULATE availability must not be assumed.
+historical deals for REAL accounts; SIMULATE deal queries are explicitly refused.
 
 Order `qty` and `price` describe the request. `dealt_qty` and `dealt_avg_price`
 report the executed quantity and average fill price; deal `qty` and `price`

@@ -18,6 +18,7 @@ from moomoo_mcp.services.execution_store import (
     ExecutionStore,
     ExecutionStoreError,
 )
+from moomoo_mcp.services.instrument_rules import normalize_order_session
 from moomoo_mcp.services.order_errors import (
     OrderNotSentError,
     OrderReceiptUnreadableError,
@@ -34,7 +35,9 @@ from moomoo_mcp.tools.serialization import serialize_identifiers
 if TYPE_CHECKING:
     from moomoo_mcp.services.trade_service import TradeService
 
-ROUTING = frozenset({"trd_env", "acc_id", "operation_id", "admission_epoch"})
+ROUTING = frozenset(
+    {"trd_env", "acc_id", "operation_id", "admission_epoch", "approval_id"}
+)
 
 
 def _identity_value(value: Any) -> Any:
@@ -56,6 +59,15 @@ def _identity_value(value: Any) -> Any:
 
 
 def canonical_real_request(account: int, kind: str, params: dict) -> str:
+    params = dict(params)
+    if kind == "PLACE" and "session" in params:
+        selected = normalize_order_session(params["session"], trd_env="REAL")
+        if selected == "N/A":
+            # Old callers never supplied this field. The SDK default is the
+            # same request, including retries after upgrading the server.
+            params.pop("session")
+        else:
+            params["session"] = selected
     return json.dumps(
         {
             "env": "REAL",
@@ -398,6 +410,7 @@ class RealExecution:
                 raise ExecutionConflict(
                     "Dispatch account/environment disagrees with admission"
                 )
+            self.service._confirm_dispatch_controls()
             self.store.mark_dispatch(active["row"]["operation_id"], merged)
         active["marked"] = True
 

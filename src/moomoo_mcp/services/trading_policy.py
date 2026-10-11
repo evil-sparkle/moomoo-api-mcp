@@ -15,6 +15,7 @@ import math
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal, localcontext
 from enum import Enum
 from types import MappingProxyType
 
@@ -24,6 +25,9 @@ ENV_VAR = "MOOMOO_TRADING_MODE"
 ENV_MAX_ORDER_QTY = "MOOMOO_MAX_ORDER_QTY"
 ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY = "MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY"
 ENV_REAL_ACC_IDS = "MOOMOO_REAL_ACC_IDS"
+ENV_SYMBOL_ALLOWLIST = "MOOMOO_SYMBOL_ALLOWLIST"
+ENV_MAX_DAILY_NOTIONAL = "MOOMOO_MAX_DAILY_NOTIONAL_BY_CURRENCY"
+ENV_REQUIRE_APPROVAL = "MOOMOO_REQUIRE_TRADE_APPROVAL"
 
 # Markets whose instruments have been verified to quote in one known currency.
 #
@@ -86,7 +90,9 @@ def _require_positive_finite(variable: str, label: str, value: float) -> float:
     return number
 
 
-def _parse_notional_caps(raw: str) -> dict[str, float]:
+def _parse_notional_caps(
+    raw: str, variable: str = ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY
+) -> dict[str, float]:
     """Parse ``CURRENCY:AMOUNT[,CURRENCY:AMOUNT...]``.
 
     Done with ``split`` and ``partition`` rather than a regular expression, so
@@ -106,32 +112,28 @@ def _parse_notional_caps(raw: str) -> dict[str, float]:
         currency = currency.strip().upper()
         if not separator:
             raise TradingModeConfigError(
-                f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY}: entry {entry!r} has no "
+                f"{variable}: entry {entry!r} has no "
                 "currency. Use CURRENCY:AMOUNT, for example USD:25000."
             )
         if len(currency) != 3 or not currency.isalpha():
             raise TradingModeConfigError(
-                f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY}: {currency!r} is not a "
-                "three-letter currency code."
+                f"{variable}: {currency!r} is not a three-letter currency code."
             )
         if currency in caps:
             raise TradingModeConfigError(
-                f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY}: {currency} appears more "
+                f"{variable}: {currency} appears more "
                 "than once. A currency can have only one cap."
             )
         try:
             parsed = float(amount.strip())
         except ValueError as exc:
             raise TradingModeConfigError(
-                f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY}: {amount.strip()!r} is not "
-                f"a number for {currency}."
+                f"{variable}: {amount.strip()!r} is not a number for {currency}."
             ) from exc
-        caps[currency] = _require_positive_finite(
-            ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY, f"{currency} cap", parsed
-        )
+        caps[currency] = _require_positive_finite(variable, f"{currency} cap", parsed)
     if not caps:
         raise TradingModeConfigError(
-            f"{ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY} is set but holds no cap. "
+            f"{variable} is set but holds no cap. "
             "Use CURRENCY:AMOUNT, for example USD:25000, or unset it."
         )
     return caps
@@ -199,6 +201,8 @@ class InstrumentFacts:
     bid_price: float | None = None
     ask_price: float | None = None
     currency: str | None = None
+    # Static lot size is distinct from an option's monetary premium multiplier.
+    lot_size: float | None = None
 
     def market_reference(self) -> float | None:
         """`M`: the largest usable quoted price, or None when there is none.
@@ -266,6 +270,9 @@ class TradingPolicy:
     max_order_notional: Mapping[str, float] = field(default_factory=dict)
     # REAL accounts this deployment may write to. Empty outside REAL mode.
     real_acc_ids: frozenset[int] = frozenset()
+    symbol_allowlist: frozenset[str] = frozenset()
+    max_daily_notional: Mapping[str, float] = field(default_factory=dict)
+    require_approval: bool = False
 
     def __post_init__(self) -> None:
         """Validate the limits, however the policy was built, and freeze them.
@@ -304,6 +311,36 @@ class TradingPolicy:
                 ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY, f"{code} cap", amount
             )
         object.__setattr__(self, "max_order_notional", MappingProxyType(validated))
+        daily = {}
+        for currency, amount in self.max_daily_notional.items():
+            code = str(currency).strip().upper()
+            if (
+                len(code) != 3
+                or not code.isascii()
+                or not code.isalpha()
+                or code in daily
+            ):
+                raise TradingModeConfigError(
+                    f"{ENV_MAX_DAILY_NOTIONAL}: invalid currency"
+                )
+            daily[code] = _require_positive_finite(ENV_MAX_DAILY_NOTIONAL, code, amount)
+        object.__setattr__(self, "max_daily_notional", MappingProxyType(daily))
+        symbols = frozenset(self.symbol_allowlist)
+        if any(
+            not isinstance(code, str)
+            or not code.isascii()
+            or code != code.strip()
+            or "." not in code
+            or not all(part for part in code.split(".", 1))
+            or any(character.isspace() for character in code)
+            for code in symbols
+        ):
+            raise TradingModeConfigError(
+                f"{ENV_SYMBOL_ALLOWLIST}: use exact market codes"
+            )
+        object.__setattr__(self, "symbol_allowlist", symbols)
+        if not isinstance(self.require_approval, bool):
+            raise TradingModeConfigError(f"{ENV_REQUIRE_APPROVAL} must be 0 or 1")
 
     @property
     def notional_cap_configured(self) -> bool:
@@ -381,11 +418,33 @@ class TradingPolicy:
                 )
             real_acc_ids = _parse_real_acc_ids(raw_acc_ids)
 
+        raw_symbols = env.get(ENV_SYMBOL_ALLOWLIST)
+        symbols: frozenset[str] = frozenset()
+        if raw_symbols is not None:
+            parts = [item.strip() for item in raw_symbols.split(",")]
+            if not parts or any(not item for item in parts):
+                raise TradingModeConfigError(
+                    f"{ENV_SYMBOL_ALLOWLIST} must not be empty"
+                )
+            symbols = frozenset(parts)
+        raw_daily = env.get(ENV_MAX_DAILY_NOTIONAL)
+        daily = (
+            _parse_notional_caps(raw_daily, ENV_MAX_DAILY_NOTIONAL)
+            if raw_daily is not None
+            else {}
+        )
+        approval = str(env.get(ENV_REQUIRE_APPROVAL, "0")).strip()
+        if approval not in {"0", "1"}:
+            raise TradingModeConfigError(f"{ENV_REQUIRE_APPROVAL} must be 0 or 1")
+
         return cls(
             mode=mode,
             max_order_qty=max_order_qty,
             max_order_notional=max_order_notional,
             real_acc_ids=real_acc_ids,
+            symbol_allowlist=symbols,
+            max_daily_notional=daily,
+            require_approval=approval == "1",
         )
 
     def check_write(self, operation: str, trd_env: str) -> None:
@@ -447,6 +506,13 @@ class TradingPolicy:
             TradingPolicyError: If the order exceeds a limit, or if a configured
                 notional cap cannot be evaluated for it.
         """
+        if self.symbol_allowlist:
+            for leg in facts.legs:
+                if leg.instrument.code not in self.symbol_allowlist:
+                    raise TradingPolicyError(
+                        f"{operation}: {leg.instrument.code} is outside "
+                        "the symbol allowlist"
+                    )
         if self.max_order_qty is not None:
             checked_qty = facts.largest_leg_qty()
             if checked_qty > self.max_order_qty:
@@ -479,6 +545,37 @@ class TradingPolicy:
                 f"{value:,.2f} {currency} exceeds the configured maximum of "
                 f"{cap:,.2f} {currency}."
             )
+
+    def estimate_order(self, operation: str, facts: OrderFacts) -> dict:
+        """Use the existing conservative valuation with exact decimal products."""
+        if facts.is_combo:
+            _, currency, label = self._assess_combo_premium(operation, facts)
+            multiplier = self._monetary_multiplier(operation, facts.legs[0].instrument)
+            price = abs(Decimal(str(facts.price)))
+        else:
+            instrument = facts.legs[0].instrument
+            currency = self._instrument_currency(operation, instrument)
+            multiplier = self._monetary_multiplier(operation, instrument)
+            price = Decimal(str(self._reference_price(operation, facts)))
+            label = "submission notional"
+        quantity = Decimal(facts.qty)
+        monetary_multiplier = Decimal(str(multiplier))
+        with localcontext() as context:
+            context.prec = max(
+                28,
+                sum(
+                    len(number.as_tuple().digits)
+                    for number in (
+                        price,
+                        quantity,
+                        monetary_multiplier,
+                    )
+                ),
+            )
+            value = price * quantity * monetary_multiplier
+        if not value.is_finite() or value < 0:
+            raise TradingPolicyError(f"{operation}: valuation is invalid")
+        return {"amount": format(value, "f"), "currency": currency, "label": label}
 
     def _instrument_currency(self, operation: str, instrument: InstrumentFacts) -> str:
         """The instrument's quote currency, or a refusal.

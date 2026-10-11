@@ -24,6 +24,10 @@ from moomoo_mcp.services.execution_store import (
     ExecutionStore,
     ExecutionStoreError,
 )
+from moomoo_mcp.services.instrument_rules import (
+    normalize_order_session,
+    validate_instrument_order,
+)
 from moomoo_mcp.services.order_errors import not_sent
 from moomoo_mcp.services.paper_recovery import PaperRecovery
 from moomoo_mcp.services.trading_policy import LegFacts, OrderFacts
@@ -227,10 +231,15 @@ class PaperExecution:
         acc_id: int | str,
         admission: ExitStack,
     ) -> dict:
+        params = dict(params)
         with not_sent("paper " + kind):
             self.service.policy.check_write(kind, "SIMULATE")
             validate_token(operation_id, admission_epoch)
             assert operation_id is not None and admission_epoch is not None
+            if kind == "PLACE":
+                normalize_order_session(
+                    params.pop("session", "N/A"), trd_env="SIMULATE"
+                )
             self._schema(kind, params)
         # A failed lookup cannot prove that a previously admitted token was not sent.
         if operation_id in self._late_failure:
@@ -285,6 +294,8 @@ class PaperExecution:
                         ]
                     )
                 )
+                self.service._check_dispatch_controls(account, "SIMULATE")
+                self.service._confirm_dispatch_controls()
                 self.store.mark_dispatch(operation_id, merged)
             except Exception as exc:
                 with not_sent("paper " + kind):
@@ -492,6 +503,13 @@ class PaperExecution:
             raise ValueError("Paper quantity must be a positive whole number")
         price = params.get("price", str(order.get("price")))
         number = decimal_price(price)
+        validate_instrument_order(
+            "paper " + kind,
+            instrument=instruments[0],
+            qty=qty,
+            order_type="NORMAL",
+            price=number,
+        )
         cap = self.service.policy.max_order_notional.get("USD")
         if cap is not None:
             # Preserve the submitted decimal at the monetary limit boundary too.
@@ -499,7 +517,7 @@ class PaperExecution:
                 context.prec = max(128, len(str(qty)) + len(str(price)) + 2)
                 if number * Decimal(str(qty)) > Decimal(str(cap)):
                     raise ValueError("Paper order exceeds the USD notional cap")
-        self.service.policy.assess_order(
+        self.service._assess_order(
             "paper " + kind,
             OrderFacts(
                 order_type="NORMAL",

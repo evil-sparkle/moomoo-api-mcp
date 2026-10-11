@@ -8,11 +8,15 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
+from mcp.server.transport_security import (
+    TransportSecurityMiddleware,
+    TransportSecuritySettings,
+)
 from moomoo.common import ft_logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
@@ -20,6 +24,7 @@ from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.instruments import InstrumentAdapter
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.services.trading_controls import TradingControlError, TradingControls
 from moomoo_mcp.services.trading_policy import TradingModeConfigError
 from moomoo_mcp.settings import (
     Settings,
@@ -34,16 +39,22 @@ logger = logging.getLogger(__name__)
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Enforces constant-time bearer token authorization on HTTP requests."""
 
-    def __init__(self, app, auth_token: str) -> None:
+    def __init__(self, app, auth_token: str, operator_token: str = "") -> None:
         super().__init__(app)
         self.auth_token = auth_token
+        self.operator_token = operator_token
 
     async def dispatch(self, request: Request, call_next) -> Response:
         headers = request.headers.getlist("Authorization")
         auth_header = headers[0] if len(headers) == 1 else ""
         if auth_header.startswith("Bearer ") and auth_header.isascii():
             token = auth_header[7:].strip()
-            if hmac.compare_digest(token, self.auth_token):
+            expected = (
+                self.operator_token
+                if self.operator_token and request.url.path.startswith("/operator/")
+                else self.auth_token
+            )
+            if expected and hmac.compare_digest(token, expected):
                 return await call_next(request)
 
         return JSONResponse(
@@ -134,7 +145,12 @@ def _build_services(settings: Settings | None = None) -> AppContext:
         (prepared[1], prepared[2]) if prepared else _open_execution_stores(resolved)
     )
     dispatcher = BrokerRequestDispatcher()
+    trading_controls = None
     try:
+        if resolved.controls_path:
+            trading_controls = TradingControls(
+                resolved.controls_path, create=resolved.create_controls
+            )
         moomoo_service = MoomooService(
             host=resolved.opend_host, port=resolved.opend_port, dispatcher=dispatcher
         )
@@ -142,6 +158,8 @@ def _build_services(settings: Settings | None = None) -> AppContext:
         for store in (execution_store, real_execution_store):
             if store is not None:
                 store.close()
+        if trading_controls is not None:
+            trading_controls.close()
         raise
     try:
         trade_service = TradeService(
@@ -156,6 +174,7 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             trade_password=resolved.trade_password,
             trade_password_md5=resolved.trade_password_md5,
             dispatcher=dispatcher,
+            trading_controls=trading_controls,
             # Reads the shared quote context through a callable, not the object:
             # the connection is opened lazily and replaced on reconnect, so holding
             # the instance would pin whichever one existed at wiring time.
@@ -168,6 +187,8 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             if store is not None:
                 store.close()
         moomoo_service.close()
+        if trading_controls is not None:
+            trading_controls.close()
         raise
 
     try:
@@ -309,6 +330,9 @@ mcp = FastMCP(
 import moomoo_mcp.tools.account  # noqa: E402, F401
 import moomoo_mcp.tools.market_data  # noqa: E402, F401
 import moomoo_mcp.tools.system  # noqa: E402, F401
+import moomoo_mcp.tools.trade_inspection  # noqa: E402, F401
+import moomoo_mcp.tools.trade_preparation  # noqa: E402, F401
+import moomoo_mcp.tools.trade_queries  # noqa: E402, F401
 import moomoo_mcp.tools.trading  # noqa: E402, F401
 
 
@@ -316,6 +340,8 @@ def create_streamable_http_app(
     auth_token: str | None = None,
     *,
     allow_chatgpt_tunnel_host: bool | None = None,
+    operator_auth_token: str = "",
+    operator_id: str = "",
 ):
     """Build the Starlette Streamable HTTP application with optional bearer auth."""
     enabled = (
@@ -336,8 +362,79 @@ def create_streamable_http_app(
     app = mcp.streamable_http_app()
     raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
     token = raw.strip()
+    if operator_auth_token:
+        if (
+            not token
+            or operator_auth_token == token
+            or not operator_id.strip()
+            or not operator_auth_token.isascii()
+            or not operator_auth_token.isprintable()
+            or any(character.isspace() for character in operator_auth_token)
+            or len(operator_id) > 128
+            or not operator_id.isprintable()
+        ):
+            raise TradingModeConfigError(
+                "Operator approvals require distinct authenticated credentials "
+                "and identity"
+            )
+
+        async def operator_approval(request: Request) -> Response:
+            security_error = await TransportSecurityMiddleware(
+                mcp.settings.transport_security
+            ).validate_request(request, is_post=request.method == "POST")
+            if security_error is not None:
+                return security_error
+            service = get_services().trade_service
+            controls = service.trading_controls
+            if controls is None:
+                return JSONResponse(
+                    {"detail": "Trading controls are unavailable"}, status_code=503
+                )
+            identifier = request.path_params["request_id"]
+            from moomoo_mcp.tools.offload import run_blocking
+
+            try:
+                if request.method == "GET":
+                    result = await run_blocking(controls.get, identifier)
+                else:
+                    body = bytearray()
+                    async for chunk in request.stream():
+                        body.extend(chunk)
+                        if len(body) > 8192:
+                            return JSONResponse(
+                                {"detail": "Decision body too large"}, status_code=413
+                            )
+                    import json
+
+                    payload = json.loads(body)
+                    if (
+                        not isinstance(payload, dict)
+                        or set(payload) != {"decision", "reason"}
+                        or not all(isinstance(value, str) for value in payload.values())
+                    ):
+                        raise ValueError("Supply exactly decision and reason strings")
+                    result = await run_blocking(
+                        controls.decide,
+                        identifier,
+                        payload["decision"],
+                        operator_id=operator_id,
+                        reason=payload["reason"],
+                    )
+                return JSONResponse(result)
+            except (ValueError, TradingControlError) as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=409)
+
+        app.routes.append(
+            Route(
+                "/operator/approvals/{request_id}",
+                operator_approval,
+                methods=["GET", "POST"],
+            )
+        )
     if token:
-        app.add_middleware(BearerAuthMiddleware, auth_token=token)
+        app.add_middleware(
+            BearerAuthMiddleware, auth_token=token, operator_token=operator_auth_token
+        )
     return app
 
 
@@ -389,6 +486,8 @@ def main():
         app = create_streamable_http_app(
             auth_token=settings.auth_token,
             allow_chatgpt_tunnel_host=settings.allow_chatgpt_tunnel_host,
+            operator_auth_token=settings.operator_auth_token,
+            operator_id=settings.operator_id,
         )
         uvicorn.run(app, host=host, port=port)
     except BaseException:

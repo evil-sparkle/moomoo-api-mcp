@@ -59,6 +59,7 @@ OPERATION_POLICIES = {
     "history_deal_list_query": OperationPolicy(
         10, "account", "trade/get-history-order-fill-list.html"
     ),
+    "order_fee_query": OperationPolicy(10, "account", "trade/order-fee-query.html"),
     "acctradinginfo_query": OperationPolicy(
         10, "account", "trade/get-max-trd-qtys.html", group="max_tradable"
     ),

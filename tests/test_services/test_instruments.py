@@ -6,6 +6,7 @@ a code the classification call simply does not return. Each has to become a
 refusal rather than a string or a zero reaching arithmetic.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -23,6 +24,7 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
     TradingPolicyError,
 )
+from tests.rate_limit_clock import FakeClock
 
 
 def _snapshot(**overrides) -> dict:
@@ -318,6 +320,112 @@ class TestAdapter:
 
         with pytest.raises(InstrumentLookupError, match="no instrument codes"):
             adapter([])
+
+
+class TestStaticMetadataCache:
+    def test_cached_classification_does_not_cache_prices_or_option_multiplier(self):
+        code = "US.AAPL260116C300000"
+        ctx = _quote_ctx(
+            [_snapshot(code=code, option_contract_multiplier=100)], {code: "DRVT"}
+        )
+        adapter = InstrumentAdapter(lambda: ctx)
+        first = adapter([code])[0]
+        ctx.get_market_snapshot.return_value = (
+            0,
+            pd.DataFrame(
+                [_snapshot(code=code, last_price=3.25, option_contract_multiplier=150)]
+            ),
+        )
+
+        second = adapter([code])[0]
+
+        assert first.last_price == 150
+        assert second.last_price == 3.25
+        assert second.monetary_multiplier == 150
+        assert ctx.get_market_snapshot.call_count == 2
+        assert ctx.get_stock_basicinfo.call_count == 1
+
+    def test_expiry_refreshes_static_metadata(self):
+        clock = FakeClock()
+        ctx = _quote_ctx([_snapshot()], {"US.AAPL": "STOCK"})
+        adapter = InstrumentAdapter(lambda: ctx, metadata_ttl=5, clock=clock)
+        adapter(["US.AAPL"])
+        clock.advance(4.99)
+        adapter(["US.AAPL"])
+        assert ctx.get_stock_basicinfo.call_count == 1
+        clock.advance(0.01)
+        adapter(["US.AAPL"])
+        assert ctx.get_stock_basicinfo.call_count == 2
+
+    def test_reconnect_invalidates_metadata(self):
+        contexts = [
+            _quote_ctx([_snapshot()], {"US.AAPL": "STOCK"}),
+            _quote_ctx([_snapshot()], {"US.AAPL": "ETF"}),
+        ]
+        selected = [contexts[0]]
+        adapter = InstrumentAdapter(lambda: selected[0])
+        assert adapter(["US.AAPL"])[0].classification == "STOCK"
+        selected[0] = contexts[1]
+        assert adapter(["US.AAPL"])[0].classification == "ETF"
+        assert contexts[1].get_stock_basicinfo.call_count == 1
+
+    def test_capacity_is_bounded_and_evicted_metadata_is_refreshed(self):
+        ctx = _quote_ctx(
+            [_snapshot(), _snapshot(code="US.SPY")],
+            {"US.AAPL": "STOCK", "US.SPY": "ETF"},
+        )
+        adapter = InstrumentAdapter(lambda: ctx, metadata_capacity=1)
+        adapter(["US.AAPL"])
+        adapter(["US.SPY"])
+        adapter(["US.AAPL"])
+        assert ctx.get_stock_basicinfo.call_count == 3
+        assert len(adapter._metadata) == 1
+
+    def test_missing_metadata_is_not_negative_cached(self):
+        classifications = {}
+        ctx = _quote_ctx([_snapshot()], classifications)
+        adapter = InstrumentAdapter(lambda: ctx)
+        with pytest.raises(InstrumentLookupError):
+            adapter(["US.AAPL"])
+        classifications["US.AAPL"] = "STOCK"
+        assert adapter(["US.AAPL"])[0].classification == "STOCK"
+        assert ctx.get_stock_basicinfo.call_count == 2
+
+    def test_static_lot_does_not_replace_premium_multiplier(self):
+        code = "US.AAPL260116C300000"
+        ctx = _quote_ctx(
+            [
+                _snapshot(
+                    code=code, option_contract_size=25, option_contract_multiplier=100
+                )
+            ],
+            {code: "DRVT"},
+        )
+        ctx.get_stock_basicinfo.side_effect = None
+        ctx.get_stock_basicinfo.return_value = (
+            0,
+            pd.DataFrame([{"code": code, "stock_type": "DRVT", "lot_size": 25}]),
+        )
+        fact = InstrumentAdapter(lambda: ctx)([code])[0]
+        assert fact.lot_size == 25
+        assert fact.contract_size == 25
+        assert fact.monetary_multiplier == 100
+
+    def test_concurrent_misses_share_static_metadata_but_read_fresh_snapshots(self):
+        ctx = _quote_ctx([_snapshot()], {"US.AAPL": "STOCK"})
+        adapter = InstrumentAdapter(lambda: ctx)
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            results = list(workers.map(lambda _: adapter(["US.AAPL"]), range(8)))
+        assert all(result[0].classification == "STOCK" for result in results)
+        assert ctx.get_stock_basicinfo.call_count == 1
+        assert ctx.get_market_snapshot.call_count == 8
+
+    def test_zero_ttl_disables_static_reuse(self):
+        ctx = _quote_ctx([_snapshot()], {"US.AAPL": "STOCK"})
+        adapter = InstrumentAdapter(lambda: ctx, metadata_ttl=0)
+        adapter(["US.AAPL"])
+        adapter(["US.AAPL"])
+        assert ctx.get_stock_basicinfo.call_count == 2
 
 
 @pytest.mark.parametrize("is_combo", [False, True])

@@ -51,7 +51,7 @@ ACCOUNT_READ_ENDPOINTS = [
     ),
     ("get_cash_flow", {"trd_env": "simulate", "acc_id": "0"}, "get_acc_cash_flow"),
     ("get_orders", {"trd_env": "simulate", "acc_id": "0"}, "order_list_query"),
-    ("get_deals", {"trd_env": "simulate", "acc_id": "0"}, "deal_list_query"),
+    ("get_deals", {"trd_env": "real", "acc_id": "0"}, "deal_list_query"),
     (
         "get_history_orders",
         {"trd_env": "simulate", "acc_id": "0"},
@@ -59,7 +59,7 @@ ACCOUNT_READ_ENDPOINTS = [
     ),
     (
         "get_history_deals",
-        {"trd_env": "simulate", "acc_id": "0"},
+        {"trd_env": "real", "acc_id": "0"},
         "history_deal_list_query",
     ),
 ]
@@ -585,9 +585,10 @@ def test_every_account_read_forwards_a_concrete_exact_id(
     requested_id,
 ):
     account_id = 9007199254740993
+    environment = arguments["trd_env"].upper()
     mock_trade_ctx.get_acc_list.return_value = (
         RET_OK,
-        pd.DataFrame([{"acc_id": account_id, "trd_env": "SIMULATE"}]),
+        pd.DataFrame([{"acc_id": account_id, "trd_env": environment}]),
     )
     getattr(mock_trade_ctx, sdk_method).return_value = (RET_OK, pd.DataFrame())
 
@@ -597,7 +598,7 @@ def test_every_account_read_forwards_a_concrete_exact_id(
 
     sdk_arguments = getattr(mock_trade_ctx, sdk_method).call_args.kwargs
     assert sdk_arguments["acc_id"] == account_id
-    assert sdk_arguments["trd_env"] == "SIMULATE"
+    assert sdk_arguments["trd_env"] == environment
 
 
 @pytest.mark.parametrize(
@@ -611,12 +612,13 @@ def test_every_account_read_refuses_ambiguous_zero_before_query(
     arguments,
     sdk_method,
 ):
+    environment = arguments["trd_env"].upper()
     mock_trade_ctx.get_acc_list.return_value = (
         RET_OK,
         pd.DataFrame(
             [
-                {"acc_id": 123, "trd_env": "SIMULATE"},
-                {"acc_id": 789, "trd_env": "SIMULATE"},
+                {"acc_id": 123, "trd_env": environment},
+                {"acc_id": 789, "trd_env": environment},
             ]
         ),
     )
@@ -1762,9 +1764,15 @@ class TestInstrumentLookupIntegration:
         service.trade_ctx = ctx
         return service
 
-    def test_no_cap_means_no_lookup(self, mock_trade_ctx):
-        """An unconfigured deployment pays no quote latency for limits."""
-        lookup = MagicMock()
+    def test_instrument_validation_runs_without_a_notional_cap(self, mock_trade_ctx):
+        """A monetary cap is independent of documented instrument rules."""
+        lookup = MagicMock(
+            return_value=[
+                InstrumentFacts(
+                    code="US.AAPL", classification="STOCK", monetary_multiplier=1
+                )
+            ]
+        )
         service = TradeService(policy=REAL_POLICY, instrument_lookup=lookup)
         service.trade_ctx = mock_trade_ctx
         mock_trade_ctx.place_order.return_value = (
@@ -1774,7 +1782,7 @@ class TestInstrumentLookupIntegration:
 
         _place(service, trd_env="REAL")
 
-        lookup.assert_not_called()
+        lookup.assert_called_once_with(["US.AAPL"])
 
     def test_a_cap_makes_the_lookup_run(self, mock_trade_ctx):
         lookup = MagicMock(
@@ -2353,7 +2361,7 @@ class TestGetDeals:
         )
         mock_trade_ctx.deal_list_query.return_value = (0, df)
 
-        result = trade_service_with_mock.get_deals(trd_env="SIMULATE", acc_id=123)
+        result = trade_service_with_mock.get_deals(trd_env="REAL", acc_id=456)
 
         assert len(result) == 1
         assert result[0]["deal_id"] == "D123"
@@ -2363,7 +2371,7 @@ class TestGetDeals:
         df = pd.DataFrame([{"deal_id": "D123", "code": "US.AAPL"}])
         mock_trade_ctx.deal_list_query.return_value = (0, df)
 
-        trade_service_with_mock.get_deals(code="US.AAPL")
+        trade_service_with_mock.get_deals(code="US.AAPL", trd_env="REAL")
 
         call_kwargs = mock_trade_ctx.deal_list_query.call_args.kwargs
         assert call_kwargs["code"] == "US.AAPL"
@@ -2373,7 +2381,7 @@ class TestGetDeals:
         mock_trade_ctx.deal_list_query.return_value = (-1, "Query failed")
 
         with pytest.raises(RuntimeError, match="deal_list_query failed"):
-            trade_service_with_mock.get_deals()
+            trade_service_with_mock.get_deals(trd_env="REAL")
 
 
 class TestGetHistoryOrders:
@@ -2438,8 +2446,8 @@ class TestGetHistoryDeals:
         mock_trade_ctx.history_deal_list_query.return_value = (0, df)
 
         result = trade_service_with_mock.get_history_deals(
-            trd_env="SIMULATE",
-            acc_id=123,
+            trd_env="REAL",
+            acc_id=456,
             start="2025-01-01",
             end="2025-01-15",
         )
@@ -2454,7 +2462,7 @@ class TestGetHistoryDeals:
         df = pd.DataFrame([])
         mock_trade_ctx.history_deal_list_query.return_value = (0, df)
 
-        trade_service_with_mock.get_history_deals(code="US.AAPL")
+        trade_service_with_mock.get_history_deals(code="US.AAPL", trd_env="REAL")
 
         call_kwargs = mock_trade_ctx.history_deal_list_query.call_args.kwargs
         assert call_kwargs["code"] == "US.AAPL"
@@ -2464,7 +2472,7 @@ class TestGetHistoryDeals:
         mock_trade_ctx.history_deal_list_query.return_value = (-1, "Query failed")
 
         with pytest.raises(RuntimeError, match="history_deal_list_query failed"):
-            trade_service_with_mock.get_history_deals()
+            trade_service_with_mock.get_history_deals(trd_env="REAL")
 
 
 class TestStatusFilterConversion:

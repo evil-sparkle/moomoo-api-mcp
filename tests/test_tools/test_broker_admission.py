@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 from moomoo import RET_ERROR, RET_OK
 
+from moomoo_mcp.services.admission import _paper_parameters
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher, QuotaRequest
 from moomoo_mcp.services.execution_identity import canonicalize_request
 from moomoo_mcp.services.execution_store import ExecutionStore
@@ -725,19 +726,17 @@ async def test_concurrent_paper_admission_is_read_after_quota_timeout(
         admission_epoch=store.epoch,
     )
     params.apply_defaults()
-    request = {
-        key: value
-        for key, value in params.arguments.items()
-        if key not in {"trd_env", "acc_id", "operation_id", "admission_epoch"}
-    }
+    # Synthetic concurrent admission must use the executor's canonical paper
+    # request, not presentation defaults such as approval_id or session.
+    kind, request = _paper_parameters("place_order", dict(params.arguments))
     task = asyncio.create_task(run_blocking(trade.place_order, **params.arguments))
     try:
         await clock.wait_for_sleepers()
         # Another caller admits the same token while this caller awaits quota.
         if conflicting:
             request["price"] = "2.00"
-        canonical = canonicalize_request("SIMULATE", 123, "PLACE", request)
-        store.admit("one", store.epoch, 123, "PLACE", canonical, request)
+        canonical = canonicalize_request("SIMULATE", 123, kind, request)
+        store.admit("one", store.epoch, 123, kind, canonical, request)
         clock.advance(5)
         if conflicting:
             with pytest.raises(OrderNotSentError, match="Operation ID conflict"):
