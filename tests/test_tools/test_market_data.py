@@ -1,6 +1,12 @@
 """Market data tools through actual MCP dispatch."""
 
+from unittest.mock import MagicMock
+
+import pandas as pd
 import pytest
+
+from moomoo_mcp.server import mcp
+from moomoo_mcp.services.market_data_service import MarketDataService
 
 
 @pytest.mark.asyncio
@@ -52,18 +58,84 @@ async def test_get_historical_klines(call_tool, mock_market_data_service):
 @pytest.mark.asyncio
 async def test_get_market_snapshot(call_tool, mock_market_data_service):
     """Test get_market_snapshot tool through MCP dispatch."""
-    mock_market_data_service.get_market_snapshot.return_value = [
-        {"code": "US.AAPL", "last_price": 150.0, "pe_ratio": 25.0},
-        {"code": "US.TSLA", "last_price": 250.0},
+    rows = [
+        {
+            "code": "US.AAPL",
+            "last_price": 150.0,
+            "pe_ratio": 25.0,
+            "pe_ttm_ratio": 22.5,
+        },
+        {"code": "US.TSLA", "last_price": 250.0, "pe_ratio": 35.0},
     ]
+    mock_market_data_service.get_market_snapshot.return_value = rows
 
     result = await call_tool("get_market_snapshot", {"codes": ["US.AAPL", "US.TSLA"]})
 
-    assert len(result.structured["result"]) == 2
-    assert result.structured["result"][0]["code"] == "US.AAPL"
+    assert result.structured["result"] == rows
+    assert result.json_blocks == rows
     mock_market_data_service.get_market_snapshot.assert_called_once_with(
         ["US.AAPL", "US.TSLA"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name", ["get_historical_klines", "get_historical_klines_page"]
+)
+async def test_historical_pe_passes_through_mcp(call_tool, mcp_app_context, tool_name):
+    """Preserve broker P/E through the real service and MCP result conversion."""
+    rows = [{"time_key": "2024-02-02 00:00:00", "close": 185.85, "pe_ratio": 30.318}]
+    quote_ctx = MagicMock()
+    quote_ctx.request_history_kline.return_value = (0, pd.DataFrame(rows), None)
+    mcp_app_context.market_data_service = MarketDataService(quote_ctx=quote_ctx)
+
+    result = await call_tool(
+        tool_name,
+        {
+            "code": "US.AAPL",
+            "start": "2024-02-02",
+            "end": "2024-02-02",
+            "autype": "NONE",
+        },
+    )
+
+    if tool_name == "get_historical_klines_page":
+        expected = {"data": rows, "next_cursor": None, "has_more": False}
+        assert result.structured == expected
+        assert result.json == expected
+    else:
+        assert result.structured["result"] == rows
+        assert result.json_blocks == rows
+
+
+@pytest.mark.asyncio
+async def test_snapshot_description_distinguishes_provider_pe_fields():
+    """Check the guidance exposed to AI clients by tools/list."""
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+    description = tools["get_market_snapshot"].description or ""
+
+    assert "pe_ratio" in description
+    assert (
+        "pe_ttm_ratio: Provider's trailing-twelve-month (TTM) P/E ratio" in description
+    )
+    assert "separate from pe_ttm_ratio" in description
+    assert "Missing TTM" in description
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name", ["get_historical_klines", "get_historical_klines_page"]
+)
+async def test_historical_description_explains_pe_basis(tool_name):
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+    description = tools[tool_name].description or ""
+
+    assert "pe_ratio" in description
+    assert "passed through unchanged" in description
+    assert "does not reconstruct point-in-time TTM P/E" in description
+    assert "does not guarantee the earnings basis" in description
+    assert "Missing TTM data is not synthesized" in description
+    assert "a current snapshot cannot supply" in description
 
 
 @pytest.mark.asyncio

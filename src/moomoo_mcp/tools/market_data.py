@@ -102,6 +102,16 @@ async def get_historical_klines(
         - volume: Volume
         - turnover: Turnover
         - change_rate: Price change rate
+        - pe_ratio: Provider-supplied historical P/E, passed through unchanged
+          when present. Do not assume it is trailing-twelve-month (TTM) P/E.
+
+    Note:
+        This tool does not reconstruct point-in-time TTM P/E from earnings
+        announcements or their availability dates. The provider's historical
+        documentation does not guarantee the earnings basis of pe_ratio.
+        Missing TTM data is not synthesized. For current TTM P/E, use
+        get_market_snapshot's pe_ttm_ratio; a current snapshot cannot supply
+        historical TTM values for a backtest.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
     klines = await run_blocking(
@@ -262,7 +272,9 @@ async def get_historical_klines_page(
     Returns:
         Dictionary containing:
         - data: List of candle dictionaries (time_key, open, high, low, close,
-          volume, turnover, change_rate), in the provider's order.
+          volume, turnover, change_rate, and pe_ratio when present), in the
+          provider's order. pe_ratio is provider-supplied historical P/E,
+          passed through unchanged; do not assume it is TTM P/E.
         - next_cursor: Opaque cursor for the following page, or null when the
           range is exhausted.
         - has_more: True when next_cursor is non-null.
@@ -271,6 +283,13 @@ async def get_historical_klines_page(
         range is finished — keep going until next_cursor is null.
 
     Note:
+        This tool does not reconstruct point-in-time TTM P/E from earnings
+        announcements or their availability dates. The provider's historical
+        documentation does not guarantee the earnings basis of pe_ratio.
+        Missing TTM data is not synthesized. For current TTM P/E, use
+        get_market_snapshot's pe_ttm_ratio; a current snapshot cannot supply
+        historical TTM values for a backtest.
+
         When start or end is omitted, the range is resolved once on the first
         page and carried in the cursor, so a traversal that crosses midnight
         keeps reading the same window. A malformed cursor, or one from a
@@ -347,9 +366,17 @@ async def get_market_snapshot(
         - volume: Trading volume
         - turnover: Turnover amount
         - turnover_rate: Turnover rate (%)
-        - pe_ratio: P/E ratio
+        - pe_ratio: Provider's P/E field, separate from pe_ttm_ratio; do not
+          assume it is TTM P/E
+        - pe_ttm_ratio: Provider's trailing-twelve-month (TTM) P/E ratio;
+          use this field for current trailing P/E when available
         - pb_ratio: P/B ratio
         - And many more fields
+
+    Note:
+        Both P/E fields retain the provider's names and values. Missing TTM
+        data is not synthesized from pe_ratio or earnings. This is a current
+        snapshot, not a historical point-in-time TTM series for backtesting.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
     snapshots = await run_blocking(market_data_service.get_market_snapshot, codes)

@@ -116,6 +116,36 @@ class TestGetStockQuote:
 class TestGetHistoricalKlines:
     """Tests for get_historical_klines method."""
 
+    @pytest.mark.parametrize(
+        "method", ["get_historical_klines", "get_historical_klines_page"]
+    )
+    def test_historical_pe_is_preserved_without_fabricating_ttm(
+        self, market_data_service, mock_quote_ctx, method
+    ):
+        """Both history paths preserve the broker field rather than deriving TTM."""
+        rows = [
+            {
+                "time_key": "2024-02-02 00:00:00",
+                "close": 185.85,
+                "pe_ratio": 30.318,
+            }
+        ]
+        mock_quote_ctx.request_history_kline.return_value = (
+            0,
+            pd.DataFrame(rows),
+            b"next-page",
+        )
+
+        result = getattr(market_data_service, method)(
+            "US.AAPL", start="2024-02-02", end="2024-02-02", autype="NONE"
+        )
+
+        if method == "get_historical_klines_page":
+            result, token = result
+            assert token == b"next-page"
+        assert result == rows
+        assert "pe_ttm_ratio" not in result[0]
+
     def test_get_historical_klines_success(self, market_data_service, mock_quote_ctx):
         """Test successful K-line retrieval."""
         df = pd.DataFrame(
@@ -213,6 +243,7 @@ class TestGetMarketSnapshot:
                     "last_price": 150.0,
                     "volume": 1000000,
                     "pe_ratio": 25.0,
+                    "pe_ttm_ratio": 22.5,
                 },
             ]
         )
@@ -224,6 +255,27 @@ class TestGetMarketSnapshot:
         assert result[0]["code"] == "US.AAPL"
         assert result[0]["last_price"] == 150.0
         assert result[0]["pe_ratio"] == 25.0
+        assert result[0]["pe_ttm_ratio"] == 22.5
+
+    @pytest.mark.parametrize("ttm_fields", [{}, {"pe_ttm_ratio": None}])
+    def test_missing_ttm_is_not_fabricated(
+        self, market_data_service, mock_quote_ctx, ttm_fields
+    ):
+        """Unavailable TTM stays unavailable even with other valuation fields."""
+        rows = [
+            {
+                "code": "US.AAPL",
+                "last_price": 150.0,
+                "pe_ratio": 25.0,
+                "earning_per_share": 6.0,
+                **ttm_fields,
+            }
+        ]
+        mock_quote_ctx.get_market_snapshot.return_value = (0, pd.DataFrame(rows))
+
+        result = market_data_service.get_market_snapshot(["US.AAPL"])
+
+        assert result == rows
 
     def test_get_market_snapshot_multiple(self, market_data_service, mock_quote_ctx):
         """Test snapshot for multiple stocks (watchlist scenario)."""
