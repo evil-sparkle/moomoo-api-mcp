@@ -132,10 +132,10 @@ directory and original journal volume prohibit a second harness invocation.
 ## Separate local compatibility follow-up
 
 The operator approved local development of
-[`fix-paper-order-session-evidence`](../archive/2026-10-11-fix-paper-order-session-evidence/proposal.md).
+[`fix-paper-order-session-evidence`](../2026-10-11-fix-paper-order-session-evidence/proposal.md).
 That change accepts explicit RTH with the exact unavailable legacy sentinel and
 retains refusal for missing, contradictory or broader session evidence. Its
-[local verification](../archive/2026-10-11-fix-paper-order-session-evidence/verification.md) is
+[local verification](../2026-10-11-fix-paper-order-session-evidence/verification.md) is
 separate from this provider acceptance record. At that local-development
 snapshot no replacement image had been deployed. The later authorized activation
 and cleanup are recorded below. No original journal row or caller marker was replaced.
@@ -185,7 +185,7 @@ present: placement ACKNOWLEDGED (marker one), original modification REFUSED/NOT_
 zero review/recovery audit rows and no blocking.
 
 Runtime implementation and deployment evidence belong to the separate
-[compatibility runtime verification](../archive/2026-10-11-fix-paper-order-session-evidence/runtime-verification.md).
+[compatibility runtime verification](../2026-10-11-fix-paper-order-session-evidence/runtime-verification.md).
 That record contains the actual replacement image, source/patch provenance, SDK/
 OpenD evidence and local checks. No local build CI approval is claimed. No placement,
 modification, sale, fault injection, recovery acknowledgement or automatic mutation
@@ -208,7 +208,7 @@ Agent/operator authenticated MCP and remembered login succeeded. SDK/OpenD remai
 10.10.7008; exact SIMULATE/US ...0047, USD 336 cap and loopback port are unchanged.
 Read-only current/history queries still show the original order CANCELLED_ALL,
 zero fills and empty positions. No provider mutation ran during this replacement.
-See [migration evidence](../archive/2026-10-11-fix-paper-order-session-evidence/session-migration-verification.md).
+See [migration evidence](../2026-10-11-fix-paper-order-session-evidence/session-migration-verification.md).
 
 The hourly continuation now references the actual deployment and standing paper
 order/fault authority. Local migration/readiness do not establish the remaining
@@ -279,7 +279,7 @@ The operator requested a dedicated Session.RTH fix branch/PR and a validation
 branch containing only planning and verification documents based on the resulting
 main revision. [Fix PR #53](https://github.com/evil-sparkle/moomoo-api-mcp/pull/53)
 contains the source/tests, synced main execution-journal requirement and completed
-[fix archive](../archive/2026-10-11-fix-paper-order-session-evidence/tasks.md).
+[fix archive](../2026-10-11-fix-paper-order-session-evidence/tasks.md).
 It preserves newer main's automatic recovery and broker-governance changes.
 
 The broader earlier caller-agnostic edits to archived OpenSpec/container specs
