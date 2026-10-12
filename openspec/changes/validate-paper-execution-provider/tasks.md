@@ -23,7 +23,8 @@ split from Stage 2 development on 2026-09-23.
   capability, original empty READY journal and direct-agent MCP access were
   verified. The operator confirmed this stack is the sole paper writer; the
   other instance is READ_ONLY. Any MCP-compatible caller can perform the tests;
-  task 2.3 remains unperformed. This completes preparation, not live acceptance.
+  task 2.3 was unperformed in that first phase. This completed preparation,
+  not the later live acceptance.
   The operator subsequently authorized submitting the same bounded order ahead
   of the market session, with RTH-only fills. Verification, modification and
   cancellation retain the approved 21:45–22:00 SGT window. Off-market submission
@@ -73,15 +74,18 @@ split from Stage 2 development on 2026-09-23.
   [fix-paper-order-session-evidence](../archive/2026-10-11-fix-paper-order-session-evidence/tasks.md).
   Its Session.RTH local image was activated on 2026-10-10; the original order
   was cancelled with zero fills. Standing bounded paper-order/fault authority
-  now applies. A successful modification and complete new lifecycle remain
-  unobserved. Fresh source/image identity and execution preflight are required;
+  subsequently applied. A successful modification and complete new lifecycle
+  were still unobserved at that point. Fresh source/image identity and execution
+  preflight are required;
   historical checks do not verify a later main revision.
-  Completed on 2026-10-12: new-main place/price-modify/cancel were each
+  Completed on 2026-10-12: place/price-modify/cancel on the tested e2bb7cf
+  image were each
   ACKNOWLEDGED once, with preserved IDs/epochs, factual CANCELLED_ALL, zero
   fills and empty positions. See the completed live campaign in verification.md.
 - [x] 2.2 Under explicit fault-injection authorization, induce controlled response
   loss during a paper mutation and reconcile (`M03`; former 11.2). Verify no replay,
-  truthful uncertainty, durable blocking and evidence-backed operator recovery;
+  truthful uncertainty, durable blocking and evidence-backed recovery under the
+  selected service contract;
   retain the unresolved journal if evidence cannot release it.
   Completed on 2026-10-12 under current automatic recovery: one SDK reply loss
   produced UNKNOWN_OUTCOME and a durably blocked gate; exact-tag broker recovery

@@ -1,4 +1,11 @@
-# Provider verification — 2026-10-09–10
+# Provider verification — 2026-10-09–12
+
+As of 2026-10-12, all seven tasks are complete for the tested e2bb7cf image and
+selected caller/account, including the operator-approved task 2.5 refinement.
+See the completed live campaign and final artifact-scope sections below. The
+dated incomplete observations remain historical evidence.
+
+## Historical first-phase status — 2026-10-10
 
 The Mac first phase has one acknowledged paper placement and a completed
 read-only observation inside the approved window. A separately authorized

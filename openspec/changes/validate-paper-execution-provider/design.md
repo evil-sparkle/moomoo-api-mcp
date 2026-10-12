@@ -36,11 +36,14 @@ or changing the existing recovery contract to make a test pass.
    evidence to the tested client and caller chain.
    For the separately authorized Mac first-phase lifecycle on 2026-10-09,
    the operator selected this agent as the direct authenticated MCP caller.
-   Task 2.3 remains unperformed; later standing bounded authorization
-   supersedes that initial scope.
+   Task 2.3 was unperformed in that first phase; it completed on 2026-10-12
+   for the selected caller and tested e2bb7cf image. Later standing bounded
+   authorization superseded that initial scope.
 5. Preserve unresolved records and stop on uncertainty. Reconcile with orders and
-   history, then use the separate operator capability only with verified evidence.
-   A missing match or indefinite block is an honest test outcome.
+   history through the selected image's process-owned, read-only automatic
+   recovery and durable evidence. The tested e2bb7cf image supports no retired
+   manual operator override. A missing match or indefinite block is an honest
+   test outcome.
 
 ## Risks / Trade-offs
 

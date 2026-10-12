@@ -39,7 +39,9 @@ its original journal, an operator capability, and access to the intended caller
 for the selected phase. Any MCP-compatible agent or client may be selected; no
 particular product or messaging integration is required. On 2026-10-09 the
 operator selected this agent as the direct MCP caller for the Mac first-phase
-lifecycle. The `M04` caller retry test remains unperformed. Subsequent standing
+lifecycle. The `M04` caller retry test was unperformed in that first phase;
+it completed on 2026-10-12 for the selected Codex/MCP caller and tested e2bb7cf
+image. Subsequent standing
 bounded paper-order/fault authorization supersedes the first-phase-only scope. No REAL orders, production deployment, account reset, or
 journal replacement is authorized by this plan. Evidence
 belongs in this change's verification record.
