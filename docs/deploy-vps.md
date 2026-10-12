@@ -813,8 +813,11 @@ repointing storage does not recover broker actions missing from that journal.
 ### Paper verification boundary
 
 Container checks use an isolated mocked SDK and do not prove live provider
-response-loss recovery, retention or external retry propagation. Those remain in
-[the provider acceptance change](../openspec/changes/validate-paper-execution-provider/proposal.md).
+response-loss recovery, retention or external retry propagation. The
+[archived provider verification](../openspec/changes/archive/2026-10-13-validate-paper-execution-provider/verification.md)
+records bounded live acceptance for the tested e2bb7cf image and selected caller/
+account. Later runtime images and other caller chains need their own provider
+evidence; the archived campaign's intents and fault markers cannot be reused.
 
 ### Journal upgrades and dependent modifications
 

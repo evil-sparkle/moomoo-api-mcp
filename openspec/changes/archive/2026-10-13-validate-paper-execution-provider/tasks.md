@@ -37,7 +37,7 @@ split from Stage 2 development on 2026-09-23.
   order with zero fills and its caller remark, about 20 hours 50 minutes after
   cancellation. Both windows are lower bounds, not measured expiry. The probe ran
   later than its planned 08:15 slot and issued no mutations or unlocks. See
-  [Stage 1 evidence](../archive/2026-09-24-harden-trading-safeguards/verification.md). This closes
+  [Stage 1 evidence](../2026-09-24-harden-trading-safeguards/verification.md). This closes
   retention only, not journaled provider acceptance.
 
 ## 2. Live acceptance
@@ -71,7 +71,7 @@ split from Stage 2 development on 2026-09-23.
   Its epoch changed through the authorized recreation; the refused intent used
   and retained the new epoch. Stop-on-refusal ended this approved attempt.
   The separately authorized local implementation is tracked in
-  [fix-paper-order-session-evidence](../archive/2026-10-11-fix-paper-order-session-evidence/tasks.md).
+  [fix-paper-order-session-evidence](../2026-10-11-fix-paper-order-session-evidence/tasks.md).
   Its Session.RTH local image was activated on 2026-10-10; the original order
   was cancelled with zero fills. Standing bounded paper-order/fault authority
   subsequently applied. A successful modification and complete new lifecycle
