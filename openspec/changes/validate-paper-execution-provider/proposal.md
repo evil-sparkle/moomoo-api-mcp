@@ -36,13 +36,26 @@ Any discovered behavior change needs a separate implementation change.
 
 Requires the completed Stage 2 binary, a separately authorized paper environment,
 its original journal, an operator capability, and access to the intended caller
-chain. No REAL orders, deployment, account reset, or journal replacement is
-authorized by this plan. Evidence belongs in this change's verification record.
+for the selected phase. Any MCP-compatible agent or client may be selected; no
+particular product or messaging integration is required. On 2026-10-09 the
+operator selected this agent as the direct MCP caller for the Mac first-phase
+lifecycle. The `M04` caller retry test was unperformed in that first phase;
+it completed on 2026-10-12 for the selected Codex/MCP caller and tested e2bb7cf
+image. Subsequent standing
+bounded paper-order/fault authorization supersedes the first-phase-only scope. No REAL orders, production deployment, account reset, or
+journal replacement is authorized by this plan. Evidence
+belongs in this change's verification record.
 
 ## Modification visibility acceptance
 
-Include the PR review's acknowledgement-versus-applied-state timing case: quantity
-reduction followed immediately by a price-only modification, plus the reverse field
-order and a restart during delayed observation. Record the actual provider timing
-and verify dependent refusal rather than stale merging. The new adversarial double
-proves the guard's behavior only; it does not establish provider visibility timing.
+Include the PR review's acknowledgement-versus-applied-state timing case:
+quantity reduction followed by a price-only modification, plus the reverse field
+order. Measure actual provider acknowledgement/current/history query timing and
+retain interrupted-read limitations. Separately force one controlled stale target
+observation after a real acknowledged reduction, restart with the original journal
+while its durable visibility guard is pending, and verify pre-dispatch refusal.
+Release the fault, confirm fresh real state and verify a new dependent intent
+preserves the reduced quantity. Keep real provider samples and injected evidence
+separately labeled. Naturally occurring provider lag is not a completion prerequisite.
+This criterion refinement was approved by the operator on 2026-10-12; it changes
+verification evidence requirements only, with no packaged runtime changes.

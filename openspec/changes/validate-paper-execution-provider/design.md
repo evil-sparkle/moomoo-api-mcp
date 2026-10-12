@@ -34,9 +34,16 @@ or changing the existing recovery contract to make a test pass.
    no second application-level mutation invocation. A direct Python harness does
    not establish an external agent client's caller-chain behavior. Scope live
    evidence to the tested client and caller chain.
+   For the separately authorized Mac first-phase lifecycle on 2026-10-09,
+   the operator selected this agent as the direct authenticated MCP caller.
+   Task 2.3 was unperformed in that first phase; it completed on 2026-10-12
+   for the selected caller and tested e2bb7cf image. Later standing bounded
+   authorization superseded that initial scope.
 5. Preserve unresolved records and stop on uncertainty. Reconcile with orders and
-   history, then use the separate operator capability only with verified evidence.
-   A missing match or indefinite block is an honest test outcome.
+   history through the selected image's process-owned, read-only automatic
+   recovery and durable evidence. The tested e2bb7cf image supports no retired
+   manual operator override. A missing match or indefinite block is an honest
+   test outcome.
 
 ## Risks / Trade-offs
 
@@ -45,16 +52,31 @@ or changing the existing recovery contract to make a test pass.
 - Controlled response loss may leave execution blocked → retain the journal;
   use evidence-backed recovery, never a new database against the same account.
 - External caller access may be unavailable → leave its test unchecked, with
-  the missing prerequisite recorded.
+  the missing prerequisite recorded; it does not block an independently
+  authorized direct-agent phase.
 - Retention changes over time → date observations and scope them to the tested
   account, market, SDK and OpenD versions.
 
 ## Review follow-up: acknowledgement and order visibility
 
-The PR review identified an unmeasured timing boundary: a successful modification
-response may precede a subsequent order query reflecting its new fields. An
-adversarial double now separates those events. Development guards dependent
-modifications until a fresh target observation matches the earlier requested total
-quantity and limit price, including across restarts. This guard does not claim
-causality or prove fill status. The provider's actual acknowledgement/query timing
-remains unverified and must be recorded by task 2.5 before unattended execution.
+The PR review identified a timing boundary: a successful modification response
+may precede a subsequent order query reflecting its new fields. Measure the actual
+provider's acknowledgement and current/history observations in both field orders;
+report sampling bounds and read interruptions without claiming an unobserved lag.
+
+For repeatable restart coverage, a bounded external test observer obtains the real
+fresh exact-order observation first, then projects the previously captured quantity/
+price for one dependent preparation read after a real acknowledged reduction. It
+must preserve an unfiltered current/history/positions path and refuse any fill,
+changed status, wrong account/order or mismatched durable prior modification.
+Retain its exclusive fault claim across the same-image process restart, preserving
+the journal's original acknowledgement, epoch and unobserved-modification guard.
+Verify the dependent intent is durably REFUSED/NOT_SENT with marker zero and no
+SDK invocation. After fault release and fresh real-state confirmation, use a new
+intent; never replay the refused token or restore the old quantity.
+
+The operator approved measured real-provider timing plus clearly labeled injected
+restart coverage on 2026-10-12. Natural provider lag is not required to complete
+this controlled guard test. Injected timing cannot establish real provider lag,
+causality or fill behavior. This external test setup changes no packaged runtime
+requirement, recovery policy or shipping source.
