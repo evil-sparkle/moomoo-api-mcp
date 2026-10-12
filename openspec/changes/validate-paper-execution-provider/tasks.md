@@ -1,7 +1,7 @@
 # Tasks
 
-The after-close retention observation is complete; journal acceptance remains
-pending. This is the operator-authorized follow-up
+The seven verification tasks are complete under the 2026-10-12 approved
+visibility-test criterion refinement. This is the operator-authorized follow-up
 split from Stage 2 development on 2026-09-23.
 
 ## 1. Prerequisites and retention
@@ -41,7 +41,7 @@ split from Stage 2 development on 2026-09-23.
 
 ## 2. Live acceptance
 
-- [ ] 2.1 Recheck group 1's provider capabilities, then run one bounded journaled
+- [x] 2.1 Recheck group 1's provider capabilities, then run one bounded journaled
   paper lifecycle: place, modify price and cancel (`M01`, `M02`; former 11.1).
   Verify operation IDs, preserved epochs, journal states, broker identities,
   factual final statuses, fills and resulting exposure in redacted evidence.
@@ -76,11 +76,18 @@ split from Stage 2 development on 2026-09-23.
   now applies. A successful modification and complete new lifecycle remain
   unobserved. Fresh source/image identity and execution preflight are required;
   historical checks do not verify a later main revision.
-- [ ] 2.2 Under explicit fault-injection authorization, induce controlled response
+  Completed on 2026-10-12: new-main place/price-modify/cancel were each
+  ACKNOWLEDGED once, with preserved IDs/epochs, factual CANCELLED_ALL, zero
+  fills and empty positions. See the completed live campaign in verification.md.
+- [x] 2.2 Under explicit fault-injection authorization, induce controlled response
   loss during a paper mutation and reconcile (`M03`; former 11.2). Verify no replay,
   truthful uncertainty, durable blocking and evidence-backed operator recovery;
   retain the unresolved journal if evidence cannot release it.
-- [ ] 2.3 Exercise an authorized MCP agent client's actual retry chain (`M04`;
+  Completed on 2026-10-12 under current automatic recovery: one SDK reply loss
+  produced UNKNOWN_OUTCOME and a durably blocked gate; exact-tag broker recovery
+  recorded one check/audit, released the gate, and allowed one exact cleanup.
+  No replay or retired manual override was used. See verification.md.
+- [x] 2.3 Exercise an authorized MCP agent client's actual retry chain (`M04`;
   former 11.2). Record the client/version, MCP transport and any intermediary.
   Verify unchanged operation ID and admission epoch reach the service across a
   retry and that the application makes no second SDK mutation invocation. The
@@ -89,6 +96,10 @@ split from Stage 2 development on 2026-09-23.
   Standing bounded authorization supersedes the original first-phase-only
   scope. Successful MCP reads alone do not establish retry identity or
   duplicate suppression.
+  Completed on 2026-10-12 through this Codex agent's separately selected
+  authenticated MCP calls: identical saved payload/ID/epoch across one local
+  stored-ACK reply loss, unchanged full row/marker and zero added SDK entries.
+  Client/version/transport and limitations are recorded in verification.md.
 - [x] 2.4 Publish a dated verification record distinguishing observed results,
   limitations and incomplete checks. Verify all claims against captured evidence
   and retain any unresolved operation instead of resetting its journal.
@@ -98,17 +109,27 @@ split from Stage 2 development on 2026-09-23.
   This completes dated publication; it does not establish provider acceptance
   for tasks 2.1, 2.2, 2.3 or 2.5. See [current evidence](verification.md).
 
-- [ ] 2.5 Under separately authorized paper-test bounds, submit a quantity reduction
-  followed immediately by a price-only modification (`M02` visibility timing).
-  Separate the SDK acknowledgement from timestamped current/history order reads;
-  record when the new total quantity and price become visible. For the 100 -> 50
-  share example (or a separately approved smaller equivalent), prove the second
-  mutation never restores the old quantity. If reads lag acknowledgement, verify a
-  pre-dispatch refusal with no second SDK call/marker, then verify a newly authorized
-  intent after the requested state becomes visible. Preserve retries and refused
-  tokens unchanged. Repeat across a process restart while visibility is pending,
-  and measure the reverse price-change then quantity-only case. Do not infer this
-  timing from the adversarial double or claim provider acceptance without evidence.
+- [x] 2.5 Under standing bounded paper-test authorization, submit a quantity
+  reduction followed by a price-only modification (`M02` visibility timing), and
+  measure the reverse price-change then quantity-only case. Separate SDK
+  acknowledgement from timestamped real current/history observations; record
+  sampling bounds and any interrupted-read limitations. For a smaller two-to-one-
+  share equivalent, prove the second mutation never restores the old quantity.
+  Separately induce one controlled stale target observation after a real
+  acknowledged reduction. Restart with the original journal while its durable
+  visibility guard remains pending, preserving acknowledgements and epochs.
+  Keep real current/history/positions reads unfiltered and refuse fault projection
+  on fills, changed status or mismatched account/order/journal state. Verify a
+  durable pre-dispatch REFUSED/NOT_SENT intent with no SDK call or marker. Release
+  the fault, confirm fresh real state and verify a new bounded dependent intent;
+  preserve the refused token unchanged. Clearly distinguish measured provider
+  timing from injected guard/restart evidence. Naturally occurring provider lag
+  is not a completion prerequisite under the operator-approved 2026-10-12
+  criterion refinement. No packaged runtime behavior change is included.
+  Completed on 2026-10-12: forward/reverse provider samples and interrupted-read
+  limitations were measured; the injected guard survived restart and refused
+  before dispatch, then a new intent preserved quantity one after fault release.
+  Refused tokens and original journal/evidence remain unchanged. See verification.md.
 
 ## Session timing
 

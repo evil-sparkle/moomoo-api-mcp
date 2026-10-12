@@ -56,10 +56,24 @@ or changing the existing recovery contract to make a test pass.
 
 ## Review follow-up: acknowledgement and order visibility
 
-The PR review identified an unmeasured timing boundary: a successful modification
-response may precede a subsequent order query reflecting its new fields. An
-adversarial double now separates those events. Development guards dependent
-modifications until a fresh target observation matches the earlier requested total
-quantity and limit price, including across restarts. This guard does not claim
-causality or prove fill status. The provider's actual acknowledgement/query timing
-remains unverified and must be recorded by task 2.5 before unattended execution.
+The PR review identified a timing boundary: a successful modification response
+may precede a subsequent order query reflecting its new fields. Measure the actual
+provider's acknowledgement and current/history observations in both field orders;
+report sampling bounds and read interruptions without claiming an unobserved lag.
+
+For repeatable restart coverage, a bounded external test observer obtains the real
+fresh exact-order observation first, then projects the previously captured quantity/
+price for one dependent preparation read after a real acknowledged reduction. It
+must preserve an unfiltered current/history/positions path and refuse any fill,
+changed status, wrong account/order or mismatched durable prior modification.
+Retain its exclusive fault claim across the same-image process restart, preserving
+the journal's original acknowledgement, epoch and unobserved-modification guard.
+Verify the dependent intent is durably REFUSED/NOT_SENT with marker zero and no
+SDK invocation. After fault release and fresh real-state confirmation, use a new
+intent; never replay the refused token or restore the old quantity.
+
+The operator approved measured real-provider timing plus clearly labeled injected
+restart coverage on 2026-10-12. Natural provider lag is not required to complete
+this controlled guard test. Injected timing cannot establish real provider lag,
+causality or fill behavior. This external test setup changes no packaged runtime
+requirement, recovery policy or shipping source.

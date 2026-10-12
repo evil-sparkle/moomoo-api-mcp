@@ -46,8 +46,14 @@ belongs in this change's verification record.
 
 ## Modification visibility acceptance
 
-Include the PR review's acknowledgement-versus-applied-state timing case: quantity
-reduction followed immediately by a price-only modification, plus the reverse field
-order and a restart during delayed observation. Record the actual provider timing
-and verify dependent refusal rather than stale merging. The new adversarial double
-proves the guard's behavior only; it does not establish provider visibility timing.
+Include the PR review's acknowledgement-versus-applied-state timing case:
+quantity reduction followed by a price-only modification, plus the reverse field
+order. Measure actual provider acknowledgement/current/history query timing and
+retain interrupted-read limitations. Separately force one controlled stale target
+observation after a real acknowledged reduction, restart with the original journal
+while its durable visibility guard is pending, and verify pre-dispatch refusal.
+Release the fault, confirm fresh real state and verify a new dependent intent
+preserves the reduced quantity. Keep real provider samples and injected evidence
+separately labeled. Naturally occurring provider lag is not a completion prerequisite.
+This criterion refinement was approved by the operator on 2026-10-12; it changes
+verification evidence requirements only, with no packaged runtime changes.
