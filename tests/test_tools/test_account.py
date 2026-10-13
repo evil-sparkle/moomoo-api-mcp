@@ -181,7 +181,9 @@ async def test_reporting_currency_in_account_tool_schemas():
 
 
 @pytest.mark.asyncio
-async def test_account_summary_forwards_reporting_currency(call_tool, mock_trade_service):
+async def test_account_summary_forwards_reporting_currency(
+    call_tool, mock_trade_service
+):
     mock_trade_service.get_account_summary.return_value = {
         "assets": {"currency": "SGD", "total_assets": 100.0},
         "positions": [],
@@ -195,7 +197,10 @@ async def test_account_summary_forwards_reporting_currency(call_tool, mock_trade
 
 @pytest.mark.asyncio
 async def test_get_assets_forwards_reporting_currency(call_tool, mock_trade_service):
-    mock_trade_service.get_assets.return_value = {"currency": "USD", "total_assets": 100.0}
+    mock_trade_service.get_assets.return_value = {
+        "currency": "USD",
+        "total_assets": 100.0,
+    }
     result = await call_tool("get_assets", {"currency": "USD"})
     assert result.structured["currency"] == "USD"
     mock_trade_service.get_assets.assert_called_once_with(

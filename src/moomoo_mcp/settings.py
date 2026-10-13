@@ -50,7 +50,16 @@ ENV_ALLOW_UNAUTHENTICATED_HTTP = "MCP_ALLOW_UNAUTHENTICATED_HTTP"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11111
 # OpenD account valuation currencies. This setting never changes instrument currencies.
-VALID_REPORTING_CURRENCIES = ("HKD", "USD", "CNH", "JPY", "SGD", "AUD", "CAD", "MYR")
+VALID_REPORTING_CURRENCIES = (
+    "HKD",
+    "USD",
+    "CNH",
+    "JPY",
+    "SGD",
+    "AUD",
+    "CAD",
+    "MYR",
+)
 VALID_TRANSPORTS = ("streamable-http",)
 
 
