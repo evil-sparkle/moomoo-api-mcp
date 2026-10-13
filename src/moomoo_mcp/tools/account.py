@@ -141,11 +141,14 @@ async def get_account_summary(
         quantities remain numbers. Pass identifiers on unchanged, as strings.
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
+    # Preserve the existing service call shape when no override is supplied.
+    # The service applies its configured default internally.
+    account_args = {"trd_env": trd_env, "acc_id": acc_id}
+    if currency is not None:
+        account_args["currency"] = currency
     summary = await run_blocking(
         trade_service.get_account_summary,
-        trd_env=trd_env,
-        acc_id=acc_id,
-        currency=currency,
+        **account_args,
     )
     await ctx.info(
         f"Retrieved summary for {trd_env} account: "
