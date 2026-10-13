@@ -13,6 +13,7 @@ from moomoo_mcp.settings import (
     ENV_ALLOW_UNAUTHENTICATED_HTTP,
     ENV_AUTH_TOKEN,
     ENV_OPEND_PORT,
+    ENV_REPORTING_CURRENCY,
     ENV_SECURITY_FIRM,
     ENV_TRADING_MARKET,
     ENV_TRANSPORT,
@@ -43,6 +44,7 @@ class TestDefaults:
         assert settings.opend_port == 11111
         assert settings.security_firm is None
         assert settings.trading_market == "NONE"
+        assert settings.reporting_currency is None
         assert settings.has_trade_credential is False
 
     def test_host_and_port_are_read(self):
@@ -134,6 +136,21 @@ class TestTradingMarket:
     def test_missing_or_blank_market_defaults_to_none(self, value):
         env = {} if value is None else {ENV_TRADING_MARKET: value}
         assert load_settings(env).trading_market == "NONE"
+
+
+class TestReportingCurrency:
+    @pytest.mark.parametrize("raw,expected", [("sgd", "SGD"), (" USD ", "USD"), ("HKD", "HKD")])
+    def test_supported_currency_is_normalized(self, raw, expected):
+        assert load_settings({ENV_REPORTING_CURRENCY: raw}).reporting_currency == expected
+
+    @pytest.mark.parametrize("raw", ["", "   "])
+    def test_blank_currency_preserves_sdk_default(self, raw):
+        assert load_settings({ENV_REPORTING_CURRENCY: raw}).reporting_currency is None
+
+    @pytest.mark.parametrize("raw", ["EUR", "USDT", "DEFAULT", "INVALID"])
+    def test_unsupported_currency_refuses_startup(self, raw):
+        with pytest.raises(TradingModeConfigError, match=ENV_REPORTING_CURRENCY):
+            load_settings({ENV_REPORTING_CURRENCY: raw})
 
 
 class TestCredentialPrecedence:

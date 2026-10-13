@@ -309,6 +309,7 @@ password alone never enables REAL writes. Container operators should use the
 | --------------------------- | --------------------------------------------------------------------- | ------------- |
 | `MOOMOO_TRADING_MODE`       | Which writes this server may issue. Default `READ_ONLY`.              | `SIMULATE`    |
 | `MOOMOO_TRADING_MARKET`     | Trade account discovery filter. Default `NONE`; use `HK` for the former HK-only scope. | `NONE` |
+| `MOOMOO_REPORTING_CURRENCY` | Optional default currency for account valuation totals in `get_assets` and `get_account_summary`. Unset preserves SDK default (typically HKD). | `SGD` |
 | `MOOMOO_TRADE_PASSWORD`     | Your trading password (plain text)                                    | `123456`      |
 | `MOOMOO_TRADE_PASSWORD_MD5` | MD5 hash of 6-digit trade PIN (alternative to plain text)             | `e10adc...`   |
 | `MOOMOO_SECURITY_FIRM`      | Your broker region (e.g., FUTUSG, FUTUINC)                            | `FUTUSG`      |
@@ -395,6 +396,22 @@ layer, before any request reaches OpenD.
 
 `check_health` reports the configured mode as `trading_mode` and the account
 discovery filter as `trade_market`, even when OpenD is unavailable.
+
+#### Account reporting currency
+
+Account totals returned by OpenD may be in HKD even when all positions trade in
+USD or SGD. This is an account *reporting currency*, not a conversion of cash or
+securities. To use SGD for totals returned by `get_assets` and
+`get_account_summary`, set `MOOMOO_REPORTING_CURRENCY=SGD` in the server
+environment and restart the process. The setting is validated at startup and
+accepts HKD, USD, CNH, JPY, SGD, AUD, CAD, or MYR. If omitted, no currency
+argument is sent and the OpenD SDK retains its existing default (typically HKD).
+
+Both account tools accept an optional per-call `currency="USD"` to override
+the configured default without changing other requests. Positions keep their
+individual instrument currencies, and cross-currency portfolio allocation
+calculations still need consistent FX conversion. The setting does not change
+trade authorization, place FX trades, or hedge underlying exposures.
 
 #### Trade account discovery and explicit targeting
 

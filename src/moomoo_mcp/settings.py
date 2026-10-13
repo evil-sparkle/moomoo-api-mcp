@@ -40,6 +40,7 @@ ENV_OPEND_HOST = "MOOMOO_OPEND_HOST"
 ENV_OPEND_PORT = "MOOMOO_OPEND_PORT"
 ENV_SECURITY_FIRM = "MOOMOO_SECURITY_FIRM"
 ENV_TRADING_MARKET = "MOOMOO_TRADING_MARKET"
+ENV_REPORTING_CURRENCY = "MOOMOO_REPORTING_CURRENCY"
 ENV_TRADE_PASSWORD = "MOOMOO_TRADE_PASSWORD"
 ENV_TRADE_PASSWORD_MD5 = "MOOMOO_TRADE_PASSWORD_MD5"
 ENV_TRANSPORT = "MCP_TRANSPORT"
@@ -48,6 +49,8 @@ ENV_ALLOW_UNAUTHENTICATED_HTTP = "MCP_ALLOW_UNAUTHENTICATED_HTTP"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11111
+# OpenD account valuation currencies. This setting never changes instrument currencies.
+VALID_REPORTING_CURRENCIES = ("HKD", "USD", "CNH", "JPY", "SGD", "AUD", "CAD", "MYR")
 VALID_TRANSPORTS = ("streamable-http",)
 
 
@@ -94,6 +97,7 @@ class Settings:
     create_controls: bool = False
     operator_auth_token: str = field(default="", repr=False)
     operator_id: str = ""
+    reporting_currency: str | None = None
 
     @property
     def has_trade_credential(self) -> bool:
@@ -156,6 +160,20 @@ def _load_trading_market(environ: Mapping[str, str]) -> str:
         raise TradingModeConfigError(
             f"{ENV_TRADING_MARKET} is set to {raw!r}. Valid values: "
             f"{', '.join(VALID_TRADING_MARKETS)}."
+        )
+    return candidate
+
+
+def _load_reporting_currency(environ: Mapping[str, str]) -> str | None:
+    """Optional account-valuation currency; None preserves the SDK default."""
+    raw = (environ.get(ENV_REPORTING_CURRENCY) or "").strip()
+    if not raw:
+        return None
+    candidate = raw.upper()
+    if candidate not in VALID_REPORTING_CURRENCIES:
+        raise TradingModeConfigError(
+            f"{ENV_REPORTING_CURRENCY} is set to {raw!r}. Valid values: "
+            f"{', '.join(VALID_REPORTING_CURRENCIES)}."
         )
     return candidate
 
@@ -349,6 +367,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         create_controls=create_controls,
         operator_auth_token=operator_token,
         operator_id=operator_id,
+        reporting_currency=_load_reporting_currency(env),
     )
 
 

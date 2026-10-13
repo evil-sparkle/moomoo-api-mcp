@@ -286,6 +286,7 @@ class TradeService:
         simulated_account_allowlist: frozenset[int] = frozenset(),
         dispatcher: BrokerRequestDispatcher | None = None,
         trading_controls: TradingControls | None = None,
+        reporting_currency: str | None = None,
     ):
         """Initialize TradeService.
 
@@ -321,6 +322,8 @@ class TradeService:
                 f"{', '.join(VALID_TRADING_MARKETS)}."
             )
         self.trading_market = candidate_market
+        # Set at construction from startup-validated settings. None keeps SDK default.
+        self.reporting_currency = reporting_currency
         self.policy = policy or TradingPolicy()
         self.trading_controls = trading_controls
         self._control_local = threading.local()
@@ -1024,12 +1027,15 @@ class TradeService:
         )
 
     def get_account_summary(
-        self, trd_env: str = "REAL", acc_id: int | str = "0"
+        self,
+        trd_env: str = "REAL",
+        acc_id: int | str = "0",
+        currency: str | None = None,
     ) -> dict[str, Any]:
         """Resolve once; SDK reads still validate membership and never use zero."""
         trd_env, acc_id = self.resolve_read_account(trd_env, acc_id)
         return {
-            "assets": self._query_assets(trd_env, acc_id),
+            "assets": self._query_assets(trd_env, acc_id, currency=currency),
             "positions": self._query_positions(trd_env, acc_id),
         }
 
@@ -1046,7 +1052,8 @@ class TradeService:
             trd_env: Trading environment, 'REAL' or 'SIMULATE'.
             acc_id: Account ID. Must be obtained from get_accounts().
             refresh_cache: Whether to refresh the cache.
-            currency: Filter by currency (e.g., 'HKD', 'USD'). Leave None for default.
+            currency: Override the configured reporting currency (e.g., SGD, USD).
+                None uses the server setting, or the SDK default if unset.
 
         Returns:
             Dictionary with asset information.
@@ -1072,8 +1079,9 @@ class TradeService:
             "acc_id": acc_id,
             "refresh_cache": refresh_cache,
         }
-        if currency is not None:
-            normalized_currency = currency.strip().upper()
+        selected_currency = self.reporting_currency if currency is None else currency
+        if selected_currency is not None:
+            normalized_currency = selected_currency.strip().upper()
             if normalized_currency:
                 kwargs["currency"] = normalized_currency
 
