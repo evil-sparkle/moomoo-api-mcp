@@ -731,9 +731,7 @@ class TestReportingCurrency:
         assert account_ctx.accinfo_query.call_args.kwargs["currency"] == "SGD"
         account_ctx.get_acc_list.assert_called_once()
 
-    def test_summary_explicit_currency_overrides_configured_default(
-        self, account_ctx
-    ):
+    def test_summary_explicit_currency_overrides_configured_default(self, account_ctx):
         service = TradeService(reporting_currency="SGD")
         service.trade_ctx = account_ctx
         service.get_account_summary(trd_env="SIMULATE", acc_id="123", currency="hkd")
