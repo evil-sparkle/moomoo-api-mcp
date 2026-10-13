@@ -1,0 +1,182 @@
+---
+- name: Record the previous verified release link
+  ansible.builtin.stat:
+    path: "{{ moomoo_mcp_root }}/current"
+    follow: false
+  register: moomoo_mcp_previous
+
+- name: Require the prior release link or the legacy deployment wrapper
+  ansible.builtin.stat:
+    path: "{{ moomoo_mcp_legacy_root }}/scripts/compose-prod.sh"
+  register: moomoo_mcp_legacy
+
+- name: Require a known rollback target before touching the service
+  ansible.builtin.assert:
+    that:
+      - not moomoo_mcp_previous.stat.exists or moomoo_mcp_previous.stat.islnk
+      - moomoo_mcp_previous.stat.islnk | default(false) or moomoo_mcp_legacy.stat.isreg | default(false)
+    fail_msg: Migration needs the existing legacy wrapper; later releases need the current release link.
+
+- name: Check for an existing public selection at this immutable release path
+  ansible.builtin.stat:
+    path: "{{ moomoo_mcp_release }}/deployment.json"
+  register: moomoo_mcp_existing_selection
+
+- name: Read only an existing public release selection
+  ansible.builtin.slurp:
+    src: "{{ moomoo_mcp_release }}/deployment.json"
+  register: moomoo_mcp_existing_public
+  when: moomoo_mcp_existing_selection.stat.exists
+
+- name: Refuse to overwrite different settings in a rollback release
+  ansible.builtin.assert:
+    that: (moomoo_mcp_existing_public.content | b64decode | from_json) == (lookup('ansible.builtin.template', 'deployment.json.j2') | from_json)
+    fail_msg: This release already has different public settings; select a new release before changing them.
+  when: moomoo_mcp_existing_selection.stat.exists
+
+- name: Create a temporary public archive on the controller
+  ansible.builtin.tempfile:
+    state: file
+    suffix: -moomoo-deploy.tar
+  delegate_to: localhost
+  register: moomoo_mcp_bundle
+
+- name: Install only public definitions from the selected source commit
+  block:
+    - name: Export the safe deployment allowlist from Git
+      ansible.builtin.command:
+        argv:
+          - git
+          - -C
+          - "{{ moomoo_mcp_source_dir }}"
+          - archive
+          - --format=tar
+          - "--output={{ moomoo_mcp_bundle.path }}"
+          - "{{ moomoo_mcp_revision }}"
+          - docker-compose.yml
+          - scripts/deployment_manifest.py
+          - scripts/ansible_deployment.py
+          - scripts/deployment_probe.py
+      delegate_to: localhost
+      changed_when: false
+    - name: Create the release directory
+      ansible.builtin.file:
+        path: "{{ moomoo_mcp_release }}"
+        state: directory
+        mode: "0750"
+    - name: Install the public release archive
+      ansible.builtin.unarchive:
+        src: "{{ moomoo_mcp_bundle.path }}"
+        dest: "{{ moomoo_mcp_release }}"
+    - name: Save public image and storage selection
+      ansible.builtin.template:
+        src: deployment.json.j2
+        dest: "{{ moomoo_mcp_release }}/deployment.json"
+        mode: "0640"
+  always:
+    - name: Remove the temporary public archive
+      ansible.builtin.file:
+        path: "{{ moomoo_mcp_bundle.path }}"
+        state: absent
+      delegate_to: localhost
+
+- name: Preserve the existing project and state and validate server-side configuration
+  ansible.builtin.command:
+    argv: [python3, scripts/ansible_deployment.py, prepare]
+    chdir: "{{ moomoo_mcp_release }}"
+  changed_when: false
+
+- name: Pull the exact published images before changing the service
+  ansible.builtin.command:
+    argv: [python3, scripts/ansible_deployment.py, compose, pull]
+    chdir: "{{ moomoo_mcp_release }}"
+  changed_when: false
+
+- name: Start and verify the application with rollback on failure
+  block:
+    - name: Recreate only the selected application and optional tunnel
+      ansible.builtin.command:
+        argv: [python3, scripts/ansible_deployment.py, compose, up, -d, --no-build]
+        chdir: "{{ moomoo_mcp_release }}"
+      changed_when: true
+    - name: Verify authenticated MCP and the runtime isolation settings
+      ansible.builtin.command:
+        argv: [python3, scripts/ansible_deployment.py, verify]
+        chdir: "{{ moomoo_mcp_release }}"
+      changed_when: false
+    - name: Verify local tunnel liveness and startup readiness when selected
+      ansible.builtin.command:
+        argv: [python3, scripts/ansible_deployment.py, tunnel]
+        chdir: "{{ moomoo_mcp_release }}"
+      register: moomoo_mcp_tunnel
+      retries: 15
+      delay: 3
+      until: moomoo_mcp_tunnel.rc == 0
+      changed_when: false
+      when: moomoo_mcp_tunnel_enabled
+  rescue:
+    - name: Restore the previous verified release
+      ansible.builtin.command:
+        argv: [python3, scripts/ansible_deployment.py, compose, up, -d, --no-build, --remove-orphans]
+        chdir: "{{ moomoo_mcp_previous.stat.lnk_source }}"
+      when: moomoo_mcp_previous.stat.islnk | default(false)
+      changed_when: true
+    - name: Restore the untouched legacy deployment on the first migration
+      ansible.builtin.command:
+        argv: ["{{ moomoo_mcp_legacy_root }}/scripts/compose-prod.sh", up, -d, --no-build, --remove-orphans]
+        chdir: "{{ moomoo_mcp_legacy_root }}"
+      when: not (moomoo_mcp_previous.stat.islnk | default(false))
+      changed_when: true
+      no_log: true
+    - name: Fail the release after restoring its predecessor
+      ansible.builtin.fail:
+        msg: Application deployment failed; the previous image selection was restored. Verify its health before retrying.
+
+- name: Report OpenD readiness separately from application deployment
+  ansible.builtin.command:
+    argv: [python3, scripts/ansible_deployment.py, gateway]
+    chdir: "{{ moomoo_mcp_release }}"
+  register: moomoo_mcp_gateway
+  changed_when: false
+  failed_when: false
+
+- name: Report the verified application and broker readiness
+  ansible.builtin.debug:
+    msg:
+      - "Authenticated MCP and READ_ONLY mode verified at {{ moomoo_mcp_image }}."
+      - "{{ 'OpenD quote login and quote/trade probes verified.' if moomoo_mcp_gateway.rc == 0 else 'OpenD readiness unconfirmed; check remembered login and broker diagnostics. Application rollback will not repair broker readiness.' }}"
+      - "{{ 'Tunnel local liveness and startup readiness verified; hosted ChatGPT forwarding requires a separate client check.' if moomoo_mcp_tunnel_enabled else 'Optional tunnel is not selected.' }}"
+
+- name: Select the verified release for subsequent starts
+  ansible.builtin.file:
+    src: "{{ moomoo_mcp_release }}"
+    dest: "{{ moomoo_mcp_root }}/current"
+    state: link
+
+- name: Create the application's user service directory
+  tags: [startup]
+  ansible.builtin.file:
+    path: "{{ moomoo_mcp_home }}/.config/systemd/user"
+    state: directory
+    mode: "0755"
+
+- name: Install the service that starts the verified release after reboot
+  tags: [startup]
+  ansible.builtin.template:
+    src: moomoo-ansible.service.j2
+    dest: "{{ moomoo_mcp_home }}/.config/systemd/user/moomoo-ansible.service"
+    mode: "0644"
+
+- name: Enable the verified release service without interrupting the running containers
+  tags: [startup]
+  ansible.builtin.systemd_service:
+    name: moomoo-ansible.service
+    scope: user
+    daemon_reload: true
+    enabled: true
+
+- name: Retire legacy application startup without stopping its running containers
+  tags: [startup]
+  ansible.builtin.command:
+    argv: [systemctl, --user, disable, moomoo.service]
+  changed_when: false

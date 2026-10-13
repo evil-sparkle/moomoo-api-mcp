@@ -37,25 +37,28 @@ runs under the deploy user's account. OpenD stays on container loopback;
 authenticated MCP is published on host `127.0.0.1:8000`. The default trading mode
 is READ_ONLY.
 
-**For an Ubuntu VPS, follow [the deployment runbook](docs/deploy-vps.md).** It
-covers rootless Docker, ECR access, configuration, one-time interactive OpenD
-login, systemd and recovery. After that setup, routine deployments use:
+**For an existing READ_ONLY Ubuntu deployment, follow the
+[Ansible and CI/CD runbook](docs/deploy-ansible.md).** The application owns its
+Ansible role. A successful main CI run records immutable application and tunnel
+image digests; GitHub Actions then deploys that exact release over Tailscale and
+SSH. The same workflow accepts an older successful CI run for manual rollback.
+The migration preserves the existing Compose project, OpenD login volume and
+journal volumes, and reuses the protected configuration already on the server.
 
-```bash
-cd "$HOME/moomoo"
-./scripts/deploy.sh                 # current origin/main; wait for its CI images
-./scripts/deploy.sh <commit>        # a specific published commit or rollback
-```
+For initial rootless Docker, ECR access, credential entry and interactive OpenD
+login, use the [host setup runbook](docs/deploy-vps.md). `scripts/deploy.sh`
+remains the bootstrap entrypoint and the deployment method for writable modes.
+After Ansible migration, use its workflow or playbook for that server; do not
+mix the legacy script with the release manager.
 
-`deploy.sh` is the sole manual production deployment entrypoint. It selects
-images, applies the saved Compose configuration, verifies authenticated MCP and
-reports gateway readiness. Broker login and trading readiness are separate from
-MCP availability. Do not run a separate OpenD application on the host for this
-container deployment.
+Ansible verifies authenticated MCP and reports OpenD readiness separately.
+Broker login and trading readiness are separate from MCP availability. Do not
+run a separate OpenD application on the host for this container deployment.
 
 - **Optional ChatGPT access:** follow [the tunnel runbook](docs/deploy-vps.md#optional-chatgpt-access)
-  and enable it with `./scripts/deploy.sh --chatgpt`. It permits READ_ONLY or
-  SIMULATE, including real-account reads and supported paper orders.
+  for initial setup. Ansible preserves a selected READ_ONLY tunnel when
+  `MOOMOO_TUNNEL_ENABLED=true`. The legacy script supports READ_ONLY or SIMULATE,
+  including real-account reads and supported paper orders.
 - **Local macOS development:** [the rootless Lima setup](README.md#local-rootless-docker-on-macos)
   provides a Linux Docker daemon for local image builds and container checks.
 - **Paper execution:** [the paper runbook](docs/deploy-vps.md#paper-execution-and-recovery) covers its

@@ -1,0 +1,61 @@
+name: Deploy after main CI
+
+on:
+  workflow_run:
+    workflows: [CI & Docker Build]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Request deployment of the successful release
+    if: >-
+      github.repository == 'evil-sparkle/moomoo-api-mcp' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate the completed CI attempt and current main
+        id: request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          python3 - <<'PY'
+          import os
+          for name in ['CI_RUN_ID', 'CI_RUN_ATTEMPT']:
+              value = os.environ[name]
+              if not value or len(value) > 20 or any(char not in '0123456789' for char in value) or int(value) < 1:
+                  raise SystemExit(name + ' must be a positive ASCII integer.')
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID/attempts/$CI_RUN_ATTEMPT" > "$RUNNER_TEMP/ci-run.json"
+          main_revision=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          python3 scripts/deployment_manifest.py automatic \
+            --run "$RUNNER_TEMP/ci-run.json" --event "$GITHUB_EVENT_PATH" \
+            --main-revision "$main_revision" --output "$GITHUB_OUTPUT"
+      - name: Start the shared deployment workflow
+        if: steps.request.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ steps.request.outputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ steps.request.outputs.ci_run_attempt }}
+        run: |
+          gh workflow run deploy.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f ci_run_id="$CI_RUN_ID" -f ci_run_attempt="$CI_RUN_ATTEMPT" -f automatic=true
+          printf 'Requested deployment of CI run `%s`, attempt `%s`. See the Vultr deployment workflow for rollout results.\n' "$CI_RUN_ID" "$CI_RUN_ATTEMPT" >> "$GITHUB_STEP_SUMMARY"
+      - name: Report an obsolete release
+        if: steps.request.outputs.deploy == 'false'
+        run: echo 'Skipped automatic deployment because this CI revision is no longer current main.' >> "$GITHUB_STEP_SUMMARY"
