@@ -18,6 +18,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from moomoo_mcp.agent_server import AGENT_INSTRUCTIONS, AgentFriendlyMCP
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
 from moomoo_mcp.services.execution_store import ExecutionStore
@@ -287,8 +288,9 @@ async def app_lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
     yield get_services()
 
 
-mcp = FastMCP(
+mcp = AgentFriendlyMCP(
     "Moomoo Trading",
+    instructions=AGENT_INSTRUCTIONS,
     lifespan=app_lifespan,
     dependencies=["moomoo-api", "pandas"],
     # Sessions are held in this process's memory, so a restart invalidates

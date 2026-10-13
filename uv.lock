@@ -438,7 +438,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.0.0" },
     { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.40.1" },
-    { name = "mcp", specifier = ">=1.10.0,<2" },
+    { name = "mcp", specifier = ">=1.25.0,<2" },
     { name = "moomoo-api", specifier = ">=10.10.7008" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.2" },

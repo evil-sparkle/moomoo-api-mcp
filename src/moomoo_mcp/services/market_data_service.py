@@ -16,6 +16,7 @@ from moomoo import (
 
 from moomoo_mcp.services.admission import AdmissionPlan, prepare_market_call
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher, QuotaRequest
+from moomoo_mcp.services.quote_errors import raise_quote_error
 from moomoo_mcp.services.rate_limit import (
     ProviderRequestLimiter,
     RateLimitPolicy,
@@ -141,7 +142,7 @@ class MarketDataService:
             subscribe_push=False,
         )
         if ret != RET_OK:
-            raise RuntimeError(f"subscribe failed: {err}")
+            raise_quote_error("subscribe", err, codes)
 
     def get_subscriptions(self) -> dict:
         """Get the subscriptions held by this server's quote connection.
@@ -240,7 +241,7 @@ class MarketDataService:
             "get_stock_quote", self.quote_ctx.get_stock_quote, codes
         )
         if ret != RET_OK:
-            raise RuntimeError(f"get_stock_quote failed: {data}")
+            raise_quote_error("get_stock_quote", data, codes)
 
         return as_frame("get_stock_quote", data).to_dict("records")
 
@@ -289,7 +290,7 @@ class MarketDataService:
             max_count=max_count,
         )
         if ret != RET_OK:
-            raise RuntimeError(f"request_history_kline failed: {data}")
+            raise_quote_error("request_history_kline", data, [code])
 
         return as_frame("request_history_kline", data).to_dict("records")
 
@@ -343,7 +344,7 @@ class MarketDataService:
             page_req_key=page_req_key,
         )
         if ret != RET_OK:
-            raise RuntimeError(f"request_history_kline failed: {data}")
+            raise_quote_error("request_history_kline", data, [code])
 
         rows = (
             as_frame("request_history_kline", data).to_dict("records")
@@ -382,7 +383,7 @@ class MarketDataService:
             code=underlying,
         )
         if ret != RET_OK:
-            raise RuntimeError(f"get_option_expiration_date failed: {data}")
+            raise_quote_error("get_option_expiration_date", data, [underlying])
 
         return as_frame("get_option_expiration_date", data).to_dict("records")
 
@@ -500,7 +501,7 @@ class MarketDataService:
             option_type=getattr(OptionType, normalized_type),
         )
         if ret != RET_OK:
-            raise RuntimeError(f"get_option_chain failed: {data}")
+            raise_quote_error("get_option_chain", data, [underlying])
 
         return as_frame("get_option_chain", data).to_dict("records")
 
@@ -530,7 +531,7 @@ class MarketDataService:
             "get_market_snapshot", self.quote_ctx.get_market_snapshot, codes
         )
         if ret != RET_OK:
-            raise RuntimeError(f"get_market_snapshot failed: {data}")
+            raise_quote_error("get_market_snapshot", data, codes)
 
         return as_frame("get_market_snapshot", data).to_dict("records")
 
@@ -561,7 +562,7 @@ class MarketDataService:
             "get_order_book", self.quote_ctx.get_order_book, code, num=num
         )
         if ret != RET_OK:
-            raise RuntimeError(f"get_order_book failed: {data}")
+            raise_quote_error("get_order_book", data, [code])
 
         return as_dict("get_order_book", data)
 
