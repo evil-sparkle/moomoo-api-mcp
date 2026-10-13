@@ -173,6 +173,37 @@ def mock_trade_service():
 
 
 @pytest.mark.asyncio
+async def test_reporting_currency_in_account_tool_schemas():
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+    for name in ("get_assets", "get_account_summary"):
+        assert "currency" in tools[name].inputSchema["properties"]
+        assert "currency" not in tools[name].inputSchema.get("required", [])
+
+
+@pytest.mark.asyncio
+async def test_account_summary_forwards_reporting_currency(call_tool, mock_trade_service):
+    mock_trade_service.get_account_summary.return_value = {
+        "assets": {"currency": "SGD", "total_assets": 100.0},
+        "positions": [],
+    }
+    result = await call_tool("get_account_summary", {"currency": "SGD"})
+    assert result.structured["assets"]["currency"] == "SGD"
+    mock_trade_service.get_account_summary.assert_called_once_with(
+        trd_env="REAL", acc_id="0", currency="SGD"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_assets_forwards_reporting_currency(call_tool, mock_trade_service):
+    mock_trade_service.get_assets.return_value = {"currency": "USD", "total_assets": 100.0}
+    result = await call_tool("get_assets", {"currency": "USD"})
+    assert result.structured["currency"] == "USD"
+    mock_trade_service.get_assets.assert_called_once_with(
+        trd_env="REAL", acc_id="0", refresh_cache=False, currency="USD"
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_margin_ratio(call_tool, mock_trade_service):
     """Test get_margin_ratio tool through MCP dispatch."""
     mock_trade_service.get_margin_ratio.return_value = [

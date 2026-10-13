@@ -693,6 +693,49 @@ class TestGetAssets:
         assert result == {}
 
 
+class TestReportingCurrency:
+    @pytest.fixture
+    def account_ctx(self, mock_trade_ctx):
+        mock_trade_ctx.accinfo_query.return_value = (
+            RET_OK,
+            pd.DataFrame([{"currency": "SGD", "total_assets": 100.0}]),
+        )
+        mock_trade_ctx.position_list_query.return_value = (RET_OK, pd.DataFrame([]))
+        return mock_trade_ctx
+
+    def test_unset_default_preserves_sdk_behavior(self, account_ctx):
+        service = TradeService()
+        service.trade_ctx = account_ctx
+        service.get_assets(trd_env="SIMULATE", acc_id="123")
+        assert "currency" not in account_ctx.accinfo_query.call_args.kwargs
+
+    def test_get_assets_uses_configured_currency(self, account_ctx):
+        service = TradeService(reporting_currency="SGD")
+        service.trade_ctx = account_ctx
+        service.get_assets(trd_env="SIMULATE", acc_id="123")
+        assert account_ctx.accinfo_query.call_args.kwargs["currency"] == "SGD"
+
+    def test_get_assets_explicit_override(self, account_ctx):
+        service = TradeService(reporting_currency="SGD")
+        service.trade_ctx = account_ctx
+        service.get_assets(trd_env="SIMULATE", acc_id="123", currency=" usd ")
+        assert account_ctx.accinfo_query.call_args.kwargs["currency"] == "USD"
+
+    def test_summary_uses_configured_currency_and_resolves_account_once(self, account_ctx):
+        service = TradeService(reporting_currency="SGD")
+        service.trade_ctx = account_ctx
+        result = service.get_account_summary(trd_env="SIMULATE", acc_id="123")
+        assert result["assets"]["currency"] == "SGD"
+        assert account_ctx.accinfo_query.call_args.kwargs["currency"] == "SGD"
+        account_ctx.get_acc_list.assert_called_once()
+
+    def test_summary_explicit_currency_overrides_configured_default(self, account_ctx):
+        service = TradeService(reporting_currency="SGD")
+        service.trade_ctx = account_ctx
+        service.get_account_summary(trd_env="SIMULATE", acc_id="123", currency="hkd")
+        assert account_ctx.accinfo_query.call_args.kwargs["currency"] == "HKD"
+
+
 class TestGetPositions:
     """Tests for get_positions."""
 

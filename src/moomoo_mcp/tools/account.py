@@ -66,6 +66,7 @@ async def get_account_summary(
     ctx: Context[ServerSession, AppContext],
     trd_env: str = "REAL",
     acc_id: str = "0",
+    currency: str | None = None,
 ) -> dict[str, Any]:
     """Get complete account summary including assets and positions in one call.
 
@@ -127,6 +128,9 @@ async def get_account_summary(
         trd_env: Trading environment. 'REAL' (default) or 'SIMULATE' (for
             testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().
+        currency: Override the configured account reporting currency, e.g. SGD
+            or USD. None uses MOOMOO_REPORTING_CURRENCY if configured, otherwise
+            the OpenD SDK default. Positions keep their native currencies.
 
     Returns:
         Dictionary with 'assets' (cash, market_val, etc.) and 'positions'
@@ -138,7 +142,10 @@ async def get_account_summary(
     """
     trade_service = ctx.request_context.lifespan_context.trade_service
     summary = await run_blocking(
-        trade_service.get_account_summary, trd_env=trd_env, acc_id=acc_id
+        trade_service.get_account_summary,
+        trd_env=trd_env,
+        acc_id=acc_id,
+        currency=currency,
     )
     await ctx.info(
         f"Retrieved summary for {trd_env} account: "
@@ -176,7 +183,8 @@ async def get_assets(
             testing). See the note above on unlocking before reading REAL data.
         acc_id: Account ID. Must be obtained from get_accounts().
         refresh_cache: Whether to refresh the cache.
-        currency: Filter by currency (e.g., 'HKD', 'USD'). Leave None for default.
+        currency: Account valuation currency (e.g., 'SGD', 'USD'). None uses
+            MOOMOO_REPORTING_CURRENCY, or the OpenD SDK default when unset.
 
     Returns:
         Dictionary with asset information including cash, market_val, total_assets, etc.

@@ -167,6 +167,7 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             port=resolved.opend_port,
             security_firm=resolved.security_firm,
             trading_market=resolved.trading_market,
+            reporting_currency=resolved.reporting_currency,
             policy=resolved.policy,
             execution_store=execution_store,
             real_execution_store=real_execution_store,
