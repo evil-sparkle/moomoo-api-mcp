@@ -144,8 +144,7 @@ class TestReportingCurrency:
     )
     def test_supported_currency_is_normalized(self, raw, expected):
         assert (
-            load_settings({ENV_REPORTING_CURRENCY: raw}).reporting_currency
-            == expected
+            load_settings({ENV_REPORTING_CURRENCY: raw}).reporting_currency == expected
         )
 
     @pytest.mark.parametrize("raw", ["", "   "])
