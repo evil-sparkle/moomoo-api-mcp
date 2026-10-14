@@ -190,6 +190,22 @@ validity flags are not independent financial reconciliation.
 
 ### Market Data
 
+All MCP tool failures expose matching JSON text and structured content with
+`isError: true`, an `error_code`, the tool/operation, observation time,
+`retryable`, and a concrete `next_action`. Shared handling distinguishes invalid
+arguments, unavailable connections, rate limits (including
+`retry_after_seconds`), query cursors, invalid provider responses, and trading
+policy/control/journal failures. Unknown tools direct agents to `tools/list`.
+Validation diagnostics omit supplied values, including passwords and hashes.
+
+Order errors retain their dispatch meaning: `ORDER_NOT_SENT`,
+`ORDER_OUTCOME_UNKNOWN`, and `ORDER_RECEIPT_UNREADABLE`. A nested quote, validation
+or rate-limit failure cannot override that outcome. Uncertain mutations direct
+agents to inspect the original execution and broker orders, preserving account,
+environment and operation identity. They do not authorize resending or changing
+the trading environment. Existing successful execution/recovery results,
+accounting fields, scoped empty results and tool response schemas are preserved.
+
 - `get_stock_quote`: Get real-time stock quotes.
 - `get_historical_klines`: Retrieve historical candlestick data (Day, Week, Min, etc.). Returns a **single page** — the provider's continuation token is discarded, so for a wide date range the list can be a prefix of the range with no indication that more exists. Kept unchanged for existing callers.
 - `get_historical_klines_page`: The same query with explicit continuation, returning `{data, next_cursor, has_more}`. One call fetches one page; loop until `next_cursor` is null. The cursor is bound to the query that produced it, so replaying it with a different symbol, interval, or adjustment is rejected rather than silently mixing series. An empty `data` list with `has_more: true` is possible and does not mean the range is finished.
@@ -205,6 +221,27 @@ validity flags are not independent financial reconciliation.
 - `get_option_chain`: Get option contracts for an underlying within a range of expiry dates, filtered to calls, puts, or all. Returns the exact provider contract symbols to use in quotes, previews, and orders — never build an option symbol by hand. The provider accepts a range of at most 30 days; a wider range is rejected rather than truncated.
 
   Option-chain requests use the shared [broker request dispatcher](#broker-request-limits), with a budget of 10 calls per 30 seconds.
+
+Quote-permission failures return an MCP error with `isError: true` and matching
+JSON text and structured content. `error_code: QUOTE_PERMISSION_DENIED` and
+`retryable: false` distinguish the denial from bad arguments, subscription
+capacity, rate limits and connection failures. The response identifies the
+operation and requested symbols; `denied_codes` contains only symbols explicitly
+named in the provider's denial. A failed batch does not establish permissions
+for every symbol in that batch. Successful response formats are unchanged.
+
+Agents should stop repeating equivalent OpenD requests for the denied data and
+continue with another available market-data tool or web source. Confirm the
+exact instrument, exchange listing and currency, and include the alternative
+source, quote timestamp/timezone and delayed or stale status. Holdings costs and
+account valuations are not verified live market quotes. Independent account
+reads may still succeed. If no suitable alternative is available, mark prices
+unavailable and complete the parts of the task that do not need them. These
+instructions are also exposed during MCP initialization and in quote-tool
+descriptions; the server does not invoke external tools or fetch replacement
+prices itself. Retry the denied request after quote permissions or session
+rights change. App entitlements and trading mode do not establish OpenAPI quote
+access.
 
 ### Trading
 

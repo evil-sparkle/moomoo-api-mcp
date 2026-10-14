@@ -27,6 +27,11 @@ async def get_stock_quote(
     Returns current price, open, high, low, volume, and other quote data.
     Automatically subscribes to the stocks before fetching quotes.
 
+    On QUOTE_PERMISSION_DENIED, stop repeated equivalent OpenD requests and
+    continue with another available market-data tool or web source. Confirm the
+    exact listing and currency, and report the source, quote timestamp/timezone
+    and delayed or stale status.
+
     Args:
         codes: List of stock codes (e.g., ['US.AAPL', 'HK.00700']).
 
@@ -350,6 +355,11 @@ async def get_market_snapshot(
     This is ideal for checking current status of a watchlist without subscription.
     Returns comprehensive market data including price, volume, and fundamentals.
 
+    On QUOTE_PERMISSION_DENIED, stop repeated equivalent OpenD requests and
+    continue with another available market-data tool or web source. Confirm the
+    exact listing and currency, and report the source, quote timestamp/timezone
+    and delayed or stale status. Independent account reads may still succeed.
+
     Args:
         codes: List of stock codes (up to 400).
             E.g., ['US.AAPL', 'US.TSLA', 'HK.00700'].
@@ -395,6 +405,11 @@ async def get_order_book(
     Returns the top N bid and ask levels with prices and volumes.
     Useful for analyzing liquidity and market sentiment.
     Automatically subscribes to the stock before fetching order book.
+
+    On QUOTE_PERMISSION_DENIED, stop repeated equivalent OpenD requests and
+    continue with another available market-data tool or web source. Confirm the
+    exact listing and currency, and report the source, quote timestamp/timezone
+    and delayed or stale status.
 
     Args:
         code: Stock code (e.g., 'HK.00700', 'US.AAPL').

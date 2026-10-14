@@ -18,6 +18,10 @@ from typing import Any
 import pandas as pd
 
 
+class SDKResponseError(RuntimeError):
+    """The provider reported success with an unusable payload shape."""
+
+
 def as_frame(operation: str, data: Any) -> pd.DataFrame:
     """Return a successful response's payload as a DataFrame.
 
@@ -33,7 +37,7 @@ def as_frame(operation: str, data: Any) -> pd.DataFrame:
         RuntimeError: If the payload is not a DataFrame.
     """
     if not isinstance(data, pd.DataFrame):
-        raise RuntimeError(
+        raise SDKResponseError(
             f"{operation} reported success but returned "
             f"{type(data).__name__}, expected a DataFrame"
         )
@@ -55,7 +59,7 @@ def as_dict(operation: str, data: Any) -> dict:
         RuntimeError: If the payload is not a dict.
     """
     if not isinstance(data, dict):
-        raise RuntimeError(
+        raise SDKResponseError(
             f"{operation} reported success but returned "
             f"{type(data).__name__}, expected a dict"
         )
@@ -77,7 +81,7 @@ def as_list(operation: str, data: Any) -> list:
         RuntimeError: If the payload is not a list.
     """
     if not isinstance(data, list):
-        raise RuntimeError(
+        raise SDKResponseError(
             f"{operation} reported success but returned "
             f"{type(data).__name__}, expected a list"
         )
