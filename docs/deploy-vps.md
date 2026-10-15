@@ -1,5 +1,11 @@
 # Deploy moomoo-api-mcp to an Ubuntu server
 
+For an existing READ_ONLY stack, use the
+[Ansible and CI/CD migration runbook](deploy-ansible.md) for routine releases.
+This runbook remains the initial host, credentials and OpenD login setup, and
+the legacy deployment path for SIMULATE/REAL. Once migrated, use
+`moomoo-ansible.service` and the native deployment workflow for that server.
+
 [Host setup](#one-time-provision-the-host) ·
 [First deployment](#one-time-deploy-the-application) ·
 [Upgrade and rollback](#everyday-deploy-a-new-image) ·
@@ -14,8 +20,8 @@ to having a running, logged-in stack on a fresh Ubuntu server (VPS or
 otherwise). Tested on Ubuntu 24.04 LTS; other Linux distributions with rootless
 Docker should work but are untested.
 
-Use `scripts/deploy.sh` for every manual deployment, including upgrades and
-rollback. `compose-prod.sh` is the shared internal wrapper for diagnostics,
+Before Ansible migration, use `scripts/deploy.sh` for manual deployment,
+including upgrades and rollback. `compose-prod.sh` is its internal wrapper for diagnostics,
 interactive login and service management; it is not an alternative image-selection
 workflow.
 

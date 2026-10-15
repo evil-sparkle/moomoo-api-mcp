@@ -1,0 +1,79 @@
+---
+- name: Require a non-root target and a public immutable release selection
+  ansible.builtin.assert:
+    that:
+      - ansible_user != 'root'
+      - moomoo_mcp_source_dir | length > 0
+      - moomoo_mcp_revision | length == 40
+      - moomoo_mcp_revision | list | difference('0123456789abcdef' | list) | length == 0
+      - moomoo_mcp_image.count('@sha256:') == 1
+      - moomoo_mcp_tunnel_image.count('@sha256:') == 1
+      - moomoo_mcp_project | length > 0
+      - moomoo_mcp_env_file.startswith('/')
+      - moomoo_mcp_expected_mode == 'READ_ONLY'
+      - moomoo_mcp_tunnel_enabled is boolean
+    fail_msg: Select one non-root host, an exact source commit, ECR digests and the existing project.
+
+- name: Identify the application user
+  ansible.builtin.command: id -u
+  register: moomoo_mcp_uid
+  changed_when: false
+  check_mode: false
+
+- name: Identify the supported host architecture
+  ansible.builtin.command: uname -m
+  register: moomoo_mcp_arch
+  changed_when: false
+  check_mode: false
+
+- name: Require non-root Linux AMD64 deployment
+  ansible.builtin.assert:
+    that:
+      - moomoo_mcp_uid.stdout | int > 0
+      - moomoo_mcp_arch.stdout == 'x86_64'
+
+- name: Select this user's existing rootless Docker socket
+  ansible.builtin.set_fact:
+    moomoo_mcp_docker_env:
+      DOCKER_HOST: "unix:///run/user/{{ moomoo_mcp_uid.stdout }}/docker.sock"
+      DOCKER_CONTEXT: ""
+      XDG_RUNTIME_DIR: "/run/user/{{ moomoo_mcp_uid.stdout }}"
+
+- name: Verify the existing Docker engine without reading its credential configuration
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{json .SecurityOptions}}' }}"]
+  environment: "{{ moomoo_mcp_docker_env }}"
+  register: moomoo_mcp_security
+  changed_when: false
+  check_mode: false
+
+- name: Require the rootless engine
+  ansible.builtin.assert:
+    that: "'name=rootless' in (moomoo_mcp_security.stdout | from_json)"
+
+- name: Create the shared public release directory
+  ansible.builtin.file:
+    path: "{{ moomoo_mcp_root }}"
+    state: directory
+    mode: "0750"
+  when: not ansible_check_mode
+
+- name: Serialize native releases and runtime changes
+  when: not ansible_check_mode
+  environment: "{{ moomoo_mcp_docker_env }}"
+  block:
+    - name: Acquire an exclusive lock without replacing another caller's lock
+      ansible.builtin.command:
+        argv: [mkdir, "{{ moomoo_mcp_root }}/.deployment-lock"]
+      register: moomoo_mcp_lock
+      changed_when: true
+    - name: Install and validate the public release while holding the lock
+      ansible.builtin.import_tasks: deploy.yml
+  always:
+    - name: Release only the lock acquired by this caller
+      ansible.builtin.command:
+        argv: [rmdir, "{{ moomoo_mcp_root }}/.deployment-lock"]
+      changed_when: true
+      when:
+        - moomoo_mcp_lock is defined
+        - moomoo_mcp_lock is succeeded

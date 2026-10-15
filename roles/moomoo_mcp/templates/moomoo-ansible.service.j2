@@ -1,0 +1,19 @@
+[Unit]
+Description=Moomoo OpenD and MCP from a verified Ansible release
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=DOCKER_HOST=unix:///run/user/{{ moomoo_mcp_uid.stdout }}/docker.sock
+Environment=DOCKER_CONTEXT=
+Environment=XDG_RUNTIME_DIR=/run/user/{{ moomoo_mcp_uid.stdout }}
+WorkingDirectory={{ moomoo_mcp_root }}/current
+ExecStart=/usr/bin/python3 {{ moomoo_mcp_root }}/current/scripts/ansible_deployment.py compose up -d --no-build
+ExecStop=/usr/bin/python3 {{ moomoo_mcp_root }}/current/scripts/ansible_deployment.py compose stop
+TimeoutStartSec=120
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

@@ -380,6 +380,7 @@ jobs:
           done
 
           echo "rebuild_needed=false" >> "$GITHUB_OUTPUT"
+          echo "digest=${target_digest}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve image tags
         id: tags
@@ -427,6 +428,7 @@ jobs:
           echo 'IMAGE_LABELS' >> "$GITHUB_OUTPUT"
 
       - name: Build and push
+        id: build
         if: needs.changes.outputs[matrix.image] == 'true' || steps.retag.outputs.rebuild_needed == 'true'
         uses: docker/build-push-action@v7
         with:
@@ -438,3 +440,76 @@ jobs:
           labels: ${{ steps.context.outputs.labels }}
           cache-from: type=gha,scope=${{ env.IMAGE }}
           cache-to: type=gha,mode=max,scope=${{ env.IMAGE }}
+
+      - name: Record the published immutable image
+        if: env.PUSH == 'true'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          RETAG_DIGEST: ${{ steps.retag.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.deployment_manifest import validate_image
+          digest = os.environ['BUILD_DIGEST'] or os.environ['RETAG_DIGEST']
+          image = validate_image(os.environ['REGISTRY'] + '/moomoo-api-mcp@' + digest)
+          Path('published-image.txt').write_text(image + '\n')
+          PY
+      - name: Save the image record for this CI attempt
+        if: env.PUSH == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: moomoo-image-${{ matrix.image }}-${{ github.run_attempt }}
+          path: published-image.txt
+          retention-days: 30
+
+  deployment-manifest:
+    name: Record deployable release
+    needs: [docker-build, smoke, openspec, test, deployment-checks]
+    if: >-
+      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.docker-build.result == 'success' && needs.openspec.result == 'success'
+      && needs.deployment-checks.result == 'success'
+      && (needs.test.result == 'success' || needs.test.result == 'skipped')
+      && (needs.smoke.result == 'success' || needs.smoke.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: moomoo-image-*-${{ github.run_attempt }}
+          path: release-images
+      - name: Bind both published images to this source and CI attempt
+        run: |
+          image=$(cat "release-images/moomoo-image-moomoo-api-mcp-$GITHUB_RUN_ATTEMPT/published-image.txt")
+          tunnel_image=$(cat "release-images/moomoo-image-moomoo-chatgpt-tunnel-$GITHUB_RUN_ATTEMPT/published-image.txt")
+          python3 scripts/deployment_manifest.py publish --image "$image" --tunnel-image "$tunnel_image" --output deployment.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: moomoo-deployment-${{ github.run_attempt }}
+          path: deployment.json
+          retention-days: 30
+
+  deployment-checks:
+    name: Validate native deployment and rollback
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install the same Ansible runtime as the deployment workflow
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ansible"
+          "$RUNNER_TEMP/ansible/bin/pip" install ansible-core==2.21.5
+          echo "$RUNNER_TEMP/ansible/bin" >> "$GITHUB_PATH"
+      - name: Validate the playbook without connecting to a host
+        working-directory: deployments/moomoo
+        run: ansible-playbook deploy.yml --syntax-check --limit vultr -i tests/inventory.ini
+      - name: Exercise release provenance, probes, state preservation and rollback
+        run: python3 -m unittest discover -s deployments/moomoo/tests -v

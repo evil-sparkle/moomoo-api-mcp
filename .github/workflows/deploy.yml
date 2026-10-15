@@ -1,0 +1,191 @@
+name: Vultr deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: Successful main CI run containing a deployment manifest
+        required: true
+        type: string
+      ci_run_attempt:
+        description: CI attempt to deploy (blank selects the latest attempt)
+        required: false
+        default: ''
+        type: string
+      automatic:
+        description: Require current main (set by automatic CI deployment)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: moomoo-vultr-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  release:
+    name: Verify published release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      revision: ${{ steps.release.outputs.revision }}
+      image: ${{ steps.release.outputs.image }}
+      tunnel_image: ${{ steps.release.outputs.tunnel_image }}
+      deploy: ${{ steps.release.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate CI run and deployment manifest
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
+          AUTOMATIC: ${{ inputs.automatic }}
+        run: |
+          python3 - <<'PY'
+          import os
+          value = os.environ['CI_RUN_ID']
+          if not value or len(value) > 20 or any(char not in '0123456789' for char in value) or int(value) < 1:
+              raise SystemExit('CI run ID must be a positive ASCII integer.')
+          attempt = os.environ['CI_RUN_ATTEMPT']
+          if (attempt and (len(attempt) > 20 or any(char not in '0123456789' for char in attempt) or int(attempt) < 1)) or (os.environ['AUTOMATIC'] == 'true' and not attempt):
+              raise SystemExit('Automatic deployment requires an explicit positive CI attempt.')
+          PY
+          run_path="repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID"
+          if [ -n "$CI_RUN_ATTEMPT" ]; then run_path="$run_path/attempts/$CI_RUN_ATTEMPT"; fi
+          gh api "$run_path" > "$RUNNER_TEMP/ci-run.json"
+          python3 scripts/deployment_manifest.py run --run "$RUNNER_TEMP/ci-run.json" --output "$RUNNER_TEMP/artifact-name"
+          artifact_name=$(cat "$RUNNER_TEMP/artifact-name")
+          gh run download "$CI_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$artifact_name" --dir "$RUNNER_TEMP/release"
+          options=()
+          if [ "$AUTOMATIC" = true ]; then
+            main_revision=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+            options=(--automatic --main-revision "$main_revision")
+          fi
+          python3 scripts/deployment_manifest.py select "${options[@]}" \
+            --run "$RUNNER_TEMP/ci-run.json" \
+            --manifest "$RUNNER_TEMP/release/deployment.json" \
+            --output "$GITHUB_OUTPUT"
+      - name: Report an obsolete automatic release
+        if: steps.release.outputs.deploy == 'false'
+        run: echo 'Skipped automatic deployment because this CI revision is no longer current main. Manual rollback can still select an older successful release.' >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy and verify Vultr
+    needs: release
+    if: needs.release.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: vultr-production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VPS_HOST: ${{ vars.VPS_HOST }}
+      VPS_USER: ${{ vars.VPS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT }}
+      MOOMOO_COMPOSE_PROJECT: ${{ vars.MOOMOO_COMPOSE_PROJECT }}
+      MOOMOO_ENV_FILE: ${{ vars.MOOMOO_ENV_FILE }}
+      MOOMOO_TUNNEL_ENABLED: ${{ vars.MOOMOO_TUNNEL_ENABLED || 'false' }}
+    steps:
+      - name: Require deployment access configuration
+        env:
+          TS_CLIENT_ID: ${{ vars.TS_CLIENT_ID }}
+          TS_AUDIENCE: ${{ vars.TS_AUDIENCE }}
+          VPS_HOST_KEY: ${{ vars.VPS_HOST_KEY }}
+          HAS_SSH_KEY: ${{ secrets.VPS_SSH_KEY != '' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          names = ['TS_CLIENT_ID', 'TS_AUDIENCE', 'VPS_HOST', 'VPS_USER', 'VPS_PORT', 'VPS_HOST_KEY', 'MOOMOO_COMPOSE_PROJECT', 'MOOMOO_ENV_FILE']
+          missing = [name for name in names if not os.environ.get(name)]
+          missing += [name for name, flag in [('VPS_SSH_KEY', 'HAS_SSH_KEY')] if os.environ[flag] != 'true']
+          if missing:
+              raise SystemExit('Configure vultr-production settings: ' + ', '.join(missing))
+          PY
+      - name: Checkout exact application source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release.outputs.revision }}
+          path: moomoo-api-mcp
+          persist-credentials: false
+      - name: Require deployment code in the selected release
+        run: test -f moomoo-api-mcp/deployments/moomoo/deploy.yml && test -f moomoo-api-mcp/roles/moomoo_mcp/tasks/main.yml
+      - name: Install pinned Ansible runtime
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ansible"
+          "$RUNNER_TEMP/ansible/bin/pip" install ansible-core==2.21.5
+          echo "$RUNNER_TEMP/ansible/bin" >> "$GITHUB_PATH"
+      - name: Join the deployment tailnet using OIDC
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4
+        with:
+          oauth-client-id: ${{ vars.TS_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:moomoo-deploy
+          ping: ${{ vars.VPS_HOST }}
+      - name: Prepare SSH agent and pinned public host key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ vars.VPS_HOST_KEY }}
+          SSH_AUTH_SOCK: ${{ runner.temp }}/moomoo-ssh/agent.sock
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/moomoo-ssh"
+          eval "$(ssh-agent -a "$SSH_AUTH_SOCK" -s)" >/dev/null
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          if ! printf '%s\n' "$VPS_SSH_KEY" | ssh-add - >/dev/null 2>&1; then
+            echo 'Could not load the deployment SSH identity.' >&2
+            exit 1
+          fi
+          printf '%s\n' "$VPS_HOST_KEY" > "$RUNNER_TEMP/moomoo-ssh/known_hosts"
+          ssh-keygen -l -f "$RUNNER_TEMP/moomoo-ssh/known_hosts"
+      - name: Configure public deployment inputs
+        env:
+          SOURCE_REVISION: ${{ needs.release.outputs.revision }}
+          MCP_IMAGE: ${{ needs.release.outputs.image }}
+          TUNNEL_IMAGE: ${{ needs.release.outputs.tunnel_image }}
+        run: |
+          python3 moomoo-api-mcp/scripts/deployment_manifest.py configure \
+            --revision "$SOURCE_REVISION" --image "$MCP_IMAGE" --tunnel-image "$TUNNEL_IMAGE" \
+            --inventory moomoo-api-mcp/deployments/moomoo/inventory.actions.json \
+            --settings "$RUNNER_TEMP/deployment.json"
+      - name: Deploy through native Ansible and run live checks
+        working-directory: moomoo-api-mcp/deployments/moomoo
+        env:
+          ANSIBLE_CONFIG: ./ansible.cfg
+          ANSIBLE_SSH_COMMON_ARGS: -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o UserKnownHostsFile=${{ runner.temp }}/moomoo-ssh/known_hosts
+        run: ansible-playbook deploy.yml --limit vultr -i inventory.actions.json -e "@$RUNNER_TEMP/deployment.json"
+      - name: Record deployment outcome
+        if: always()
+        env:
+          OUTCOME: ${{ job.status }}
+          SOURCE_REVISION: ${{ needs.release.outputs.revision }}
+          MCP_IMAGE: ${{ needs.release.outputs.image }}
+          TUNNEL_IMAGE: ${{ needs.release.outputs.tunnel_image }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt }}
+          AUTOMATIC: ${{ inputs.automatic }}
+        run: |
+          {
+            printf 'Deployment result: **%s**\n\n' "$OUTCOME"
+            printf 'Application commit: `%s`\n\n' "$SOURCE_REVISION"
+            printf 'Image: `%s`\n\n' "$MCP_IMAGE"
+            printf 'Tunnel image (only started when selected): `%s`\n\n' "$TUNNEL_IMAGE"
+            printf 'Source CI run: `%s`\n\n' "$CI_RUN_ID"
+            printf 'Requested CI attempt: `%s` (blank means latest)\n\n' "$CI_RUN_ATTEMPT"
+            printf 'Automatic request: `%s`\n\n' "$AUTOMATIC"
+            printf 'For rollback, rerun this workflow with a previous successful CI run containing the in-repository deployment code.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove ephemeral SSH session
+        if: always()
+        run: |
+          if [ -n "${SSH_AGENT_PID:-}" ]; then ssh-agent -k >/dev/null; fi
+          rm -rf "$RUNNER_TEMP/moomoo-ssh"
