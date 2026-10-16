@@ -207,6 +207,8 @@ def test_published_tags_are_disjoint_and_match_deploy_lookup(tmp_path, prefix):
         ("docs/guide.md\nsrc/moomoo_mcp/tools/account.py", True, True, True, False),
         ("docker-compose.smoke.yml", True, True, False, False),
         ("docker-compose.paper.yml", True, True, False, False),
+        ("docker-compose.controls.yml", True, True, False, False),
+        ("tests/test_environment_contract.py", True, True, False, False),
         ("scripts/test-paper-container.sh", True, True, False, False),
         ("tests/fixtures/paper_container_checks.py", True, True, False, False),
         ("tests/fixtures/opend_stub.py", True, True, False, False),

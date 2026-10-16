@@ -60,13 +60,17 @@ dc() {
     -f docker-compose.yml -f docker-compose.smoke.yml -f "$ISOLATION_FILE" "$@"
 }
 
+dc_controls() {
+  dc -f docker-compose.controls.yml "$@"
+}
+
 cleanup() {
   local status=$?
   if [ "$status" -ne 0 ]; then
     echo "--- ${SERVICE} ---" >&2
     dc logs --tail=60 "$SERVICE" >&2 || true
   fi
-  dc down -v --remove-orphans >/dev/null 2>&1 || true
+  dc_controls down -v --remove-orphans >/dev/null 2>&1 || true
   rm -f "$ENV_FILE" "$ISOLATION_FILE"
   rm -rf "$FIXTURE_DIR"
 }
@@ -249,6 +253,28 @@ if [ "${SMOKE_REUSE_IMAGE:-0}" = 1 ]; then
 else
   dc up -d --build --quiet-pull
 fi
+
+echo "==> controls storage is writable by UID 10001 and survives recreation"
+for action in initialize reopen; do
+  dc_controls run --rm --no-deps -T --entrypoint python "$SERVICE" -c '
+import os
+import sqlite3
+import sys
+from moomoo_mcp.services.trading_controls import TradingControls
+
+assert os.getuid() == 10001
+path = os.environ["MOOMOO_TRADING_CONTROLS_PATH"]
+store = TradingControls(path, create=sys.argv[1] == "initialize")
+try:
+    if sys.argv[1] == "initialize":
+        store.prepare("cancel_order", {"acc_id": "123"}, {})
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT status FROM prepared").fetchall() == [("PENDING",)]
+finally:
+    store.close()
+' "$action"
+done
+
 published="$(dc port "$SERVICE" 8000)"
 [[ "$published" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'Invalid fixture publication' >&2; exit 1; }
 ENDPOINT="http://$published/mcp"

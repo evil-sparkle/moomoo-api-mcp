@@ -591,7 +591,8 @@ class TradingPolicy:
                 f"currency {instrument.code} quotes in. A market prefix is a "
                 "venue, not a currency, so only verified markets "
                 f"({', '.join(sorted(VERIFIED_MARKET_CURRENCIES))}) can be "
-                "valued. Remove the notional cap to place this order."
+                "valued. Adding a currency cap or changing account reporting "
+                "currency does not establish this instrument's quote currency."
             )
         return currency
 

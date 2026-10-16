@@ -17,6 +17,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Name-only arguments preserve Dockerfile defaults when unset and allow
+      # explicit .env overrides for local builds. Production pulls an image.
+      args:
+        - OPEND_VERSION
+        - OPEND_TAG
+        - OPEND_URL
+        - OPEND_SHA256
     container_name: moomoo-api-mcp
     restart: unless-stopped
     # Deliberately no `init: true`. docker-init would take PID 1 and push the
@@ -53,6 +60,7 @@ services:
       - MOOMOO_TRADING_MODE=${MOOMOO_TRADING_MODE:-READ_ONLY}
       # The process-owned trade context uses NONE for all-market discovery.
       - MOOMOO_TRADING_MARKET=${MOOMOO_TRADING_MARKET:-NONE}
+      - MOOMOO_REPORTING_CURRENCY=${MOOMOO_REPORTING_CURRENCY:-}
       - MOOMOO_TRADE_PASSWORD=${MOOMOO_TRADE_PASSWORD:-}
       - MOOMOO_TRADE_PASSWORD_MD5=${MOOMOO_TRADE_PASSWORD_MD5:-}
       # REAL writes may only target these accounts. Required in REAL mode.
@@ -61,6 +69,15 @@ services:
       - MOOMOO_SIMULATED_ACC_IDS=${MOOMOO_SIMULATED_ACC_IDS:-}
       - MOOMOO_MAX_ORDER_QTY=${MOOMOO_MAX_ORDER_QTY:-}
       - MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=${MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY:-USD:500}
+      # Name-only entries preserve the distinction between omitted (disabled)
+      # and explicitly empty (invalid) symbol restrictions and daily budgets.
+      - MOOMOO_SYMBOL_ALLOWLIST
+      - MOOMOO_MAX_DAILY_NOTIONAL_BY_CURRENCY
+      - MOOMOO_REQUIRE_TRADE_APPROVAL=${MOOMOO_REQUIRE_TRADE_APPROVAL:-0}
+      - MOOMOO_TRADING_CONTROLS_PATH
+      - MOOMOO_CREATE_TRADING_CONTROLS=${MOOMOO_CREATE_TRADING_CONTROLS:-0}
+      - MOOMOO_OPERATOR_AUTH_TOKEN=${MOOMOO_OPERATOR_AUTH_TOKEN:-}
+      - MOOMOO_OPERATOR_ID=${MOOMOO_OPERATOR_ID:-}
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       # Only honoured in READ_ONLY mode, and only as "1".
       - MCP_ALLOW_UNAUTHENTICATED_HTTP=${MCP_ALLOW_UNAUTHENTICATED_HTTP:-}

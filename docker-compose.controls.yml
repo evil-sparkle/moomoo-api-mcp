@@ -1,0 +1,11 @@
+# Persistent budgets and operator approvals, independent of execution journals.
+# Include this overlay for daily budgets, approvals, or the operator channel.
+services:
+  moomoo-mcp:
+    volumes:
+      - trading-controls-data:/var/lib/moomoo/trading-controls
+    environment:
+      - MOOMOO_TRADING_CONTROLS_PATH=/var/lib/moomoo/trading-controls/controls.sqlite3
+
+volumes:
+  trading-controls-data:

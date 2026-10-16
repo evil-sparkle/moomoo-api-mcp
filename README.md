@@ -348,6 +348,9 @@ password alone never enables REAL writes. Container operators should use the
 | Variable                    | Description                                                           | Example       |
 | --------------------------- | --------------------------------------------------------------------- | ------------- |
 | `MOOMOO_TRADING_MODE`       | Which writes this server may issue. Default `READ_ONLY`.              | `SIMULATE`    |
+| `MOOMOO_SIMULATED_ACC_IDS` | **Required for paper execution.** Actual paper account IDs from `get_accounts`, distinct from the OpenD login account | `12345678` |
+| `MOOMOO_JOURNAL_PATH` | **Required for paper execution.** The paper Compose overlay supplies its persistent path | `/var/lib/moomoo-mcp/data/execution.sqlite3` |
+| `MOOMOO_CREATE_JOURNAL` | `1` only for deliberate first paper-journal initialization; restore `0` afterward | `0` |
 | `MOOMOO_TRADING_MARKET`     | Trade account discovery filter. Default `NONE`; use `HK` for the former HK-only scope. | `NONE` |
 | `MOOMOO_REPORTING_CURRENCY` | Optional default currency for account valuation totals in `get_assets` and `get_account_summary`. Unset preserves SDK default (typically HKD). | `SGD` |
 | `MOOMOO_TRADE_PASSWORD`     | Your trading password (plain text)                                    | `123456`      |
@@ -361,6 +364,30 @@ password alone never enables REAL writes. Container operators should use the
 | `MCP_ALLOW_UNAUTHENTICATED_HTTP` | Optional: `1` serves HTTP without a token, honoured only in `READ_ONLY` | `1`     |
 | `MOOMOO_MAX_ORDER_QTY`      | Optional: cap on quantity per order; for a combo, on the largest leg   | `500`         |
 | `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` | Notional caps, one per currency. Compose defaults to `USD:500` when unset or empty | `USD:500` |
+
+Manual Docker deployments must include the paper or REAL journal overlay for
+the selected writable mode. The production wrapper selects them automatically.
+Initialize each new journal deliberately with its creation flag set to `1`,
+then restore `0` and recreate the service. The complete settings and commands
+are in [.env.example](.env.example) and the [configuration runbook](docs/deploy-vps.md#6-write-env).
+
+An omitted or blank quantity limit means no quantity cap. The Docker notional
+cap remains `USD:500` when unset or blank: a $100 stock order fits; a $600 order,
+including one option with $6 premium and multiplier 100, exceeds it. Override
+the cap explicitly for intended order sizes. Current valuation supports verified
+US securities only; adding an HKD/SGD cap cannot establish non-US instrument
+currencies. Account reporting currency and market discovery do not change this.
+Source launches have no notional cap when the setting is omitted or blank.
+
+Optional symbol restrictions, daily budgets and independent operator approvals
+are documented in [trading controls](docs/trading-contracts.md#enable-optional-controls).
+Compose forwards those settings; budgets and approvals also need the persistent
+`docker-compose.controls.yml` overlay. Unset controls stay disabled.
+
+The `OPEND_VERSION`, `OPEND_TAG`, `OPEND_URL` and `OPEND_SHA256` values in `.env`
+are forwarded as local Docker build arguments. Omitted arguments retain
+Dockerfile defaults. Change all four together when selecting another release.
+They cannot change OpenD inside prebuilt production images.
 
 REAL placements, combo placements, modifications and cancellations require a
 caller-generated `operation_id` and the current `admission_epoch` from
@@ -446,6 +473,11 @@ securities. To use SGD for totals returned by `get_assets` and
 environment and restart the process. The setting is validated at startup and
 accepts HKD, USD, CNH, JPY, SGD, AUD, CAD, or MYR. If omitted, no currency
 argument is sent and the OpenD SDK retains its existing default (typically HKD).
+
+For Docker, put the value in `.env` and recreate the service with the same
+Compose overlays; restarting an existing container retains its old environment.
+Source execution reads process environment variables and does not load `.env`
+automatically.
 
 Both account tools accept an optional per-call `currency="USD"` to override
 the configured default without changing other requests. Positions keep their

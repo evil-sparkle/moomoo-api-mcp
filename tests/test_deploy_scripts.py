@@ -366,7 +366,11 @@ if name == "curl":
         self.assertFalse((self.repo / ".chatgpt-deploy.json").exists())
         self.assertEqual((self.repo / ".deploy.env").read_text(), previous)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
-        self.assertEqual(self.compose_commands(), ["config"])
+        # Storage selection and credential validation can each resolve Compose;
+        # neither may mutate a service before the missing key is reported.
+        commands = self.compose_commands()
+        self.assertTrue(commands)
+        self.assertTrue(all(command == "config" for command in commands))
 
     def test_failed_first_enable_removes_tunnel_and_restores_default_off(self):
         previous = self.save_previous_deploy()
