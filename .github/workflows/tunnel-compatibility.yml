@@ -26,6 +26,7 @@ on:
       - scripts/compose-prod.sh
       - scripts/deploy_verify.py
       - scripts/tunnel_deployment.py
+      - scripts/deployment_manifest.py
       - scripts/test-tunnel-container.sh
       - tests/fixtures/opend_stub.py
       - tests/fixtures/tunnel_*.py
@@ -34,6 +35,10 @@ on:
       - tests/test_server.py
       - tests/test_tool_annotations.py
       - tests/conftest.py
+      - tests/compose_helpers.py
+      - tests/mcp_helpers.py
+      - tests/paper_helpers.py
+      - tests/trade_helpers.py
   workflow_dispatch:
 permissions:
   contents: read

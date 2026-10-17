@@ -13,7 +13,7 @@ from moomoo_mcp.tools.kline_cursor import (
     encode_cursor,
     resolve_date_range,
 )
-from tests.conftest import call_mcp_tool
+from tests.mcp_helpers import call_mcp_tool
 
 BASE_QUERY = {
     "code": "US.AAPL",

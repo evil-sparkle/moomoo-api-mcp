@@ -12,7 +12,7 @@ from moomoo_mcp.services.query_snapshots import QuerySnapshots
 from moomoo_mcp.services.rate_limit import ProviderRateLimitError
 from moomoo_mcp.services.trade_service import TradeService
 from tests.assertions import raises_message
-from tests.conftest import call_mcp_tool
+from tests.mcp_helpers import call_mcp_tool
 from tests.rate_limit_clock import FakeClock
 
 import moomoo_mcp.tools.trade_queries  # noqa: F401,E402  isort:skip

@@ -20,13 +20,10 @@ import pytest
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.health import HEALTH_DEADLINE_SECONDS
 from moomoo_mcp.services.market_data_service import MarketDataService
-from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.offload import run_blocking
-from tests.conftest import call_mcp_tool
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.mcp_helpers import call_mcp_tool
+from tests.trade_helpers import real_request
 
 SERVICE_NAMES = {"trade_service", "market_data_service", "moomoo_service"}
 
@@ -84,7 +81,7 @@ def test_no_tool_calls_a_service_directly():
 
 
 @pytest.fixture
-def slow_context(mcp_app_context):
+def slow_context(mcp_app_context, *, trade_service_factory):
     """Real services on a mock SDK whose option-chain call blocks until released."""
     release = threading.Event()
 
@@ -105,7 +102,7 @@ def slow_context(mcp_app_context):
 
     trade_ctx = MagicMock()
     trade_ctx.get_acc_list.return_value = (0, [{"acc_id": 1}])
-    trade_service = TradeService(policy=TradingPolicy(TradingMode.READ_ONLY))
+    trade_service = trade_service_factory(policy=TradingPolicy(TradingMode.READ_ONLY))
     trade_service.trade_ctx = trade_ctx
 
     mcp_app_context.moomoo_service = moomoo_service
@@ -168,7 +165,9 @@ class TestConcurrentRequests:
         assert ticks > 5, f"event loop only advanced {ticks} times while blocked"
 
     @pytest.mark.asyncio
-    async def test_a_blocked_order_does_not_stall_the_loop(self, mcp_app_context):
+    async def test_a_blocked_order_does_not_stall_the_loop(
+        self, mcp_app_context, *, trade_service_factory
+    ):
         """Trading tools are sync `def`, which FastMCP also runs on the loop."""
         release = threading.Event()
         trade_ctx = MagicMock()
@@ -178,7 +177,7 @@ class TestConcurrentRequests:
             return (0, pd.DataFrame([{"order_id": "1"}]))
 
         trade_ctx.place_order.side_effect = slow_place
-        service = TradeService(
+        service = trade_service_factory(
             policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({456}))
         )
         service.trade_ctx = trade_ctx
@@ -204,6 +203,7 @@ class TestConcurrentRequests:
                     "trd_side": "BUY",
                     "trd_env": "REAL",
                     "acc_id": "456",
+                    **real_request(mcp_app_context.trade_service),
                 },
             )
         )

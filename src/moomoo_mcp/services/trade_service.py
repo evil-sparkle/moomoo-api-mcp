@@ -63,6 +63,7 @@ from moomoo_mcp.services.query_contracts import (
     OrderFeeResult,
     OrderQueryResult,
     QueryPage,
+    plain_combo_legs,
 )
 from moomoo_mcp.services.real_execution import RealExecution
 from moomoo_mcp.services.sdk_response import as_frame
@@ -99,7 +100,7 @@ from moomoo_mcp.services.trading_policy import (
 from moomoo_mcp.services.validation import (
     validate_choice,
     validate_order_values,
-    validate_required_order_fields,
+    validate_single_order_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,42 +108,6 @@ logger = logging.getLogger(__name__)
 # How long startup waits for the trade connection before carrying on
 # without it. The worker keeps trying in the background.
 CONNECT_TIMEOUT_SECONDS = 5.0
-
-
-# Every attribute ComboLeg defines. Listed here rather than read off the
-# instance so a future SDK field cannot silently widen the response, and so a
-# leg the gateway sent without one still has the key.
-COMBO_LEG_FIELDS = ("code", "trd_side", "qty_ratio", "position_id", "pred_side")
-
-
-def _plain_combo_legs(records: list[dict]) -> list[dict]:
-    """Convert the SDK's ComboLeg objects in ``records`` into plain dicts.
-
-    order_list_query, history_order_list_query and place_combo_order all return
-    a ``combo_legs`` column holding ComboLeg instances. They are ordinary Python
-    objects with no JSON representation, so a single spread order made the whole
-    MCP response unserializable: the tool failed outright instead of degrading
-    one row, hiding every other order in the list.
-
-    Converting here also exposes each leg's position_id to the identifier
-    serialization the tool layer applies. That walk traverses dicts and lists
-    and could not see inside an opaque object, so a 64-bit leg identifier was
-    reaching double-parsing clients as a number.
-
-    The records come straight from ``DataFrame.to_dict``, so they are already
-    the caller's own copies and are updated in place.
-    """
-    for record in records:
-        legs = record.get("combo_legs")
-        if not isinstance(legs, (list, tuple)):
-            continue
-        record["combo_legs"] = [
-            {field: getattr(leg, field, None) for field in COMBO_LEG_FIELDS}
-            if isinstance(leg, ComboLeg)
-            else leg
-            for leg in legs
-        ]
-    return records
 
 
 # What the SDK's decoders substitute for a field the gateway did not send.
@@ -1826,21 +1791,17 @@ class TradeService:
             self.policy.check_write(operation, trd_env)
             if isinstance(price, str):
                 raise ValueError("REAL price must be numeric")
-            validate_order_values(
+            validate_single_order_request(
                 operation,
-                order_type=order_type,
-                qty=qty,
-                price=price,
-                aux_price=aux_price,
-                trail_value=trail_value,
-                trail_spread=trail_spread,
-            )
-            validate_required_order_fields(
-                operation,
-                order_type=order_type,
-                aux_price=aux_price,
-                trail_type=trail_type,
-                trail_value=trail_value,
+                {
+                    "order_type": order_type,
+                    "qty": qty,
+                    "price": price,
+                    "aux_price": aux_price,
+                    "trail_type": trail_type,
+                    "trail_value": trail_value,
+                    "trail_spread": trail_spread,
+                },
             )
             selected_session = normalize_order_session(session, trd_env=trd_env)
             time_in_force = validate_choice(
@@ -2231,7 +2192,7 @@ class TradeService:
     @staticmethod
     def _first_combo_record(operation: str, data: Any) -> dict:
         """As :meth:`_first_record`, for a package's receipt."""
-        records = _plain_combo_legs(as_frame(operation, data).to_dict("records"))
+        records = plain_combo_legs(as_frame(operation, data).to_dict("records"))
         if not records:
             raise ValueError(
                 "the gateway acknowledged the package but returned no rows, so "

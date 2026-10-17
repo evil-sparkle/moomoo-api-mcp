@@ -1,4 +1,4 @@
-"""Input validation shared by the market-data services.
+"""Input validation shared by the broker services.
 
 Validating here means a malformed request fails with a message naming the field
 and the accepted values, instead of travelling to the gateway and coming back as
@@ -275,3 +275,68 @@ def validate_required_order_fields(
             f"{operation}: trail_type and trail_value are required for trailing "
             "stop order types"
         )
+
+
+def validate_single_order_request(operation: str, params: dict) -> None:
+    """Apply numeric and required-field rules consistently at every boundary."""
+    validate_order_values(
+        operation,
+        order_type=params["order_type"],
+        qty=params["qty"],
+        price=params["price"],
+        aux_price=params.get("aux_price"),
+        trail_value=params.get("trail_value"),
+        trail_spread=params.get("trail_spread"),
+    )
+    validate_required_order_fields(
+        operation,
+        order_type=params["order_type"],
+        aux_price=params.get("aux_price"),
+        trail_type=params.get("trail_type"),
+        trail_value=params.get("trail_value"),
+    )
+
+
+def validate_real_request(method: str, params: dict) -> None:
+    """Validate local REAL mutation fields before broker reads or admission."""
+    if method == "place_order":
+        if isinstance(params["price"], str):
+            raise ValueError("REAL price must be numeric")
+        validate_single_order_request(method, params)
+    elif method == "place_combo_order":
+        validate_order_values(
+            method,
+            order_type=params["order_type"],
+            qty=params["qty"],
+            combo_price=params["price"],
+        )
+    elif method in {"modify_order", "cancel_order"}:
+        identity = params.get("order_id")
+        if (
+            not isinstance(identity, str)
+            or not identity.isascii()
+            or not identity.isdecimal()
+            or int(identity) <= 0
+        ):
+            raise ValueError("REAL mutation must name one positive decimal order ID")
+        if method == "modify_order" and str(
+            params["modify_order_op"]
+        ).strip().upper() not in {
+            "NORMAL",
+            "CANCEL",
+            "DISABLE",
+            "ENABLE",
+            "DELETE",
+        }:
+            raise ValueError("Unsupported REAL modification operation")
+        if method == "modify_order":
+            requested = str(params["modify_order_op"]).strip().upper()
+            # The target's order type is not known until its read. Check
+            # independently invalid patches now; defer type-specific zero
+            # limit prices to the existing merged-order validation.
+            validate_order_values(
+                method,
+                order_type="",
+                qty=params.get("qty") if requested in {"NORMAL", "ENABLE"} else None,
+                price=params.get("price"),
+            )

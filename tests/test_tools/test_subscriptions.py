@@ -8,7 +8,7 @@ import pytest
 from moomoo import OpenQuoteContext
 
 from moomoo_mcp.services.market_data_service import MarketDataService
-from tests.conftest import call_mcp_tool
+from tests.mcp_helpers import call_mcp_tool
 
 FULL_REPORT = {
     "total_used": 12,

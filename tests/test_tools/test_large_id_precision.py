@@ -7,15 +7,12 @@ import pandas as pd
 import pytest
 
 from moomoo_mcp.services.order_errors import OrderNotSentError
-from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.serialization import (
     IdentifierSerializationError,
     serialize_identifiers,
 )
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.trade_helpers import real_request
 
 # Above 2**53, so a double-precision client cannot represent it exactly.
 UNSAFE_ID = 9007199254740993
@@ -378,9 +375,11 @@ class TestRetrievalToRequestRoundtrip:
         assert forwarded == str(UNSAFE_ID)
         assert int(forwarded) == UNSAFE_ID
 
-    def test_retrieved_ids_submit_without_precision_loss(self):
+    def test_retrieved_ids_submit_without_precision_loss(
+        self, *, trade_service_factory
+    ):
         ctx = MagicMock()
-        service = TradeService(
+        service = trade_service_factory(
             policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123}))
         )
         service.trade_ctx = ctx
@@ -440,17 +439,20 @@ class TestRetrievalToRequestRoundtrip:
             qty=1,
             trd_env="REAL",
             acc_id=123,
+            **real_request(service),
         )
 
         submitted = ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
         assert [leg.position_id for leg in submitted] == [UNSAFE_ID, LEG_ID]
 
-    def test_roundtrip_would_fail_without_stringification(self):
+    def test_roundtrip_would_fail_without_stringification(
+        self, *, trade_service_factory
+    ):
         """Guard the guard: skipping the fix corrupts the submitted id."""
         wire = _roundtrip_through_ieee754_client([{"position_id": UNSAFE_ID}])
 
         ctx = MagicMock()
-        service = TradeService(
+        service = trade_service_factory(
             policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123}))
         )
         service.trade_ctx = ctx
@@ -473,4 +475,5 @@ class TestRetrievalToRequestRoundtrip:
                 qty=1,
                 trd_env="REAL",
                 acc_id=123,
+                **real_request(service),
             )

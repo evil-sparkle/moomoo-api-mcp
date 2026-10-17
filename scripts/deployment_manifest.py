@@ -44,6 +44,19 @@ def validate_image(value):
     return value
 
 
+def validate_project(value):
+    """Require an unambiguous Compose project identity."""
+    first = "abcdefghijklmnopqrstuvwxyz0123456789"
+    if (
+        not isinstance(value, str)
+        or not value
+        or value[0] not in first
+        or any(character not in first + "_-" for character in value)
+    ):
+        raise ValueError("Invalid Compose project name.")
+    return value
+
+
 def validate_run(run):
     if not isinstance(run, dict):
         raise ValueError("Invalid CI run record.")

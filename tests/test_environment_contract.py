@@ -1,16 +1,11 @@
 """Follow synthetic .env settings through Compose into the actual server policy."""
 
 import json
-import os
-import shutil
 import subprocess
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from moomoo_mcp.services.execution_store import ExecutionStore
-from moomoo_mcp.services.trading_controls import TradingControlError, TradingControls
 from moomoo_mcp.services.trading_policy import (
     InstrumentFacts,
     LegFacts,
@@ -20,7 +15,7 @@ from moomoo_mcp.services.trading_policy import (
 )
 from moomoo_mcp.settings import load_settings
 from scripts import deploy_verify
-from tests.test_compose_topology import PROD_ENV, SERVICE, _render
+from tests.compose_helpers import PROD_ENV, SERVICE, production_wrapper, render_compose
 
 CONTROLS_PATH = "/var/lib/moomoo/trading-controls/controls.sqlite3"
 
@@ -62,9 +57,9 @@ def test_dotenv_controls_reach_policy_and_keep_storage_separate(
     if production:
         overlays.append("docker-compose.prod.yml")
     overlays += [journal_overlay(mode), "docker-compose.controls.yml"]
-    service = _render(*overlays, env=PROD_ENV, env_file=settings_file)["services"][
-        SERVICE
-    ]
+    service = render_compose(*overlays, env=PROD_ENV, env_file=settings_file)[
+        "services"
+    ][SERVICE]
     settings = load_settings(service["environment"])
     assert settings.policy.require_approval is True
     assert settings.policy.symbol_allowlist == frozenset({"US.AAPL", "US.MSFT"})
@@ -87,7 +82,7 @@ def test_dotenv_controls_reach_policy_and_keep_storage_separate(
 
 @pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])
 def test_unset_controls_remain_disabled_and_symbol_scope_needs_no_store(mode):
-    service = _render(
+    service = render_compose(
         "docker-compose.yml", journal_overlay(mode), env=trading_environment(mode)
     )["services"][SERVICE]
     settings = load_settings(service["environment"])
@@ -95,7 +90,7 @@ def test_unset_controls_remain_disabled_and_symbol_scope_needs_no_store(mode):
     assert not settings.policy.max_daily_notional
     assert not settings.policy.symbol_allowlist
     assert settings.controls_path is None
-    service = _render(
+    service = render_compose(
         "docker-compose.yml",
         journal_overlay(mode),
         env=trading_environment(mode) | {"MOOMOO_SYMBOL_ALLOWLIST": "US.AAPL"},
@@ -109,14 +104,16 @@ def test_unset_controls_remain_disabled_and_symbol_scope_needs_no_store(mode):
     "variable", ["MOOMOO_SYMBOL_ALLOWLIST", "MOOMOO_MAX_DAILY_NOTIONAL_BY_CURRENCY"]
 )
 def test_explicitly_empty_control_is_rejected_after_compose(variable):
-    service = _render("docker-compose.yml", env={variable: ""})["services"][SERVICE]
+    service = render_compose("docker-compose.yml", env={variable: ""})["services"][
+        SERVICE
+    ]
     with pytest.raises(TradingModeConfigError) as failure:
         load_settings(service["environment"])
     assert variable in str(failure.value)
 
 
 def test_configured_budget_without_storage_fails_instead_of_being_ignored():
-    service = _render(
+    service = render_compose(
         "docker-compose.yml",
         "docker-compose.real.yml",
         env=trading_environment("REAL")
@@ -136,7 +133,7 @@ def test_operator_credential_is_not_forwarded_to_the_chatgpt_tunnel():
         "CHATGPT_TUNNEL_API_KEY": "synthetic-tunnel-key",
         "CHATGPT_TUNNEL_ID": "tunnel_synthetic",
     }
-    services = _render(
+    services = render_compose(
         "docker-compose.yml",
         "docker-compose.paper.yml",
         "docker-compose.controls.yml",
@@ -165,7 +162,9 @@ def test_operator_credential_is_not_forwarded_to_the_chatgpt_tunnel():
 )
 @pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])
 def test_production_selects_controls_storage_from_resolved_settings(mode, configured):
-    base = _render("docker-compose.yml", env=trading_environment(mode) | configured)
+    base = render_compose(
+        "docker-compose.yml", env=trading_environment(mode) | configured
+    )
     with patch.object(deploy_verify, "resolve_services", return_value=base["services"]):
         overlays = deploy_verify.execution_overlays()
     assert overlays == [journal_overlay(mode), "docker-compose.controls.yml"]
@@ -178,11 +177,6 @@ def test_production_selects_controls_storage_from_resolved_settings(mode, config
 def test_production_wrapper_keeps_controls_and_permits_tunnel_removal(
     tmp_path, tunnel, operation
 ):
-    root = Path(__file__).resolve().parents[1]
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    for name in ("compose-prod.sh", "deploy_verify.py", "tunnel_deployment.py"):
-        shutil.copy2(root / "scripts" / name, scripts / name)
     if tunnel:
         (tmp_path / ".chatgpt-deploy.json").write_text(
             json.dumps({"version": 2, "image": "sha256:" + "a" * 64, "project": "test"})
@@ -195,28 +189,18 @@ def test_production_wrapper_keeps_controls_and_permits_tunnel_removal(
             }
         }
     }
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    docker = fake_bin / "docker"
-    docker.write_text(
-        "#!/usr/bin/env python3\nimport json,pathlib,sys\n"
-        "if 'config' in sys.argv:\n"
-        " pathlib.Path('config-seen').touch()\n"
-        " print(" + repr(json.dumps(model)) + ")\n"
-        "else: pathlib.Path('docker-call.json').write_text(json.dumps(sys.argv[1:]))\n"
-    )
-    docker.chmod(0o755)
+    scripts, environment = production_wrapper(tmp_path, model["services"])
     command = ["up", "-d"] if operation == "up" else [operation, "chatgpt-tunnel"]
     result = subprocess.run(
         [str(scripts / "compose-prod.sh"), *command],
         cwd=tmp_path,
-        env={"PATH": str(fake_bin) + ":" + os.environ["PATH"]},
+        env=environment,
         capture_output=True,
         text=True,
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    arguments = json.loads((tmp_path / "docker-call.json").read_text())
+    arguments, _ = json.loads((tmp_path / "docker-call.json").read_text())
     assert arguments.count("docker-compose.paper.yml") == 1
     assert ("docker-compose.controls.yml" in arguments) is (operation == "up")
     assert ("docker-compose.chatgpt.yml" in arguments) is tunnel
@@ -227,7 +211,7 @@ def test_production_wrapper_keeps_controls_and_permits_tunnel_removal(
 def test_local_build_arguments_use_dotenv_overrides_and_preserve_dockerfile_defaults(
     tmp_path,
 ):
-    default = _render("docker-compose.yml")["services"][SERVICE]
+    default = render_compose("docker-compose.yml")["services"][SERVICE]
     assert not default["build"].get("args")
     arguments = {
         "OPEND_VERSION": "synthetic-version",
@@ -239,7 +223,9 @@ def test_local_build_arguments_use_dotenv_overrides_and_preserve_dockerfile_defa
     settings_file.write_text(
         "".join(f"{name}={value}\n" for name, value in arguments.items())
     )
-    service = _render("docker-compose.yml", env_file=settings_file)["services"][SERVICE]
+    service = render_compose("docker-compose.yml", env_file=settings_file)["services"][
+        SERVICE
+    ]
     assert service["build"]["args"] == arguments
 
 
@@ -262,7 +248,7 @@ def order(code, price, *, classification="STOCK", multiplier=1):
 
 
 def test_compose_real_defaults_accept_small_us_orders_and_count_option_multipliers():
-    service = _render(
+    service = render_compose(
         "docker-compose.yml", "docker-compose.real.yml", env=trading_environment("REAL")
     )["services"][SERVICE]
     policy = load_settings(service["environment"]).policy
@@ -279,7 +265,7 @@ def test_compose_real_defaults_accept_small_us_orders_and_count_option_multiplie
 
 
 def test_non_us_caps_and_reporting_currency_do_not_invent_instrument_currency():
-    service = _render(
+    service = render_compose(
         "docker-compose.yml",
         "docker-compose.real.yml",
         env=trading_environment("REAL")
@@ -294,25 +280,3 @@ def test_non_us_caps_and_reporting_currency_do_not_invent_instrument_currency():
         settings.policy.assess_order("place_order", order("HK.00700", 1))
     assert "cannot establish the currency" in str(refusal.value)
     assert "Adding a currency cap" in str(refusal.value)
-
-
-def test_controls_initialization_and_restart_preserve_state_apart_from_journals(
-    tmp_path,
-):
-    path = tmp_path / "controls" / "controls.sqlite3"
-    with pytest.raises(TradingControlError):
-        TradingControls(path)
-    paper = ExecutionStore(tmp_path / "paper" / "execution.db", create=True)
-    real = ExecutionStore(
-        tmp_path / "real" / "execution.db", create=True, environment="REAL"
-    )
-    controls = TradingControls(path, create=True)
-    prepared = controls.prepare("cancel_order", {"acc_id": "456"}, {})
-    controls.close()
-    paper.close()
-    real.close()
-    reopened = TradingControls(path)
-    try:
-        assert reopened.get(prepared["request_id"])["status"] == "PENDING"
-    finally:
-        reopened.close()

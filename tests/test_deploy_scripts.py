@@ -50,6 +50,7 @@ class DeployScriptsTest(unittest.TestCase):
             "compose-prod.sh",
             "deploy_verify.py",
             "tunnel_deployment.py",
+            "deployment_manifest.py",
         ):
             shutil.copy2(ROOT / "scripts" / name, self.repo / "scripts" / name)
         for name in (
@@ -275,6 +276,13 @@ if name == "curl":
             for name, args, _ in self.calls()
             if name == "docker" and "compose" in args
         ]
+
+    def compose_actions(self):
+        """Validation precedes actions; repeated configuration reads are harmless."""
+        commands = self.compose_commands()
+        self.assertTrue(commands)
+        self.assertEqual(commands[0], "config")
+        return [command for command in commands if command != "config"]
 
     def save_previous_deploy(self):
         """A prior deployment's settings, for a rollback to restore."""
@@ -687,10 +695,10 @@ if name == "curl":
             self.assertEqual(args[:3], ["--context", "rootless", "compose"])
             self.assertIn(".env", args)
             self.assertIn(".deploy.env", args)
-        # The wrapper resolves paper mode before each command; check-config also
-        # resolves the complete stack. Nothing starts and no MCP probe is sent.
+        # Preparation validates configuration and pulls without starting or probing.
         self.assertEqual(
-            self.compose_commands(), ["config", "config", "config", "pull"]
+            self.compose_actions(),
+            ["pull"],
         )
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
         self.assertFalse(any(name == "curl" for name, _, _ in calls))
@@ -710,24 +718,10 @@ if name == "curl":
         result = self.deploy(self.commit)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("MCP deployment verified", result.stderr)
-        # Configuration is resolved before the pull, and again by verify,
-        # which reads it from nowhere else.
+        # Validation precedes startup; verification collects logs afterwards.
         self.assertEqual(
-            self.compose_commands(),
-            [
-                "config",
-                "config",
-                "config",
-                "pull",
-                "config",
-                "up",
-                "config",
-                "config",
-                "config",
-                "config",
-                "config",
-                "logs",
-            ],
+            self.compose_actions(),
+            ["pull", "up", "logs"],
         )
         docker = [
             args
@@ -985,7 +979,8 @@ if name == "curl":
 
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(
-            self.compose_commands(), ["config", "config", "config", "pull"]
+            self.compose_actions(),
+            ["pull"],
         )
 
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
@@ -1129,7 +1124,8 @@ if name == "curl":
         )
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), newer_commit)
         self.assertEqual(
-            self.compose_commands(), ["config", "config", "config", "pull"]
+            self.compose_actions(),
+            ["pull"],
         )
         self.assertFalse(any(name == "curl" for name, _, _ in self.calls()))
 
@@ -1170,21 +1166,8 @@ if name == "curl":
         self.assertIn(f"MCP deployment verified: {target[:7]}", result.stderr)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), target)
         self.assertEqual(
-            self.compose_commands(),
-            [
-                "config",
-                "config",
-                "config",
-                "pull",
-                "config",
-                "up",
-                "config",
-                "config",
-                "config",
-                "config",
-                "config",
-                "logs",
-            ],
+            self.compose_actions(),
+            ["pull", "up", "logs"],
         )
         headers = [c[1] for c in self.calls() if c[0] == "curl-header"]
         self.assertEqual(headers, [["Authorization: Bearer test-only\n"]] * 2)

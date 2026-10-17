@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -54,7 +53,15 @@ def authorization_header() -> str:
 
 def child_environment() -> dict[str, str]:
     tunnel_id = os.environ.get("CHATGPT_TUNNEL_ID", "").strip()
-    if not re.fullmatch(r"tunnel_[a-zA-Z0-9_-]{1,128}", tunnel_id):
+    suffix = tunnel_id.removeprefix("tunnel_")
+    if (
+        not tunnel_id.startswith("tunnel_")
+        or not 1 <= len(suffix) <= 128
+        or not suffix.isascii()
+        or any(
+            not character.isalnum() and character not in "_-" for character in suffix
+        )
+    ):
         raise ValueError("invalid tunnel identifier")
     key = os.environ.get("CHATGPT_TUNNEL_API_KEY", "")
     if not key.strip() or any(character < " " or character > "~" for character in key):

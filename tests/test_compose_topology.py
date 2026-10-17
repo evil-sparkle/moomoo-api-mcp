@@ -23,102 +23,22 @@ image without ever starting the stack, so the compose file is checked here.
 against Compose's own interpolation, overlay merge, and schema validation.
 """
 
-import json
 import os
 import shutil
 import subprocess
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from moomoo_mcp.services.trading_policy import TradingPolicy
-
-ROOT = Path(__file__).resolve().parents[1]
-
-SERVICE = "moomoo-mcp"
-OPEND_DATA_PATH = "/home/opend/.com.moomoo.OpenD"
-
-# Any value: the prod overlay only requires that these are set (`${VAR:?}`).
-PROD_ENV = {
-    "ECR_REGISTRY": "123456789012.dkr.ecr.ap-southeast-1.amazonaws.com",
-    "IMAGE_TAG": "0000000",
-}
-
-
-def _compose_command(env: dict[str, str]) -> list[str]:
-    """Find Compose without loading the user's Docker configuration."""
-    commands = []
-    standalone = shutil.which("docker-compose")
-    if standalone:
-        commands.append([standalone])
-    # Resolve the user plugin executable before isolating HOME/DOCKER_CONFIG.
-    # Only the executable is accessed; config.json is never read or copied.
-    config = Path(os.environ.get("DOCKER_CONFIG", str(Path.home() / ".docker")))
-    plugin = config / "cli-plugins" / "docker-compose"
-    if plugin.is_file() and os.access(plugin, os.X_OK):
-        commands.append([str(plugin)])
-    docker = shutil.which("docker")
-    if docker:
-        commands.append([docker, "compose"])
-    for command in commands:
-        probe = subprocess.run(
-            [*command, "version", "--short"],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-            env=env,
-        )
-        major = probe.stdout.strip().lstrip("v").split(".", 1)[0]
-        if probe.returncode == 0 and major.isdecimal() and int(major) >= 2:
-            return command
-    message = "Docker Compose v2 or newer is unavailable in the isolated environment"
-    if os.environ.get("CI"):
-        raise AssertionError(message)
-    raise unittest.SkipTest(message)
-
-
-def _render(
-    *overlays: str,
-    env: dict[str, str] | None = None,
-    env_file: Path | None = None,
-) -> dict:
-    """Return the configuration Compose actually resolves for these files."""
-    files: list[str] = []
-    for overlay in overlays:
-        files += ["-f", overlay]
-    with tempfile.TemporaryDirectory(prefix="moomoo-compose-config-") as docker_config:
-        isolated_env = {
-            "PATH": os.environ.get("PATH", os.defpath),
-            "HOME": str(ROOT),
-            "DOCKER_CONFIG": docker_config,
-            **(env or {}),
-        }
-        command = _compose_command(isolated_env)
-        result = subprocess.run(
-            # An empty env file and isolated HOME/DOCKER_CONFIG keep these
-            # topology checks independent of private local configuration.
-            [
-                *command,
-                "--env-file",
-                str(env_file) if env_file is not None else os.devnull,
-                *files,
-                "config",
-                "--format",
-                "json",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-            env=isolated_env,
-        )
-    if result.returncode != 0:
-        raise AssertionError(
-            f"docker compose config failed for {files}: {result.stderr.strip()}"
-        )
-    return json.loads(result.stdout)
+from tests.compose_helpers import (
+    OPEND_DATA_PATH,
+    PROD_ENV,
+    SERVICE,
+    compose_command,
+    render_compose,
+)
 
 
 @pytest.mark.parametrize(
@@ -137,7 +57,7 @@ def test_compose_notional_default_and_override_are_valid(overlays, value, expect
     env = dict(PROD_ENV)
     if value is not None:
         env["MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY"] = value
-    rendered = _render(*overlays, env=env)
+    rendered = render_compose(*overlays, env=env)
     environment = rendered["services"][SERVICE]["environment"]
 
     if value:
@@ -148,7 +68,7 @@ def test_compose_notional_default_and_override_are_valid(overlays, value, expect
 
 
 def test_retired_login_password_is_not_injected_by_compose():
-    rendered = _render(
+    rendered = render_compose(
         "docker-compose.yml",
         env={"MOOMOO_LOGIN_PWD_MD5": "synthetic-retired-login-password"},
     )
@@ -179,7 +99,7 @@ def test_user_plugin_survives_config_isolation(tmp_path, monkeypatch, custom_con
             subprocess.CompletedProcess([], 0, "v2.40.0", ""),
             subprocess.CompletedProcess([], 0, '{"services": {}}', ""),
         ]
-        assert _render("docker-compose.yml") == {"services": {}}
+        assert render_compose("docker-compose.yml") == {"services": {}}
     probe, render = run.call_args_list
     assert probe.args[0] == [str(plugin), "version", "--short"]
     assert render.args[0][0] == str(plugin)
@@ -202,7 +122,7 @@ def test_compose_selection_uses_isolated_probe(
     )
     with patch.object(subprocess, "run") as run:
         run.side_effect = [first, subprocess.CompletedProcess([], 0, "2.40.0", "")]
-        command = _compose_command(isolated)
+        command = compose_command(isolated)
     assert command == (
         ["/bin/docker-compose"]
         if standalone_version == "v2.40.0"
@@ -219,7 +139,7 @@ def test_missing_compose_fails_in_ci_and_skips_locally(tmp_path, monkeypatch, ci
     if ci:
         monkeypatch.setenv("CI", "true")
     with pytest.raises(AssertionError if ci else unittest.SkipTest):
-        _compose_command({"HOME": str(tmp_path), "DOCKER_CONFIG": str(tmp_path)})
+        compose_command({"HOME": str(tmp_path), "DOCKER_CONFIG": str(tmp_path)})
 
 
 class ComposeTopologyTest(unittest.TestCase):
@@ -227,8 +147,8 @@ class ComposeTopologyTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.config = _render("docker-compose.yml")
-        cls.prod = _render(
+        cls.config = render_compose("docker-compose.yml")
+        cls.prod = render_compose(
             "docker-compose.yml", "docker-compose.prod.yml", env=PROD_ENV
         )
 
@@ -282,8 +202,10 @@ class ComposeTopologyTest(unittest.TestCase):
             "NONE",
         )
 
-        base_hk = _render("docker-compose.yml", env={"MOOMOO_TRADING_MARKET": "HK"})
-        production_hk = _render(
+        base_hk = render_compose(
+            "docker-compose.yml", env={"MOOMOO_TRADING_MARKET": "HK"}
+        )
+        production_hk = render_compose(
             "docker-compose.yml",
             "docker-compose.prod.yml",
             env={**PROD_ENV, "MOOMOO_TRADING_MARKET": "HK"},
@@ -345,7 +267,7 @@ class ComposeTopologyTest(unittest.TestCase):
         or the supervisor's own settings too, the smoke test would be proving
         something about a stack nobody deploys.
         """
-        smoke = _render("docker-compose.yml", "docker-compose.smoke.yml")
+        smoke = render_compose("docker-compose.yml", "docker-compose.smoke.yml")
 
         deployed = self._service()
         stubbed = self._service(smoke)

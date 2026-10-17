@@ -21,8 +21,8 @@ from moomoo_mcp.services.instrument_rules import (
 from moomoo_mcp.services.trading_controls import TradingControlError, contract_view
 from moomoo_mcp.services.trading_policy import OrderFacts, TradingMode
 from moomoo_mcp.services.validation import (
-    validate_order_values,
-    validate_required_order_fields,
+    validate_real_request,
+    validate_single_order_request,
 )
 
 if TYPE_CHECKING:
@@ -59,21 +59,8 @@ def _single_facts(
     price = parameters["price"]
     numeric = float(price)
     qty = whole_quantity(operation, parameters["qty"])
-    validate_order_values(
-        operation,
-        order_type=parameters["order_type"],
-        qty=qty,
-        price=numeric,
-        aux_price=parameters.get("aux_price"),
-        trail_value=parameters.get("trail_value"),
-        trail_spread=parameters.get("trail_spread"),
-    )
-    validate_required_order_fields(
-        operation,
-        order_type=parameters["order_type"],
-        aux_price=parameters.get("aux_price"),
-        trail_type=parameters.get("trail_type"),
-        trail_value=parameters.get("trail_value"),
+    validate_single_order_request(
+        operation, parameters | {"qty": qty, "price": numeric}
     )
     facts = service._single_leg_facts(
         operation,
@@ -191,7 +178,7 @@ def validate_preparation(service: TradeService, method: str, request: dict) -> N
         )
     if environment == "REAL":
         assert service.real is not None
-        service.real._validate_values(method, request)
+        validate_real_request(method, request)
     else:
         assert service.paper is not None
         from moomoo_mcp.services.admission import _paper_parameters

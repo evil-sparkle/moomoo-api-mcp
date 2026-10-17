@@ -13,9 +13,7 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
     TradingPolicyError,
 )
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.trade_helpers import real_request
 
 STRATEGY_LEG_ID = 3333333333333333333
 OTHER_LEG_ID = 4444444444444444444
@@ -221,7 +219,9 @@ class TestAccountSelection:
         assert ctx.comboorder_tradinginfo_query.call_args.kwargs["acc_id"] == 202
         assert_no_writes(ctx)
 
-    def test_matches_the_account_placement_would_choose(self, ctx):
+    def test_matches_the_account_placement_would_choose(
+        self, ctx, *, trade_service_factory
+    ):
         acc_frame = pd.DataFrame(
             [{"acc_id": 789, "trd_env": "REAL", "market_auth": ["US"]}]
         )
@@ -230,7 +230,7 @@ class TestAccountSelection:
             0,
             pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}]),
         )
-        svc = TradeService(
+        svc = trade_service_factory(
             policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({789}))
         )
         svc.trade_ctx = ctx
@@ -239,7 +239,11 @@ class TestAccountSelection:
             combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="REAL"
         )
         svc.place_combo_order(
-            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="REAL"
+            combo_legs=_opening_legs(),
+            price=2.5,
+            qty=1,
+            trd_env="REAL",
+            **real_request(svc),
         )
 
         previewed = ctx.comboorder_tradinginfo_query.call_args.kwargs["acc_id"]
@@ -336,6 +340,7 @@ class TestUnavailableValues:
                 qty=1,
                 trd_env="REAL",
                 acc_id=456,
+                **real_request(service),
             )
 
         assert isinstance(excinfo.value.__cause__, TradingPolicyError)

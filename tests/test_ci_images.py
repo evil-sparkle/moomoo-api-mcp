@@ -11,6 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
 BASELINE = "a" * 40
+PULL_REQUEST_BASE = "d" * 40
 COMMIT = "b" * 40
 
 
@@ -39,6 +40,7 @@ if sys.argv[1] == 'diff':
     if os.environ['DIFF_FAILURE'] == '1': sys.exit(1)
     print(os.environ['CHANGED_PATHS'])
 elif sys.argv[1] == 'rev-parse' and os.environ['INVALID_BASE'] == '1': sys.exit(1)
+elif sys.argv[1] == 'rev-parse': print(sys.argv[-1].removesuffix('^{commit}'))
 elif sys.argv[1] == 'tag': print('v0.1.0')
 else: print(os.environ['BASELINE'])
 """)
@@ -76,7 +78,7 @@ if 'put-image' not in args:
     }
     for expression, value in {
         "github.event.before": BASELINE,
-        "github.event.pull_request.base.sha": BASELINE,
+        "github.event.pull_request.base.sha": PULL_REQUEST_BASE,
         "vars.AWS_REGION": "us-east-1",
         "needs.changes.outputs.baseline": BASELINE,
         "steps.ecr.outputs.registry": "123456789012.dkr.ecr.us-east-1.amazonaws.com",
@@ -118,23 +120,21 @@ if 'put-image' not in args:
         ],
     ],
 )
-@pytest.mark.parametrize(
-    "event,ref",
-    [
-        ("push", "refs/heads/main"),
-        ("pull_request", "refs/pull/99/merge"),
-        ("push", "refs/heads/feature/example"),
-    ],
-)
-def test_image_filter_covers_build_inputs_on_pushes_and_prs(
-    tmp_path, path, mcp, tunnel, tests, event, ref
-):
-    outputs = run_step(
-        tmp_path, step("changes", "filter")["run"], changed=path, event=event, ref=ref
-    )
+def test_image_filter_covers_build_inputs(tmp_path, path, mcp, tunnel, tests):
+    outputs = run_step(tmp_path, step("changes", "filter")["run"], changed=path)
     assert outputs["moomoo-api-mcp"] == str(mcp).lower()
     assert outputs["moomoo-chatgpt-tunnel"] == str(tunnel).lower()
     assert outputs["tests"] == str(tests).lower()
+
+
+@pytest.mark.parametrize(
+    "event,expected", [("push", BASELINE), ("pull_request", PULL_REQUEST_BASE)]
+)
+def test_filter_uses_the_event_comparison_baseline(tmp_path, event, expected):
+    outputs = run_step(
+        tmp_path, step("changes", "filter")["run"], changed="README.md", event=event
+    )
+    assert outputs["baseline"] == expected
 
 
 @pytest.mark.parametrize("prefix", ["", "tunnel-"])
@@ -295,6 +295,7 @@ def tunnel_workflow_matches(path):
         ("scripts/deploy_verify.py", True),
         ("scripts/compose-prod.sh", True),
         ("scripts/tunnel_deployment.py", True),
+        ("scripts/deployment_manifest.py", True),
         ("tests/test_deploy_scripts.py", False),
         ("tests/test_tools/test_accounting_guidance.py", False),
         ("src/moomoo_mcp/tools/account.py", False),
@@ -317,6 +318,10 @@ def tunnel_workflow_matches(path):
         ("tests/fixtures/opend_stub.py", True),
         ("tests/test_tunnel_runtime.py", True),
         ("tests/conftest.py", True),
+        ("tests/compose_helpers.py", True),
+        ("tests/mcp_helpers.py", True),
+        ("tests/paper_helpers.py", True),
+        ("tests/trade_helpers.py", True),
         (".github/workflows/ci.yml", True),
         (".github/workflows/tunnel-compatibility.yml", True),
     ],
