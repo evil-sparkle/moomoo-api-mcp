@@ -19,9 +19,7 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
     TradingPolicyError,
 )
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.trade_helpers import real_request
 
 ALL_MODES = list(TradingMode)
 ENVIRONMENTS = ["REAL", "SIMULATE"]
@@ -42,8 +40,10 @@ def _policy(mode: TradingMode, **kwargs) -> TradingPolicy:
     return TradingPolicy(mode, **kwargs)
 
 
-def _service(mode: TradingMode, ctx: MagicMock, **kwargs) -> TradeService:
-    service = TradeService(policy=_policy(mode, **kwargs))
+def _service(
+    mode: TradingMode, ctx: MagicMock, *, trade_service_factory, **kwargs
+) -> TradeService:
+    service = trade_service_factory(policy=_policy(mode, **kwargs))
     service.trade_ctx = ctx
     return service
 
@@ -90,11 +90,13 @@ def _combo_legs():
 
 
 def _invoke(service: TradeService, operation: str, trd_env: str, **tokens):
-    """Call one guarded write on ``service``."""
+    """Call one guarded write on ``service`` with an explicit caller identity."""
+    if trd_env == "REAL":
+        tokens = real_request(service) | tokens
     if operation == "place_order":
         return service.place_order(
             code="US.AAPL",
-            price="100" if tokens else 100.0,
+            price="100" if trd_env == "SIMULATE" and tokens else 100.0,
             qty=1,
             trd_side="BUY",
             trd_env=trd_env,
@@ -103,14 +105,19 @@ def _invoke(service: TradeService, operation: str, trd_env: str, **tokens):
         )
     if operation == "place_combo_order":
         return service.place_combo_order(
-            combo_legs=_combo_legs(), price=2.5, qty=1, trd_env=trd_env, acc_id=456
+            combo_legs=_combo_legs(),
+            price=2.5,
+            qty=1,
+            trd_env=trd_env,
+            acc_id=456,
+            **tokens,
         )
     if operation == "modify_order":
         return service.modify_order(
             order_id="1",
             modify_order_op="NORMAL",
             qty=2,
-            price="1" if tokens else 1.0,
+            price="1" if trd_env == "SIMULATE" and tokens else 1.0,
             trd_env=trd_env,
             acc_id=456,
             **tokens,
@@ -169,8 +176,10 @@ class TestWriteMatrix:
     @pytest.mark.parametrize("operation", WRITE_OPERATIONS)
     @pytest.mark.parametrize("mode", ALL_MODES)
     @pytest.mark.parametrize("trd_env", ENVIRONMENTS)
-    def test_matrix(self, ctx, operation, mode, trd_env, tmp_path):
-        service = _service(mode, ctx)
+    def test_matrix(
+        self, ctx, operation, mode, trd_env, tmp_path, *, trade_service_factory
+    ):
+        service = _service(mode, ctx, trade_service_factory=trade_service_factory)
         store = None
         tokens = {}
         if trd_env == "SIMULATE" and mode is not TradingMode.READ_ONLY:
@@ -222,9 +231,11 @@ class TestWriteMatrix:
                 store.close()
 
     @pytest.mark.parametrize("mode", ALL_MODES)
-    def test_denied_write_does_not_query_accounts(self, ctx, mode):
+    def test_denied_write_does_not_query_accounts(
+        self, ctx, mode, *, trade_service_factory
+    ):
         """Account selection is a gateway call, so it must not happen either."""
-        service = _service(mode, ctx)
+        service = _service(mode, ctx, trade_service_factory=trade_service_factory)
 
         if (mode, "REAL") in ALLOWED_WRITES:
             pytest.skip("REAL writes are permitted in this mode")
@@ -237,31 +248,42 @@ class TestWriteMatrix:
                 trd_side="BUY",
                 trd_env="REAL",
                 acc_id="0",  # would normally trigger account resolution
+                **real_request(service),
             )
 
         ctx.get_acc_list.assert_not_called()
 
-    def test_denied_write_is_not_rerouted_to_another_environment(self, ctx):
-        service = _service(TradingMode.SIMULATE, ctx)
+    def test_denied_write_is_not_rerouted_to_another_environment(
+        self, ctx, *, trade_service_factory
+    ):
+        service = _service(
+            TradingMode.SIMULATE, ctx, trade_service_factory=trade_service_factory
+        )
 
         with pytest.raises(OrderNotSentError):
             _invoke(service, "place_order", "REAL")
 
         ctx.place_order.assert_not_called()
 
-    def test_unrecognized_environment_is_refused(self, ctx):
-        service = _service(TradingMode.REAL, ctx)
+    def test_unrecognized_environment_is_refused(self, ctx, *, trade_service_factory):
+        service = _service(
+            TradingMode.REAL, ctx, trade_service_factory=trade_service_factory
+        )
 
         with pytest.raises(OrderNotSentError, match="not a recognized"):
             _invoke(service, "place_order", "PAPER")
 
         ctx.place_order.assert_not_called()
 
-    def test_cancellation_is_denied_in_read_only(self, ctx):
-        service = _service(TradingMode.READ_ONLY, ctx)
+    def test_cancellation_is_denied_in_read_only(self, ctx, *, trade_service_factory):
+        service = _service(
+            TradingMode.READ_ONLY, ctx, trade_service_factory=trade_service_factory
+        )
 
         with pytest.raises(OrderNotSentError, match="cancel"):
-            service.cancel_order(order_id="1", trd_env="SIMULATE", acc_id=456)
+            service.cancel_order(
+                order_id="1", trd_env="SIMULATE", acc_id=456, **real_request(service)
+            )
 
         ctx.modify_order.assert_not_called()
 
@@ -270,8 +292,8 @@ class TestUnlockMatrix:
     """Only REAL mode may unlock trading."""
 
     @pytest.mark.parametrize("mode", ALL_MODES)
-    def test_unlock_permission_follows_mode(self, ctx, mode):
-        service = _service(mode, ctx)
+    def test_unlock_permission_follows_mode(self, ctx, mode, *, trade_service_factory):
+        service = _service(mode, ctx, trade_service_factory=trade_service_factory)
 
         if mode is TradingMode.REAL:
             service.unlock_trade(password="pw")
@@ -282,9 +304,13 @@ class TestUnlockMatrix:
             service.unlock_trade(password="pw")
         ctx.unlock_trade.assert_not_called()
 
-    def test_failed_unlock_in_real_mode_leaves_policy_unchanged(self, ctx):
+    def test_failed_unlock_in_real_mode_leaves_policy_unchanged(
+        self, ctx, *, trade_service_factory
+    ):
         ctx.unlock_trade.return_value = (-1, "wrong password")
-        service = _service(TradingMode.REAL, ctx)
+        service = _service(
+            TradingMode.REAL, ctx, trade_service_factory=trade_service_factory
+        )
 
         with pytest.raises(RuntimeError, match="unlock_trade failed"):
             service.unlock_trade(password="pw")
@@ -297,20 +323,24 @@ class TestReadsRemainAvailable:
     """Reads and previews are permitted in every mode."""
 
     @pytest.mark.parametrize("mode", ALL_MODES)
-    def test_account_reads_allowed_in_every_mode(self, ctx, mode):
-        service = _service(mode, ctx)
+    def test_account_reads_allowed_in_every_mode(
+        self, ctx, mode, *, trade_service_factory
+    ):
+        service = _service(mode, ctx, trade_service_factory=trade_service_factory)
 
         accounts = service.get_accounts()
 
         assert accounts[0]["acc_id"] == 456
 
     @pytest.mark.parametrize("mode", ALL_MODES)
-    def test_position_reads_allowed_in_every_mode(self, ctx, mode):
+    def test_position_reads_allowed_in_every_mode(
+        self, ctx, mode, *, trade_service_factory
+    ):
         ctx.position_list_query.return_value = (
             0,
             pd.DataFrame([{"code": "US.AAPL", "qty": 1}]),
         )
-        service = _service(mode, ctx)
+        service = _service(mode, ctx, trade_service_factory=trade_service_factory)
 
         assert service.get_positions(trd_env="REAL", acc_id=456)[0]["qty"] == 1
 

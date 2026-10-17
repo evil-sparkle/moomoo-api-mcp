@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -12,6 +11,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from moomoo_mcp.services.execution_store import ASSUMED_ABSENT, ExecutionStoreError
+from moomoo_mcp.services.recovery import RecoveryWorker
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
 if TYPE_CHECKING:
@@ -54,38 +54,11 @@ def number(value: object) -> Decimal:
     return result
 
 
-class PaperRecovery:
+class PaperRecovery(RecoveryWorker):
     def __init__(self, paper: PaperExecution, clock: Callable[[], float] = time.time):
         self.paper = paper
         self.clock = clock
-        self._stop = threading.Event()
-        self._wake = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread is None:
-            self._thread = threading.Thread(
-                target=self._run, name="paper-recovery", daemon=True
-            )
-            self._thread.start()
-
-    def wake(self) -> None:
-        self._wake.set()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._wake.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            self._wake.clear()
-            try:
-                self.run_once()
-            except Exception:
-                logger.exception("Paper recovery remains pending")
-            self._wake.wait(timeout=1)
+        super().__init__("paper-recovery", logger)
 
     def run_once(self) -> None:
         if self.paper._late_failure:

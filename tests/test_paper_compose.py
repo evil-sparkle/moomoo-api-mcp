@@ -1,13 +1,14 @@
 """The paper overlay persists one SIMULATE journal across deployment modes."""
 
 import pytest
-from test_compose_topology import OPEND_DATA_PATH, SERVICE, _render
+
+from tests.compose_helpers import OPEND_DATA_PATH, SERVICE, render_compose
 
 
 @pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])
 def test_paper_volume_survives_mode_changes_without_moving_gateway(mode):
-    base = _render("docker-compose.yml")
-    rendered = _render(
+    base = render_compose("docker-compose.yml")
+    rendered = render_compose(
         "docker-compose.yml",
         "docker-compose.paper.yml",
         env={"MOOMOO_TRADING_MODE": mode, "MOOMOO_SIMULATED_ACC_IDS": "123"},
@@ -24,7 +25,7 @@ def test_paper_volume_survives_mode_changes_without_moving_gateway(mode):
 
 
 def test_default_read_only_has_no_execution_volume():
-    rendered = _render("docker-compose.yml")
+    rendered = render_compose("docker-compose.yml")
     service = rendered["services"][SERVICE]
     assert service["environment"]["MOOMOO_TRADING_MODE"] == "READ_ONLY"
     assert all(

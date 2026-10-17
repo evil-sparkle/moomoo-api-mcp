@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from deployment_manifest import require_hex, validate_image
+from deployment_manifest import require_hex, validate_image, validate_project
 
 STATE_TARGETS = {
     "/home/opend/.com.moomoo.OpenD": "opend-state",
@@ -39,14 +39,7 @@ def settings(directory: Path) -> dict:
         raise ValueError("This migration requires READ_ONLY operation.")
     if type(value["tunnel_enabled"]) is not bool:
         raise ValueError("Select a boolean tunnel setting.")
-    project = value["project"]
-    if (
-        not isinstance(project, str)
-        or not project
-        or project[0] not in "abcdefghijklmnopqrstuvwxyz0123456789"
-        or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in project)
-    ):
-        raise ValueError("Invalid Compose project name.")
+    validate_project(value["project"])
     credential_path = Path(value["env_file"])
     if not credential_path.is_absolute():
         raise ValueError("Select an absolute server-side credential path.")

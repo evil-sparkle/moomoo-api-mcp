@@ -21,10 +21,8 @@ from moomoo import RET_OK, ComboLeg
 
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
-from tests.conftest import call_mcp_tool
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.mcp_helpers import call_mcp_tool
+from tests.trade_helpers import real_request
 
 ACCOUNT_ID = "987654321098765432"
 # Above 2**53, so a double-precision client cannot represent it exactly.
@@ -169,15 +167,21 @@ class TestOrderListWithACombo:
         assert len(result.json_blocks[0]["combo_legs"]) == 2
 
     @pytest.mark.asyncio
-    async def test_a_placed_combo_returns_its_legs(self, trade_ctx_context):
+    async def test_a_placed_combo_returns_its_legs(
+        self, trade_ctx_context, trade_service_factory
+    ):
         """The write path returns the same column, so it failed the same way."""
         context, trade_ctx = trade_ctx_context
         trade_ctx.place_combo_order.return_value = (0, pd.DataFrame([_spread_row()]))
 
         # Combo mutations remain a REAL-only path; paper scope excludes them.
-        context.trade_service.policy = TradingPolicy(
-            TradingMode.REAL, real_acc_ids=frozenset({int(ACCOUNT_ID)})
+        service = trade_service_factory(
+            policy=TradingPolicy(
+                TradingMode.REAL, real_acc_ids=frozenset({int(ACCOUNT_ID)})
+            )
         )
+        service.trade_ctx = trade_ctx
+        context.trade_service = service
         result = await call_mcp_tool(
             context,
             "place_combo_order",
@@ -198,6 +202,7 @@ class TestOrderListWithACombo:
                 "qty": 1,
                 "trd_env": "REAL",
                 "acc_id": ACCOUNT_ID,
+                **real_request(context.trade_service),
             },
         )
 

@@ -19,10 +19,7 @@ from moomoo_mcp.services.trading_controls import TradingControlError
 from moomoo_mcp.services.trading_policy import TradingPolicyError
 from moomoo_mcp.tools.annotations import CONSEQUENTIAL_TOOL
 from moomoo_mcp.tools.serialization import IdentifierSerializationError
-from tests import test_market_data_permissions
-from tests.test_market_data_permissions import call
-
-gateway_client = test_market_data_permissions.gateway_client
+from tests.mcp_helpers import call
 
 
 def failure(result):

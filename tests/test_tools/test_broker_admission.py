@@ -19,14 +19,11 @@ from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.order_errors import OrderNotSentError
 from moomoo_mcp.services.paper_execution import PaperExecution
 from moomoo_mcp.services.rate_limit import ProviderRateLimitError
-from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.offload import run_blocking
-from tests.conftest import call_mcp_tool
+from tests.mcp_helpers import call_mcp_tool
 from tests.rate_limit_clock import FakeClock
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.trade_helpers import real_request
 
 
 @pytest.fixture
@@ -35,9 +32,9 @@ def clock():
 
 
 @pytest.fixture
-def governed(mcp_app_context, clock):
+def governed(mcp_app_context, clock, *, trade_service_factory):
     dispatcher = BrokerRequestDispatcher(clock=clock, sleep=clock.sleep)
-    trade = TradeService(
+    trade = trade_service_factory(
         dispatcher=dispatcher,
         policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123})),
     )
@@ -344,7 +341,15 @@ async def test_invalid_filters_and_policies_fail_before_full_quota(governed):
         held.release()
     trade.policy = TradingPolicy()
     with pytest.raises(OrderNotSentError, match="read-only"):
-        await run_blocking(trade.place_order, "US.AAPL", 1.0, 1, "BUY", trd_env="REAL")
+        await run_blocking(
+            trade.place_order,
+            "US.AAPL",
+            1.0,
+            1,
+            "BUY",
+            trd_env="REAL",
+            **real_request(trade),
+        )
     trade.trade_ctx.get_acc_list.assert_not_called()
     trade.trade_ctx.unlock_trade.assert_not_called()
 

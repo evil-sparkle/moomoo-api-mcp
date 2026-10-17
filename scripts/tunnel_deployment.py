@@ -6,10 +6,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import tempfile
 from pathlib import Path
+
+if __package__:
+    from .deployment_manifest import require_hex, validate_image, validate_project
+else:
+    from deployment_manifest import require_hex, validate_image, validate_project
 
 ROOT = Path(__file__).resolve().parents[1]
 SELECTION = ROOT / ".chatgpt-deploy.json"
@@ -18,14 +22,18 @@ SELECTION = ROOT / ".chatgpt-deploy.json"
 def validate(selection: dict) -> None:
     if set(selection) != {"version", "image", "project"} or selection["version"] != 2:
         raise ValueError("unsupported tunnel selection schema")
-    if not re.fullmatch(
-        r"(?:[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/"
-        r"moomoo-api-mcp@)?sha256:[0-9a-f]{64}",
-        selection["image"],
-    ):
-        raise ValueError("select an immutable ECR digest or local image ID")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", selection["project"]):
-        raise ValueError("use the existing Compose project identity")
+    try:
+        image = selection["image"]
+        if isinstance(image, str) and image.startswith("sha256:"):
+            require_hex(image.removeprefix("sha256:"), 64, "Image digest")
+        else:
+            validate_image(image)
+    except ValueError:
+        raise ValueError("select an immutable ECR digest or local image ID") from None
+    try:
+        validate_project(selection["project"])
+    except ValueError:
+        raise ValueError("use the existing Compose project identity") from None
 
 
 def save(selection: dict, path: Path = SELECTION) -> None:

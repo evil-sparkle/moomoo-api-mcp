@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from moomoo_mcp.services.market_data_service import MarketDataService
-from tests.conftest import call_mcp_tool
+from tests.mcp_helpers import call_mcp_tool
 
 TRADING_DAYS = [
     {"time": "2026-01-02", "trade_date_type": "WHOLE"},

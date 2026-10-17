@@ -1,14 +1,13 @@
 """Non-secret selection and managed startup, with no deployment daemon access."""
 
 import json
-import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from scripts import tunnel_deployment as selection
+from tests.compose_helpers import production_wrapper
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +42,11 @@ def test_atomic_selection_preserves_identity(tmp_path):
             "123456789012.dkr.ecr.us-east-1.amazonaws.com/other@sha256:" + "a" * 64,
         ),
         ("project", "bad project"),
+        ("project", "_leading-underscore"),
+        ("project", "trailing-newline\n"),
+        ("project", "\uff11project"),
+        ("image", "sha256:" + "a" * 63),
+        ("image", "sha256:" + "g" * 64),
         ("version", 1),
         ("unexpected_field", "synthetic"),
     ],
@@ -62,13 +66,7 @@ def wrapper_fixture(
     key="synthetic-key",
     tunnel_id="tunnel_synthetic",
 ):
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    for name in ("compose-prod.sh", "tunnel_deployment.py", "deploy_verify.py"):
-        shutil.copy2(ROOT / "scripts" / name, scripts / name)
     selection.save(fixture_selection(), tmp_path / ".chatgpt-deploy.json")
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
     model = {
         "services": {
             "moomoo-mcp": {
@@ -85,19 +83,7 @@ def wrapper_fixture(
             },
         }
     }
-    docker = fake_bin / "docker"
-    docker.write_text(
-        "#!/usr/bin/env python3\nimport pathlib,sys,os,json\n"
-        + "image=os.environ.get('CHATGPT_TUNNEL_IMAGE')\n"
-        + "pathlib.Path('docker-call.json').write_text("
-        + "json.dumps([sys.argv[1:], image]))\n"
-        + "if 'config' in sys.argv: print("
-        + repr(json.dumps(model))
-        + ")\n"
-        + "else: pathlib.Path('started').touch()\n"
-    )
-    docker.chmod(0o755)
-    return scripts, {"PATH": str(fake_bin) + ":" + os.environ["PATH"]}
+    return production_wrapper(tmp_path, model["services"])
 
 
 def test_ecr_image_update_preserves_project(tmp_path, monkeypatch):

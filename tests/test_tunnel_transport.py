@@ -149,7 +149,7 @@ def test_opt_in_does_not_trust_origins():
 
 
 def test_preflight_ignores_inherited_proxy(monkeypatch, tmp_path):
-    from tests.test_private_chatgpt_preflight import AUTHORIZATION, McpFixture
+    from tests.mcp_helpers import AUTHORIZATION, McpFixture
 
     auth = tmp_path / "synthetic-authorization"
     auth.write_text(AUTHORIZATION)
@@ -175,7 +175,7 @@ def test_preflight_ignores_inherited_proxy(monkeypatch, tmp_path):
 
 
 def test_bounded_response(monkeypatch, tmp_path):
-    from tests.test_private_chatgpt_preflight import AUTHORIZATION, McpFixture
+    from tests.mcp_helpers import AUTHORIZATION, McpFixture
 
     auth = tmp_path / "synthetic-authorization"
     auth.write_text(AUTHORIZATION)

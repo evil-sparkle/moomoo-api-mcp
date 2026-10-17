@@ -3,11 +3,10 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from moomoo import RET_OK, ComboLeg, SecurityFirm
+from moomoo import RET_OK, SecurityFirm
 
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.query_contracts import (
-    COMBO_FIELDS,
     DealView,
     OrderFeeResult,
     OrderQueryResult,
@@ -19,6 +18,7 @@ from moomoo_mcp.services.query_contracts import (
     exact_identifier,
     optional_number,
     order_view,
+    plain_combo_legs,
 )
 from moomoo_mcp.services.query_snapshots import MAX_SNAPSHOT_ROWS, QuerySnapshots
 from moomoo_mcp.services.sdk_response import as_frame
@@ -118,19 +118,7 @@ class TradeQueryService:
             raise TradeQueryError(
                 "SNAPSHOT_LIMIT", operation, "too many returned rows; narrow the query"
             )
-        records = frame.to_dict("records")
-        # Compatibility rows keep exact Python identifiers; the MCP boundary
-        # serializes them. SDK ComboLeg objects must become plain dictionaries.
-        for record in records:
-            legs = record.get("combo_legs")
-            if isinstance(legs, (list, tuple)):
-                record["combo_legs"] = [
-                    {field: getattr(leg, field, None) for field in COMBO_FIELDS}
-                    if isinstance(leg, ComboLeg)
-                    else leg
-                    for leg in legs
-                ]
-        return records
+        return plain_combo_legs(frame.to_dict("records"))
 
     def get_orders(
         self,

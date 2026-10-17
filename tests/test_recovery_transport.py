@@ -12,7 +12,7 @@ import moomoo_mcp.server as server
 from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.paper_execution import PaperExecution
 from moomoo_mcp.services.trade_service import TradeService
-from tests.test_services.test_paper_execution import (
+from tests.paper_helpers import (
     Broker,
     Service,
     place,
