@@ -187,10 +187,30 @@ The following settings must reach the actual server process environment:
 
 Use [.env.example](../.env.example) as a public template. Inject private tokens
 through the operator-managed environment; keep the operator credential outside
-ordinary MCP clients and agents. For containers, arrange explicit environment
-forwarding and a persistent writable mount for the controls directory. A host
-environment file supplies Compose interpolation; values reach Python only when
-the deployment forwards them.
+ordinary MCP clients and agents. The base Compose file forwards these settings,
+preserving omitted versus explicitly empty symbol restrictions and daily caps.
+Symbol restrictions alone need no database.
+
+For daily budgets, approvals, or an operator channel, add
+`docker-compose.controls.yml` after your execution-journal overlays. It mounts
+`trading-controls-data` at `/var/lib/moomoo/trading-controls` and fixes
+`MOOMOO_TRADING_CONTROLS_PATH` to that directory's `controls.sqlite3`. The image
+prepares the directory for UID 10001. `scripts/compose-prod.sh` selects the
+overlay automatically for configured controls in SIMULATE or REAL, including
+deployments with a ChatGPT tunnel. The Ansible migration remains READ_ONLY.
+
+For example, a manual REAL deployment with approvals uses:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.real.yml \
+  -f docker-compose.controls.yml up -d
+```
+
+Set `MOOMOO_CREATE_TRADING_CONTROLS=1` only for deliberate first initialization;
+after it succeeds, restore `0` and recreate with the same command. Missing
+storage then refuses startup. Preserve the controls volume and the execution
+volumes through upgrades and mode changes. For direct Python execution, supply
+your own durable controls path and export the settings into the process.
 
 ## Prepare, review and approve
 

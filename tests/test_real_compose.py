@@ -76,9 +76,12 @@ def test_invalid_deployment_mode_cannot_skip_required_storage():
             "resolve_services",
             return_value={SERVICE: {"environment": {"MOOMOO_TRADING_MODE": "UNKNOWN"}}},
         ),
-        pytest.raises(deploy_verify.ConfigError),
+        pytest.raises(deploy_verify.ConfigError) as failure,
     ):
         deploy_verify.execution_overlays()
+    message = str(failure.value)
+    assert "MOOMOO_TRADING_MODE" in message
+    assert "READ_ONLY" in message and "SIMULATE" in message and "REAL" in message
 
 
 @pytest.mark.parametrize("paper", [False, True])

@@ -96,8 +96,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 # ---------------------------------------------------------------------------
 RUN groupadd -g 10001 opend \
     && useradd -u 10001 -g opend -m -d /home/opend -s /bin/bash opend \
-    && mkdir -p /home/opend/.com.moomoo.OpenD /var/lib/moomoo-mcp/data /app/real-execution-data \
-    && chown -R opend:opend /opt/moomooOpenD /home/opend /app /var/lib/moomoo-mcp/data \
+    && mkdir -p /home/opend/.com.moomoo.OpenD /var/lib/moomoo-mcp/data /app/real-execution-data /var/lib/moomoo/trading-controls \
+    && chown -R opend:opend /opt/moomooOpenD /home/opend /app /var/lib/moomoo-mcp/data /var/lib/moomoo/trading-controls \
     && chmod -R a+rX /opt/uv-python
 
 USER opend

@@ -6,6 +6,31 @@ cd "$(dirname "$0")/.."
 unset ECR_REGISTRY IMAGE_TAG COMPOSE_PROJECT_NAME
 # chatgpt-selection-env-v2: CI-managed immutable images; credentials stay in .env.
 optional=()
+paper_selected=false
+resolve_storage=true
+# Stopping/removing a selected tunnel must work without validating the current
+# trading settings. No service definitions are added by the storage overlays.
+if [ -f .chatgpt-deploy.json ]; then
+  for argument in "$@"; do
+    case "$argument" in
+      stop|rm) resolve_storage=false ;;
+    esac
+  done
+fi
+# Resolve through Compose so .env values and shell overrides have identical
+# meaning here and in the container. Controls apply with or without a tunnel.
+if [ "$resolve_storage" = true ]; then
+  execution_files="$(python3 scripts/deploy_verify.py execution-overlays)"
+  if [ -n "$execution_files" ]; then
+    mapfile -t storage_overlays <<< "$execution_files"
+    for overlay in "${storage_overlays[@]}"; do
+      optional+=(-f "$overlay")
+      if [ "$overlay" = docker-compose.paper.yml ]; then
+        paper_selected=true
+      fi
+    done
+  fi
+fi
 if [ -f .chatgpt-deploy.json ]; then
   if ! values="$(python3 scripts/tunnel_deployment.py compose-values)"; then
     printf '%s\n' 'Invalid tunnel selection; review saved metadata.' >&2
@@ -16,7 +41,11 @@ if [ -f .chatgpt-deploy.json ]; then
   # Preserve the paper volume across READ_ONLY/SIMULATE mode changes. READ_ONLY
   # never opens the journal; SIMULATE still requires explicit account admission
   # and first-time journal initialization through the paper overlay settings.
-  optional=(-p "${selected[1]}" -f docker-compose.paper.yml -f docker-compose.chatgpt.yml)
+  optional=(-p "${selected[1]}" "${optional[@]}")
+  if [ "$paper_selected" = false ]; then
+    optional+=(-f docker-compose.paper.yml)
+  fi
+  optional+=(-f docker-compose.chatgpt.yml)
   for argument in "$@"; do
   case "$argument" in
     up|start|restart|run|create)
@@ -32,16 +61,6 @@ if [ -f .chatgpt-deploy.json ]; then
     else
       set -- pull moomoo-mcp chatgpt-tunnel
     fi
-  fi
-else
-  # Every writable mode selects its durable storage. Configured paper accounts
-  # retain their independent paper overlay alongside REAL execution.
-  execution_files="$(python3 scripts/deploy_verify.py execution-overlays)"
-  if [ -n "$execution_files" ]; then
-    mapfile -t storage_overlays <<< "$execution_files"
-    for overlay in "${storage_overlays[@]}"; do
-      optional+=(-f "$overlay")
-    done
   fi
 fi
 exec docker --context rootless compose --env-file .env --env-file .deploy.env \

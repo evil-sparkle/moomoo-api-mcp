@@ -100,7 +100,7 @@ jobs:
               *) tests=true ;;
             esac
             case "${path}" in
-              src/*|Dockerfile|.dockerignore|pyproject.toml|uv.lock|docker-compose.yml|docker-compose.prod.yml|docker-compose.paper.yml|docker-compose.smoke.yml|scripts/smoke-test.sh|scripts/test-paper-container.sh|tests/fixtures/opend_stub.py|tests/fixtures/paper_container_checks.py|tests/test_compose_topology.py|tests/test_paper_compose.py|.github/workflows/ci.yml)
+              src/*|Dockerfile|.dockerignore|pyproject.toml|uv.lock|docker-compose.yml|docker-compose.prod.yml|docker-compose.paper.yml|docker-compose.controls.yml|docker-compose.smoke.yml|scripts/smoke-test.sh|scripts/test-paper-container.sh|tests/fixtures/opend_stub.py|tests/fixtures/paper_container_checks.py|tests/test_compose_topology.py|tests/test_paper_compose.py|tests/test_environment_contract.py|.github/workflows/ci.yml)
                 smoke=true ;;
             esac
           done

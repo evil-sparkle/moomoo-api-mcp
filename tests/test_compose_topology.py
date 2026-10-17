@@ -80,7 +80,11 @@ def _compose_command(env: dict[str, str]) -> list[str]:
     raise unittest.SkipTest(message)
 
 
-def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
+def _render(
+    *overlays: str,
+    env: dict[str, str] | None = None,
+    env_file: Path | None = None,
+) -> dict:
     """Return the configuration Compose actually resolves for these files."""
     files: list[str] = []
     for overlay in overlays:
@@ -99,7 +103,7 @@ def _render(*overlays: str, env: dict[str, str] | None = None) -> dict:
             [
                 *command,
                 "--env-file",
-                os.devnull,
+                str(env_file) if env_file is not None else os.devnull,
                 *files,
                 "config",
                 "--format",

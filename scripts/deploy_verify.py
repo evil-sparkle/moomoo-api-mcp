@@ -182,18 +182,40 @@ def execution_overlays() -> list[str]:
     if not isinstance(mode, str):
         raise ConfigError(f"{SERVICE} has an invalid trading mode.")
     mode = mode.strip().upper()
+    overlays = []
     if mode == "SIMULATE":
-        return ["docker-compose.paper.yml"]
-    if mode == "REAL":
+        overlays.append("docker-compose.paper.yml")
+    elif mode == "REAL":
         paper_accounts = environment.get("MOOMOO_SIMULATED_ACC_IDS") or ""
         if not isinstance(paper_accounts, str):
             raise ConfigError("MOOMOO_SIMULATED_ACC_IDS has an invalid value.")
-        return (["docker-compose.paper.yml"] if paper_accounts.strip() else []) + [
-            "docker-compose.real.yml"
-        ]
-    if mode == "READ_ONLY":
+        if paper_accounts.strip():
+            overlays.append("docker-compose.paper.yml")
+        overlays.append("docker-compose.real.yml")
+    elif mode == "READ_ONLY":
         return []
-    raise ConfigError(f"{SERVICE} has an invalid trading mode.")
+    else:
+        raise ConfigError(
+            f"{SERVICE} has an invalid trading mode. "
+            "Set MOOMOO_TRADING_MODE to READ_ONLY, SIMULATE, or REAL; "
+            "the ChatGPT tunnel permits only READ_ONLY or SIMULATE."
+        )
+    if (
+        environment.get("MOOMOO_MAX_DAILY_NOTIONAL_BY_CURRENCY") is not None
+        or any(
+            str(environment.get(name) or "").strip()
+            for name in ("MOOMOO_TRADING_CONTROLS_PATH", "MOOMOO_OPERATOR_AUTH_TOKEN")
+        )
+        or any(
+            str(environment.get(name) or "0").strip() != "0"
+            for name in (
+                "MOOMOO_REQUIRE_TRADE_APPROVAL",
+                "MOOMOO_CREATE_TRADING_CONTROLS",
+            )
+        )
+    ):
+        overlays.append("docker-compose.controls.yml")
+    return overlays
 
 
 def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:

@@ -262,6 +262,28 @@ The server SHALL support optional symbol limits, currency-qualified daily budget
 - **WHEN** approval or daily budgets are enabled without valid initialized storage
 - **THEN** startup SHALL fail closed with a safe configuration error
 
+#### Scenario: Compose forwards explicit controls
+- **WHEN** the operator configures symbol restrictions, daily budgets, approval requirements or operator credentials in the Compose environment file
+- **THEN** the MCP server SHALL receive those settings
+- **AND** omitted symbol restrictions and daily budgets SHALL remain disabled while explicitly empty values SHALL fail validation
+
+#### Scenario: Container controls use independent durable storage
+- **WHEN** daily budgets, approvals or an operator channel are selected in a writable production deployment
+- **THEN** the production wrapper SHALL include `docker-compose.controls.yml`, with or without a selected ChatGPT tunnel
+- **AND** this overlay SHALL mount an independent `trading-controls-data` volume at `/var/lib/moomoo/trading-controls`, prepared for UID 10001
+- **AND** first initialization SHALL require explicit `MOOMOO_CREATE_TRADING_CONTROLS=1`, with normal operation using `0`
+
+### Requirement: Local OpenD Build Configuration
+The base Compose file SHALL forward explicitly configured `OPEND_VERSION`, `OPEND_TAG`, `OPEND_URL` and `OPEND_SHA256` as local build arguments. Omitted arguments SHALL retain Dockerfile defaults. Documentation SHALL distinguish local build configuration from prebuilt production images.
+
+#### Scenario: Local release override
+- **WHEN** an operator sets the OpenD release arguments in the Compose environment file
+- **THEN** local builds SHALL receive those arguments without changing their values
+
+#### Scenario: Default local build
+- **WHEN** no OpenD build arguments are configured
+- **THEN** Compose SHALL leave the pinned Dockerfile defaults in effect
+
 ### Requirement: Separate Operator Approval Credential
 The optional operator approval endpoint SHALL require a distinct credential and server-configured operator identity. It SHALL not change ordinary MCP or recovery authentication. Equal ordinary and operator credentials SHALL be rejected without printing either value.
 

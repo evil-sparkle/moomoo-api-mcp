@@ -162,6 +162,34 @@ MCP_AUTH_TOKEN=                                # generate: openssl rand -hex 32
 
 Compose supplies `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=USD:500` when the setting
 is unset or empty. Set a nonempty currency-qualified value to override that cap.
+`MOOMOO_MAX_ORDER_QTY` is optional: unset or blank means no quantity cap. The
+current valuation adapter supports verified US securities only. Adding an HKD
+or SGD cap does not enable non-US trading: those instruments' currencies cannot
+yet be established. `MOOMOO_TRADING_MARKET=NONE` discovers all accounts and does
+not alter this restriction. Reporting currency affects account totals only.
+
+For a $500 USD cap, a $100 stock order passes this guardrail, while a $600 order
+is refused. An option with a $6 premium and broker multiplier 100 is $600 per
+contract and is also refused. Configure an explicit cap for intended order
+sizes; an empty value retains the Docker default. Direct source launches have
+no notional cap when this setting is omitted or blank.
+
+The default READ_ONLY setup needs no execution journal. Writable modes also need:
+
+- SIMULATE: `MOOMOO_SIMULATED_ACC_IDS` from `get_accounts`, the paper overlay,
+  and an initialized paper journal. Keep the market filter `US` or `NONE`.
+- REAL: `MOOMOO_REAL_ACC_IDS` from `get_accounts`, the REAL overlay, and an
+  initialized REAL journal. Keep paper account settings unset for REAL-only
+  execution, or retain the independent paper overlay for both environments.
+- Daily budgets, approvals, or an operator channel: the controls overlay and
+  initialized controls storage described in [trading controls](trading-contracts.md#enable-optional-controls).
+
+`scripts/compose-prod.sh` selects these overlays automatically. For manual local
+Compose, specify `-f docker-compose.paper.yml` or `-f docker-compose.real.yml`
+after `-f docker-compose.yml`, and add `-f docker-compose.controls.yml` when
+needed. Setting the mode alone does not add storage to manual Compose commands.
+Each store's creation flag is `1` only for deliberate first provisioning, then
+must return to `0`. Preserve the same project and volumes for every command.
 
 `MCP_AUTH_TOKEN` is not optional on this transport. The server refuses to start
 without it, because an unauthenticated HTTP endpoint exposes every tool,
@@ -467,6 +495,7 @@ named directory in the checkout does not remove the Docker volume.
 | Trade halt (`ARMED`/`HALTED`) | MCP process memory; container replacement starts a new process. Restarting is not evidence an uncertain order was reconciled. |
 | Paper execution journal and recovery audit | Separate `execution-data` volume when configured; preserve it and its identity through mode changes, upgrades and restores. |
 | REAL execution journal and recovery audit | Separate `real-execution-data` volume in REAL mode; preserve independently of paper storage through mode changes, upgrades and restores. |
+| Daily budgets and operator approvals | Separate `trading-controls-data` volume when enabled; preserve independently of both execution journals. |
 | Container environment | Restart reuses existing values; use deployment to recreate containers after settings change. |
 
 When OpenD exits, the supervisor restarts it with bounded retries while MCP
