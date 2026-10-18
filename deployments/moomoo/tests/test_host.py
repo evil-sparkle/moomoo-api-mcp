@@ -410,9 +410,7 @@ class HostTests(unittest.TestCase):
             if arguments[1] == "inspect":
                 container = existing()
                 if arguments[2] != "moomoo-api-mcp":
-                    container["host"] = {
-                        "Tmpfs": {"/run/tunnel": "mode=0700,size=16m"}
-                    }
+                    container["host"] = {"Tmpfs": {"/run/tunnel": "mode=0700,size=16m"}}
                 return json.dumps(container)
             if arguments[1] == "ps":
                 return "synthetic-tunnel"
