@@ -582,4 +582,3 @@ class HostTests(unittest.TestCase):
         self.assertIn("MCP_AUTH_TOKEN=synthetic-primary", restored["environment"])
         self.assertIn("MOOMOO_TRADING_MODE=SIMULATE", restored["environment"])
         self.assertNotIn("edited-after-release", result.stdout + result.stderr)
-

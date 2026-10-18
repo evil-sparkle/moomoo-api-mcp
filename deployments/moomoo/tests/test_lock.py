@@ -178,4 +178,3 @@ class LockTests(unittest.TestCase):
             self.command(
                 "release", environment=environment | {locking.TOKEN_ENV: token}
             )
-

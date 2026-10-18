@@ -322,4 +322,3 @@ class PlaybookTests(unittest.TestCase):
             json.loads((lock / "owner.json").read_text())["token"],
             "synthetic-other-owner",
         )
-
