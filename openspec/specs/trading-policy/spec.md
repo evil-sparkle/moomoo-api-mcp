@@ -20,8 +20,7 @@ SHALL also default to read-only. Health SHALL expose the configured mode.
 - **THEN** the following detailed obligations SHALL hold:
 
 Ordinary `READ_ONLY` operation SHALL remain independent of the execution journal.
-In `READ_ONLY` mode the system SHALL NOT open, create or require any journal
-database, and SHALL NOT fail for want of one.
+Without explicit observation, `READ_ONLY` SHALL NOT open, create or require journals or fail for want of one. Explicit observation SHALL open only configured existing journals for inspection and query-only recovery, without enabling writes or initialization.
 
 A `SIMULATE` mutation SHALL be admitted under an explicit `SIMULATE` or `REAL`
 policy, using the same dedicated persistent paper database across mode changes.
@@ -48,7 +47,7 @@ the configured mode or enable `REAL` execution.
 #### Scenario: Read-only deployment needs no journal
 
 - **GIVEN** `MOOMOO_TRADING_MODE` is `READ_ONLY`
-- **WHEN** the server starts and serves read operations
+- **WHEN** the server starts and serves read operations without explicit observation
 - **THEN** it SHALL NOT open, create or require a journal database
 - **AND** the absence of journal storage SHALL NOT cause a failure
 

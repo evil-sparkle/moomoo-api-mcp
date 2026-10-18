@@ -41,8 +41,8 @@ The system SHALL support the following security configuration environment variab
   order, or for a combo's largest leg.
 - `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY`: optional currency-qualified caps on a
   single order's notional value, in the form `CURRENCY:AMOUNT[,CURRENCY:AMOUNT...]`.
-  - Compose SHALL supply `USD:500` when this setting is unset or empty.
-  - Compose SHALL preserve an operator-provided value when it is nonempty.
+  - All launchers SHALL supply `USD:500` when this setting is unset or empty.
+  - Launchers SHALL preserve a nonempty explicit value; `NONE` SHALL disable the cap.
 - `MOOMOO_REAL_ACC_IDS`: comma-separated REAL account identifiers that REAL writes
   may target. Required when `MOOMOO_TRADING_MODE` is `REAL`.
 - `MOOMOO_SECURITY_FIRM`: optional securities-firm identifier. When set, it SHALL
@@ -189,7 +189,7 @@ The server SHALL support `MCP_ALLOW_CHATGPT_TUNNEL_HOST` with absent, blank or `
 ### Requirement: Optional Tunnel Environment Configuration
 
 The optional Compose service SHALL receive `CHATGPT_TUNNEL_API_KEY`,
-`CHATGPT_TUNNEL_ID` and the existing ordinary `MCP_AUTH_TOKEN` through explicit
+`CHATGPT_TUNNEL_ID` and the selected restricted MCP token or existing ordinary `MCP_AUTH_TOKEN` through explicit
 environment injection.
 
 #### Scenario: Optional tunnel credential validation contract
@@ -198,7 +198,7 @@ environment injection.
 - **THEN** the following detailed obligations SHALL hold:
 
 The public template SHALL document the settings and the
-allowed READ_ONLY and SIMULATE deployment modes, the refusal of REAL mode and
+allowed READ_ONLY and SIMULATE modes, REAL only with a restricted client lacking live-write and gateway-control grants, and
 the existing paper configuration required in SIMULATE. The runtime key SHALL be nonblank printable
 ASCII; the selected identifier SHALL match `tunnel_[a-zA-Z0-9_-]{1,128}` after
 normalization. Credentials SHALL NOT be required by default-off deployments or
@@ -208,12 +208,12 @@ inputs without printing their values.
 #### Scenario: Enabled inputs are complete
 
 - **WHEN** the optional service is enabled with valid settings
-- **THEN** both OpenAI settings and the ordinary MCP token SHALL reach only the intended tunnel environment
+- **THEN** both OpenAI settings and the selected MCP token SHALL reach only the intended tunnel environment
 - **AND** the launcher SHALL derive the configured local bearer header without a separate file
 
 #### Scenario: Invalid optional input
 
-- **WHEN** an enabled deployment has a missing or invalid runtime key, tunnel identifier or ordinary MCP bearer
+- **WHEN** an enabled deployment has a missing or invalid runtime key, tunnel identifier or selected MCP bearer
 - **THEN** deployment validation SHALL fail before service startup with a safe diagnostic
 - **AND** no credential value SHALL be printed
 
@@ -241,7 +241,14 @@ SHALL not expose an operator acknowledgement capability.
 
 ### Requirement: Separate Durable REAL Journal Configuration
 
-REAL startup SHALL require `MOOMOO_REAL_JOURNAL_PATH` and accept explicit `MOOMOO_CREATE_REAL_JOURNAL=0|1`, defaulting to 0. REAL and SIMULATE stores SHALL use distinct directories and immutable environment metadata. Startup SHALL validate and lock both configured stores before listening, preserve existing paper storage, and fail closed for missing, corrupt, incompatible or competing storage. READ_ONLY SHALL open neither store.
+REAL execution SHALL use a separate durable, environment-bound journal. Startup and optional observation SHALL preserve the following configuration and ownership guarantees.
+
+#### Scenario: Journal configuration and startup contract
+
+- **WHEN** startup loads the selected deployment configuration
+- **THEN** the following detailed obligations SHALL hold:
+
+REAL startup SHALL require `MOOMOO_REAL_JOURNAL_PATH` and accept explicit `MOOMOO_CREATE_REAL_JOURNAL=0|1`, defaulting to 0. REAL and SIMULATE stores SHALL use distinct directories and immutable environment metadata. Startup SHALL validate and lock both configured stores before listening, preserve existing paper storage, and fail closed for missing, corrupt, incompatible or competing storage. READ_ONLY SHALL open neither store unless explicit observation is enabled; observation SHALL NOT enable writes.
 
 #### Scenario: Live deployment requires initialized persistence
 - **WHEN** REAL mode lacks its path or initialization is disabled for a missing database
@@ -252,11 +259,11 @@ REAL startup SHALL require `MOOMOO_REAL_JOURNAL_PATH` and accept explicit `MOOMO
 - **THEN** startup SHALL refuse instead of migrating records across trading environments
 
 #### Scenario: Read-only and paper compatibility
-- **WHEN** the server runs READ_ONLY or SIMULATE
+- **WHEN** the server runs READ_ONLY or SIMULATE without explicit observation
 - **THEN** no REAL journal SHALL be opened and existing paper behavior SHALL be preserved
 
 ### Requirement: Optional Durable Trading Controls
-The server SHALL support optional symbol limits, currency-qualified daily budgets, approval requirement and explicitly initialized persistent controls storage. Required controls with unavailable storage SHALL fail startup before listening. READ_ONLY SHALL not open controls storage. Defaults SHALL preserve existing execution behavior.
+The server SHALL support optional symbol limits, currency-qualified daily budgets, approval requirement and explicitly initialized persistent controls storage. Required controls with unavailable storage SHALL fail startup before listening. READ_ONLY SHALL open configured existing controls only for explicit observation or a configured trusted operator channel. Defaults SHALL preserve existing execution behavior.
 
 #### Scenario: Missing required controls storage
 - **WHEN** approval or daily budgets are enabled without valid initialized storage
@@ -290,3 +297,10 @@ The optional operator approval endpoint SHALL require a distinct credential and 
 #### Scenario: Credential separation
 - **WHEN** the configured operator credential equals the ordinary MCP credential
 - **THEN** startup SHALL fail rather than let an agent approve its own mutations
+
+### Requirement: Offline effective configuration validation
+Deployment preflight SHALL validate the selected application's effective settings and mounted storage without connecting to the broker, taking execution locks, initializing databases, or revealing credential values. Missing storage SHALL require an explicit initialization flag.
+
+#### Scenario: Invalid writable configuration
+- **WHEN** effective writable settings lack required accounts or journal storage
+- **THEN** preflight SHALL fail before replacing the healthy running application
