@@ -17,3 +17,8 @@ The system SHALL expose account-, environment-, and instrument-scoped support, p
 #### Scenario: Readiness is conditional
 - **WHEN** account discovery or journal health is unavailable
 - **THEN** readiness SHALL include the missing evidence without claiming broker acceptance
+
+#### Scenario: Discovery and preparation select the executable account
+- **WHEN** multiple accounts exist but only one matches deployment and client account scopes and the instrument market
+- **THEN** discovery, approval preparation and execution SHALL resolve the same default account
+- **AND** client grants and persistent operator pause SHALL remain explicit readiness constraints
