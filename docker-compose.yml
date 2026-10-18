@@ -88,9 +88,9 @@ services:
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       # Optional narrower credential for remote clients sharing this backend.
       - MCP_RESTRICTED_AUTH_TOKEN=${MCP_RESTRICTED_AUTH_TOKEN:-}
-      - MCP_RESTRICTED_PERMISSIONS=${MCP_RESTRICTED_PERMISSIONS:-market_read,real_read,simulate_read,simulate_write}
-      - MCP_RESTRICTED_REAL_ACC_IDS=${MCP_RESTRICTED_REAL_ACC_IDS:-}
-      - MCP_RESTRICTED_SIMULATE_ACC_IDS=${MCP_RESTRICTED_SIMULATE_ACC_IDS:-}
+      - MCP_RESTRICTED_PERMISSIONS
+      - MCP_RESTRICTED_REAL_ACC_IDS
+      - MCP_RESTRICTED_SIMULATE_ACC_IDS
       # Only honoured in READ_ONLY mode, and only as "1".
       - MCP_ALLOW_UNAUTHENTICATED_HTTP=${MCP_ALLOW_UNAUTHENTICATED_HTTP:-}
       - FASTMCP_HOST=0.0.0.0

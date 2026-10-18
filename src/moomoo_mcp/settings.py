@@ -401,7 +401,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         try:
             restricted_grants = ClientGrants(permissions, *account_scopes)
         except ValueError as exc:
-            raise TradingModeConfigError(str(exc)) from exc
+            raise TradingModeConfigError(f"MCP_RESTRICTED_PERMISSIONS: {exc}") from exc
 
     return Settings(
         opend_host=(env.get(ENV_OPEND_HOST) or "").strip() or DEFAULT_HOST,
