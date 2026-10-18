@@ -288,13 +288,15 @@ class HostTests(unittest.TestCase):
         self.assertFalse(any("ps" in call.args[0] for call in commands.call_args_list))
 
     def test_invalid_legacy_snapshot_stops_before_candidate_resolution(self):
-        with patch.object(
-            host,
-            "execute",
-            side_effect=[json.dumps(existing()), "", ValueError("invalid rescue")],
-        ) as command:
-            with self.assertRaises(ValueError):
-                host.prepare(self.root, self.value, capture_predecessor=True)
+        with (
+            patch.object(
+                host,
+                "execute",
+                side_effect=[json.dumps(existing()), "", ValueError("invalid rescue")],
+            ) as command,
+            self.assertRaises(ValueError),
+        ):
+            host.prepare(self.root, self.value, capture_predecessor=True)
         self.assertEqual(command.call_count, 3)
         self.assertFalse((self.root / host.SNAPSHOT).exists())
 
