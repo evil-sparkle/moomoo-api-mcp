@@ -241,6 +241,13 @@ SHALL not expose an operator acknowledgement capability.
 
 ### Requirement: Separate Durable REAL Journal Configuration
 
+REAL execution SHALL use a separate durable, environment-bound journal. Startup and optional observation SHALL preserve the following configuration and ownership guarantees.
+
+#### Scenario: Journal configuration and startup contract
+
+- **WHEN** startup loads the selected deployment configuration
+- **THEN** the following detailed obligations SHALL hold:
+
 REAL startup SHALL require `MOOMOO_REAL_JOURNAL_PATH` and accept explicit `MOOMOO_CREATE_REAL_JOURNAL=0|1`, defaulting to 0. REAL and SIMULATE stores SHALL use distinct directories and immutable environment metadata. Startup SHALL validate and lock both configured stores before listening, preserve existing paper storage, and fail closed for missing, corrupt, incompatible or competing storage. READ_ONLY SHALL open neither store unless explicit observation is enabled; observation SHALL NOT enable writes.
 
 #### Scenario: Live deployment requires initialized persistence

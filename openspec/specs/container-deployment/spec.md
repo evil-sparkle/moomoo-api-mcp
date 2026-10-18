@@ -885,6 +885,13 @@ successful native release.
 
 ### Requirement: State-preserving READ_ONLY migration
 
+Native migration SHALL preserve configured operation and persistent state under the following host, configuration and storage safety contract.
+
+#### Scenario: Migration configuration and state contract
+
+- **WHEN** startup loads the selected deployment configuration
+- **THEN** the following detailed obligations SHALL hold:
+
 The initial native migration SHALL require an explicit single non-root host,
 rootless Docker, an explicitly selected READ_ONLY, SIMULATE or REAL configuration, an existing matching Compose project
 and named OpenD state. It SHALL preserve the discovered OpenD and known journal
