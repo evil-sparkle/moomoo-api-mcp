@@ -30,6 +30,7 @@ from moomoo_mcp.services.instrument_rules import (
 )
 from moomoo_mcp.services.order_errors import not_sent
 from moomoo_mcp.services.paper_recovery import PaperRecovery
+from moomoo_mcp.services.recovery import pending_outcome_health
 from moomoo_mcp.services.trading_policy import LegFacts, OrderFacts
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
@@ -60,17 +61,7 @@ class PaperExecution:
         return prepare_paper_call(self, method, params)
 
     def health(self) -> dict:
-        health = self.store.health()
-        if self._late_failure:
-            health["state"] = "JOURNAL_BLOCKED"
-            health["blocking_reasons"] = sorted(
-                set(health["blocking_reasons"]) | {"OUTCOME_NOT_STORED"}
-            )
-            health["blocking"] = max(health["blocking"], len(self._late_failure))
-            health["pending_operation_ids"] = sorted(
-                set(health["pending_operation_ids"]) | self._late_failure.keys()
-            )
-        return health
+        return pending_outcome_health(self.store.health(), self._late_failure.keys())
 
     def ready(self) -> None:
         if self._late_failure:

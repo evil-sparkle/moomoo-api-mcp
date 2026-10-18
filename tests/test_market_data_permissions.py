@@ -1,56 +1,20 @@
 """Quote denials remain actionable errors through real MCP HTTP dispatch."""
 
 import json
-from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
-from moomoo import OpenQuoteContext
-from starlette.testclient import TestClient
 
-import moomoo_mcp.server as server
-from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.quote_errors import (
     QuotePermissionDeniedError,
     raise_quote_error,
 )
+from tests.mcp_helpers import call, rpc
 
 DENIAL = (
     "No permission to get quotes for SG.XND. "
     "Please check SG Security MarketETFs quote permissions."
 )
-TOKEN = "test-quote-permissions-token"
-
-
-@pytest.fixture
-def gateway_client(monkeypatch, mcp_app_context):
-    quote_ctx = MagicMock(spec=OpenQuoteContext)
-    quote_ctx.subscribe.return_value = (0, None)
-    mcp_app_context.market_data_service = MarketDataService(quote_ctx)
-    monkeypatch.setattr(server, "get_services", lambda: mcp_app_context)
-    monkeypatch.setattr(server.mcp, "_session_manager", None)
-    with TestClient(server.create_streamable_http_app(TOKEN)) as client:
-        yield client, quote_ctx, mcp_app_context
-    server.mcp._session_manager = None
-
-
-def rpc(client, method, params):
-    response = client.post(
-        "/mcp",
-        headers={
-            "Authorization": "Bearer " + TOKEN,
-            "Accept": "application/json",
-        },
-        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert "error" not in body
-    return body["result"]
-
-
-def call(client, name, arguments):
-    return rpc(client, "tools/call", {"name": name, "arguments": arguments})
 
 
 def diagnostic(result):

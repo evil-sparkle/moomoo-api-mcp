@@ -26,9 +26,9 @@ from moomoo_mcp.services.order_errors import (
     not_sent_message,
 )
 from moomoo_mcp.services.real_recovery import RealRecovery
+from moomoo_mcp.services.recovery import pending_outcome_health
 from moomoo_mcp.services.validation import (
-    validate_order_values,
-    validate_required_order_fields,
+    validate_real_request,
 )
 from moomoo_mcp.tools.serialization import serialize_identifiers
 
@@ -149,69 +149,6 @@ class RealExecution:
         )
         return self._retry(row, kind, params) if row is not None else None
 
-    @staticmethod
-    def _validate_values(method: str, params: dict) -> None:
-        if method == "place_order":
-            if isinstance(params["price"], str):
-                raise ValueError("REAL price must be numeric")
-            validate_order_values(
-                method,
-                order_type=params["order_type"],
-                qty=params["qty"],
-                price=params["price"],
-                aux_price=params.get("aux_price"),
-                trail_value=params.get("trail_value"),
-                trail_spread=params.get("trail_spread"),
-            )
-            validate_required_order_fields(
-                method,
-                order_type=params["order_type"],
-                aux_price=params.get("aux_price"),
-                trail_type=params.get("trail_type"),
-                trail_value=params.get("trail_value"),
-            )
-        elif method == "place_combo_order":
-            validate_order_values(
-                method,
-                order_type=params["order_type"],
-                qty=params["qty"],
-                combo_price=params["price"],
-            )
-        elif method in {"modify_order", "cancel_order"}:
-            identity = params.get("order_id")
-            if (
-                not isinstance(identity, str)
-                or not identity.isascii()
-                or not identity.isdecimal()
-                or int(identity) <= 0
-            ):
-                raise ValueError(
-                    "REAL mutation must name one positive decimal order ID"
-                )
-            if method == "modify_order" and str(
-                params["modify_order_op"]
-            ).strip().upper() not in {
-                "NORMAL",
-                "CANCEL",
-                "DISABLE",
-                "ENABLE",
-                "DELETE",
-            }:
-                raise ValueError("Unsupported REAL modification operation")
-            if method == "modify_order":
-                requested = str(params["modify_order_op"]).strip().upper()
-                # The target's order type is not known until its read. Check
-                # independently invalid patches now; defer type-specific zero
-                # limit prices to the existing merged-order validation.
-                validate_order_values(
-                    method,
-                    order_type="",
-                    qty=params.get("qty")
-                    if requested in {"NORMAL", "ENABLE"}
-                    else None,
-                    price=params.get("price"),
-                )
-
     def recover_admission(self, method: str, params: dict) -> dict | None:
         return self.retry(method, params)
 
@@ -220,7 +157,7 @@ class RealExecution:
         if existing is not None:
             return existing, None
         with not_sent(method):
-            self._validate_values(method, params)
+            validate_real_request(method, params)
             if params["admission_epoch"] != self.store.epoch:
                 raise ExecutionConflict(
                     "Unknown non-current-epoch token cannot be accounted for; "
@@ -250,17 +187,7 @@ class RealExecution:
         return None, account
 
     def health(self) -> dict:
-        health = self.store.health()
-        if self._late_failure:
-            health["state"] = "JOURNAL_BLOCKED"
-            health["blocking_reasons"] = sorted(
-                set(health["blocking_reasons"]) | {"OUTCOME_NOT_STORED"}
-            )
-            health["blocking"] = max(health["blocking"], len(self._late_failure))
-            health["pending_operation_ids"] = sorted(
-                set(health["pending_operation_ids"]) | self._late_failure.keys()
-            )
-        return health
+        return pending_outcome_health(self.store.health(), self._late_failure.keys())
 
     def ready(self) -> None:
         if self._late_failure:

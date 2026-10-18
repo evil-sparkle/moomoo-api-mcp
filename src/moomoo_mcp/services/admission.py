@@ -22,8 +22,7 @@ from moomoo_mcp.services.trade_queries import (
 from moomoo_mcp.services.validation import (
     validate_choice,
     validate_date_range,
-    validate_order_values,
-    validate_required_order_fields,
+    validate_real_request,
 )
 
 if TYPE_CHECKING:
@@ -253,7 +252,7 @@ def prepare_trade_call(
                 raise ValueError("Persistent REAL journal is not configured")
             if real.retry(method, params) is not None:
                 return plan
-            real._validate_values(method, params)
+            validate_real_request(method, params)
             if params["admission_epoch"] != real.store.epoch:
                 raise ValueError(
                     "Unknown non-current-epoch token cannot be accounted for"
@@ -304,32 +303,8 @@ def prepare_trade_call(
                     in {"NORMAL", "ENABLE"}
                 )
                 if method == "place_order":
-                    if isinstance(params["price"], str):
-                        raise ValueError("REAL price must be numeric")
-                    validate_order_values(
-                        method,
-                        order_type=params["order_type"],
-                        qty=params["qty"],
-                        price=params["price"],
-                        aux_price=params["aux_price"],
-                        trail_value=params["trail_value"],
-                        trail_spread=params["trail_spread"],
-                    )
-                    validate_required_order_fields(
-                        method,
-                        order_type=params["order_type"],
-                        aux_price=params["aux_price"],
-                        trail_type=params["trail_type"],
-                        trail_value=params["trail_value"],
-                    )
                     market = service._get_market_from_code(params["code"])
                 elif method == "place_combo_order":
-                    validate_order_values(
-                        method,
-                        order_type=params["order_type"],
-                        qty=params["qty"],
-                        combo_price=params["price"],
-                    )
                     legs = service._build_combo_legs(params["combo_legs"])
                     market = service._get_market_from_code(legs[0].code)
                 if exposing:

@@ -1,25 +1,17 @@
-"""Shared fixtures and an in-process MCP dispatch harness.
+"""Shared service fixtures for MCP dispatch and HTTP transport tests."""
 
-Several requirements are about what crosses the MCP boundary, not about what a
-Python function returns. Calling the decorated tool function directly skips
-FastMCP's argument validation and result conversion, so it cannot prove that a
-tool actually serializes an identifier as a string or forwards an argument to
-the SDK. ``call_mcp_tool`` dispatches by tool name through the real server and
-returns both the text content and the structured content a client would see.
-"""
-
-import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
-from mcp.server.lowlevel.server import request_ctx
-from mcp.shared.context import RequestContext
 
-from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.server import AppContext
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
+from tests.mcp_helpers import McpToolResult, call_mcp_tool
+from tests.mcp_helpers import gateway_client as gateway_client
+from tests.trade_helpers import trade_service_factory as trade_service_factory
 
 # Importing the tool modules registers every tool on the shared ``mcp`` server.
 import moomoo_mcp.tools.account  # noqa: F401,E402  isort:skip
@@ -56,66 +48,6 @@ def mcp_app_context(
         trade_service=mock_trade_service,
         market_data_service=mock_market_data_service,
     )
-
-
-class McpToolResult:
-    """The two views of a tool result that a client receives."""
-
-    def __init__(self, content: Any, structured: Any):
-        self.content = content
-        self.structured = structured
-
-    @property
-    def text(self) -> str:
-        """Concatenated text blocks, exactly as serialized for the client."""
-        return "".join(
-            block.text
-            for block in self.content
-            if getattr(block, "type", None) == "text"
-        )
-
-    @property
-    def json(self) -> Any:
-        """The single text block parsed back as JSON."""
-        return json.loads(self.text)
-
-    @property
-    def json_blocks(self) -> list[Any]:
-        """Each text block parsed separately.
-
-        FastMCP emits one text block per element for a list-returning tool, so a
-        list result is only valid JSON block by block.
-        """
-        return [
-            json.loads(block.text)
-            for block in self.content
-            if getattr(block, "type", None) == "text"
-        ]
-
-
-async def call_mcp_tool(
-    app_context: AppContext, name: str, arguments: dict[str, Any] | None = None
-) -> McpToolResult:
-    """Dispatch a tool by name through the real FastMCP server."""
-    session = MagicMock()
-    session.send_log_message = AsyncMock()
-    token = request_ctx.set(
-        RequestContext(
-            request_id="test-req",
-            meta=None,
-            session=session,
-            lifespan_context=app_context,
-        )
-    )
-    try:
-        result = await mcp.call_tool(name, arguments or {})
-    finally:
-        request_ctx.reset(token)
-    # FastMCP returns unstructured content alone for tools without an output
-    # schema, and a (content, structured) pair for tools that have one.
-    if isinstance(result, tuple):
-        return McpToolResult(*result)
-    return McpToolResult(result, None)
 
 
 @pytest.fixture

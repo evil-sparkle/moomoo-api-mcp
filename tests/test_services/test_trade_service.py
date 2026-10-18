@@ -23,9 +23,7 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
     TradingPolicyError,
 )
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.trade_helpers import real_request
 
 # These tests exercise order writes, so they state that intent explicitly:
 # a service constructed without a policy is read-only and refuses them.
@@ -100,9 +98,9 @@ def mock_trade_ctx():
 
 
 @pytest.fixture
-def trade_service_with_mock(mock_trade_ctx):
+def trade_service_with_mock(mock_trade_ctx, *, trade_service_factory):
     """Create a write-enabled TradeService with a mocked context."""
-    service = TradeService(policy=REAL_POLICY)
+    service = trade_service_factory(policy=REAL_POLICY)
     service.trade_ctx = mock_trade_ctx
     return service
 
@@ -186,7 +184,7 @@ class TestReadOnlyGatewayLock:
     """
 
     @staticmethod
-    def _connected(policy, lock_result=(RET_OK, "")):
+    def _connected(policy, lock_result=(RET_OK, ""), *, trade_service_factory):
         """Connect a service against a mock context that answers the lock.
 
         Returns the SDK's original reconnect callback alongside the context:
@@ -200,7 +198,7 @@ class TestReadOnlyGatewayLock:
         sdk_reconnect = ctx.on_api_socket_reconnected
         sdk_reconnect.return_value = (RET_OK, "")
 
-        service = TradeService(policy=policy)
+        service = trade_service_factory(policy=policy)
         with patch(
             "moomoo_mcp.services.trade_service.OpenSecTradeContext",
             return_value=ctx,
@@ -208,21 +206,24 @@ class TestReadOnlyGatewayLock:
             service.connect(timeout=5)
         return service, ctx, sdk_reconnect
 
-    def test_connecting_locks_the_gateway(self):
-        service, ctx, _ = self._connected(TradingPolicy(TradingMode.READ_ONLY))
+    def test_connecting_locks_the_gateway(self, trade_service_factory):
+        service, ctx, _ = self._connected(
+            TradingPolicy(TradingMode.READ_ONLY),
+            trade_service_factory=trade_service_factory,
+        )
 
         ctx.unlock_trade.assert_called_once_with(is_unlock=False)
         ctx.close.assert_not_called()
         assert service.trade_ctx is ctx
 
-    def test_reconnect_keeps_the_configured_market_context(self):
+    def test_reconnect_keeps_the_configured_market_context(self, trade_service_factory):
         ctx = MagicMock()
         ctx.unlock_trade.return_value = (RET_OK, "")
         with patch(
             "moomoo_mcp.services.trade_service.OpenSecTradeContext",
             return_value=ctx,
         ) as context_class:
-            service = TradeService(
+            service = trade_service_factory(
                 trading_market="US",
                 policy=TradingPolicy(TradingMode.SIMULATE),
             )
@@ -236,9 +237,12 @@ class TestReadOnlyGatewayLock:
         )
         assert service.trade_ctx is ctx
 
-    def test_reconnecting_locks_the_gateway_again(self):
+    def test_reconnecting_locks_the_gateway_again(self, trade_service_factory):
         """OpenD restarting must not leave a READ_ONLY server unlocked."""
-        service, ctx, _ = self._connected(TradingPolicy(TradingMode.READ_ONLY))
+        service, ctx, _ = self._connected(
+            TradingPolicy(TradingMode.READ_ONLY),
+            trade_service_factory=trade_service_factory,
+        )
         ctx.unlock_trade.reset_mock()
 
         # What the SDK calls on the reconnect thread once the socket is ready.
@@ -247,9 +251,14 @@ class TestReadOnlyGatewayLock:
         ctx.unlock_trade.assert_called_once_with(is_unlock=False)
         assert service.trade_ctx is ctx
 
-    def test_the_sdk_reconnect_work_still_runs_and_is_reported(self):
+    def test_the_sdk_reconnect_work_still_runs_and_is_reported(
+        self, trade_service_factory
+    ):
         """The hook wraps the SDK's own callback; it does not replace it."""
-        _, ctx, sdk_reconnect = self._connected(TradingPolicy(TradingMode.READ_ONLY))
+        _, ctx, sdk_reconnect = self._connected(
+            TradingPolicy(TradingMode.READ_ONLY),
+            trade_service_factory=trade_service_factory,
+        )
         sdk_reconnect.return_value = (RET_ERROR, "init connect failed")
 
         result = ctx.on_api_socket_reconnected()
@@ -257,11 +266,12 @@ class TestReadOnlyGatewayLock:
         sdk_reconnect.assert_called_once_with()
         assert result == (RET_ERROR, "init connect failed")
 
-    def test_a_refused_lock_does_not_break_the_reconnect(self):
+    def test_a_refused_lock_does_not_break_the_reconnect(self, trade_service_factory):
         """Raising here would cost the SDK the connection it just made."""
         _, ctx, _sdk = self._connected(
             TradingPolicy(TradingMode.READ_ONLY),
             lock_result=(RET_ERROR, "trade svr not ready"),
+            trade_service_factory=trade_service_factory,
         )
         ctx.unlock_trade.reset_mock()
 
@@ -269,13 +279,14 @@ class TestReadOnlyGatewayLock:
         ctx.unlock_trade.assert_called_once_with(is_unlock=False)
 
     def test_a_refused_lock_on_initial_connect_is_logged_and_keeps_the_connection(
-        self, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture, trade_service_factory
     ):
         """A refused lock at connect must not fail connection or discard context."""
         with caplog.at_level(logging.WARNING):
             service, ctx, _ = self._connected(
                 TradingPolicy(TradingMode.READ_ONLY),
                 lock_result=(RET_ERROR, "trade svr not ready"),
+                trade_service_factory=trade_service_factory,
             )
 
         ctx.unlock_trade.assert_called_once_with(is_unlock=False)
@@ -285,16 +296,18 @@ class TestReadOnlyGatewayLock:
         assert "trade svr not ready" in caplog.text
 
     @pytest.mark.parametrize("mode", [TradingMode.SIMULATE, TradingMode.REAL])
-    def test_other_modes_are_left_alone(self, mode):
+    def test_other_modes_are_left_alone(self, mode, trade_service_factory):
         """Only READ_ONLY asserts a lock; REAL relies on just-in-time unlock."""
-        _, ctx, _sdk = self._connected(TradingPolicy(mode))
+        _, ctx, _sdk = self._connected(
+            TradingPolicy(mode), trade_service_factory=trade_service_factory
+        )
         ctx.unlock_trade.assert_not_called()
 
         ctx.on_api_socket_reconnected()
 
         ctx.unlock_trade.assert_not_called()
 
-    def test_the_real_sdk_class_allows_the_hook(self):
+    def test_the_real_sdk_class_allows_the_hook(self, trade_service_factory):
         """The SDK resolves the callback on the instance, and permits shadowing.
 
         Wrapping an attribute holds only while the vendored class defines no
@@ -303,7 +316,7 @@ class TestReadOnlyGatewayLock:
         asserted against the real class, not a mock that would accept anything.
         """
         ctx = object.__new__(OpenSecTradeContext)
-        service = TradeService(policy=TradingPolicy(TradingMode.READ_ONLY))
+        service = trade_service_factory(policy=TradingPolicy(TradingMode.READ_ONLY))
 
         service._watch_reconnects(ctx)
 
@@ -315,7 +328,7 @@ class TestReadOnlyGatewayLock:
             is not OpenSecTradeContext.on_api_socket_reconnected
         )
 
-    def test_a_context_abandoned_by_shutdown_is_not_locked(self):
+    def test_a_context_abandoned_by_shutdown_is_not_locked(self, trade_service_factory):
         """close() won the race: the context is closed, not talked to."""
         release = threading.Event()
         ctx = MagicMock()
@@ -325,7 +338,7 @@ class TestReadOnlyGatewayLock:
             release.wait(30)
             return ctx
 
-        service = TradeService(policy=TradingPolicy(TradingMode.READ_ONLY))
+        service = trade_service_factory(policy=TradingPolicy(TradingMode.READ_ONLY))
         with patch(
             "moomoo_mcp.services.trade_service.OpenSecTradeContext",
             side_effect=slow_connect,
@@ -536,12 +549,7 @@ class TestReadAccountResolution:
         ],
     )
     def test_unknown_or_wrong_environment_id_is_rejected(
-        self,
-        trade_service_with_mock,
-        mock_trade_ctx,
-        accounts,
-        trd_env,
-        acc_id,
+        self, trade_service_with_mock, mock_trade_ctx, accounts, trd_env, acc_id
     ):
         self._set_accounts(mock_trade_ctx, accounts)
 
@@ -606,11 +614,7 @@ def test_every_account_read_forwards_a_concrete_exact_id(
     ACCOUNT_READ_ENDPOINTS,
 )
 def test_every_account_read_refuses_ambiguous_zero_before_query(
-    trade_service_with_mock,
-    mock_trade_ctx,
-    service_method,
-    arguments,
-    sdk_method,
+    trade_service_with_mock, mock_trade_ctx, service_method, arguments, sdk_method
 ):
     environment = arguments["trd_env"].upper()
     mock_trade_ctx.get_acc_list.return_value = (
@@ -634,11 +638,7 @@ def test_every_account_read_refuses_ambiguous_zero_before_query(
     ACCOUNT_READ_ENDPOINTS,
 )
 def test_every_account_read_propagates_discovery_failure_before_query(
-    trade_service_with_mock,
-    mock_trade_ctx,
-    service_method,
-    arguments,
-    sdk_method,
+    trade_service_with_mock, mock_trade_ctx, service_method, arguments, sdk_method
 ):
     mock_trade_ctx.get_acc_list.return_value = (RET_ERROR, "discovery unavailable")
 
@@ -880,15 +880,38 @@ class TestLockTrade:
             trade_service_with_mock.lock_trade()
 
 
-def _credentialed_service(ctx: MagicMock) -> TradeService:
-    """A REAL service with a stored credential: the lifecycle under test."""
-    service = TradeService(policy=REAL_POLICY, trade_password_md5="hash123")
-    service.trade_ctx = ctx
+@pytest.fixture
+def credentialed_service(mock_trade_ctx, trade_service_factory):
+    service = trade_service_factory(policy=REAL_POLICY, trade_password_md5="hash123")
+    service.trade_ctx = mock_trade_ctx
     return service
+
+
+@pytest.fixture
+def halted_service(mock_trade_ctx, credentialed_service):
+    """Halt through a failed REAL relock, then reset broker observations."""
+    mock_trade_ctx.unlock_trade.side_effect = [
+        (RET_OK, None),
+        (RET_ERROR, "lock refused"),
+    ]
+    mock_trade_ctx.place_order.return_value = (
+        RET_OK,
+        pd.DataFrame([{"order_id": "1"}]),
+    )
+    _place(credentialed_service)
+    assert credentialed_service.execution_state["execution_halted"] is True
+    mock_trade_ctx.unlock_trade.side_effect = None
+    mock_trade_ctx.get_acc_list.return_value = (
+        RET_OK,
+        pd.DataFrame([{"acc_id": 123, "trd_env": "REAL", "trdmarket_auth": ["US"]}]),
+    )
+    mock_trade_ctx.reset_mock()
+    return credentialed_service
 
 
 def _place(service: TradeService, **overrides):
     kwargs = {
+        **real_request(service),
         "code": "US.AAPL",
         "price": 150.0,
         "qty": 1,
@@ -927,13 +950,15 @@ class _LockArrival:
 class TestJustInTimeUnlock:
     """Unlock, dispatch, relock — and what each failure means."""
 
-    def test_a_real_write_unlocks_then_relocks(self, mock_trade_ctx):
+    def test_a_real_write_unlocks_then_relocks(
+        self, mock_trade_ctx, credentialed_service
+    ):
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
         mock_trade_ctx.place_order.return_value = (
             RET_OK,
             pd.DataFrame([{"order_id": "1"}]),
         )
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         _place(service)
 
@@ -946,19 +971,23 @@ class TestJustInTimeUnlock:
             "is_unlock": False
         }
 
-    def test_the_relock_is_attempted_even_when_the_write_fails(self, mock_trade_ctx):
+    def test_the_relock_is_attempted_even_when_the_write_fails(
+        self, mock_trade_ctx, credentialed_service
+    ):
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
         mock_trade_ctx.place_order.side_effect = ValueError("Order exploded")
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         result = _place(service)
         assert result["state"] == "UNKNOWN_OUTCOME"
 
         mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
 
-    def test_an_unlock_failure_sends_nothing(self, mock_trade_ctx):
+    def test_an_unlock_failure_sends_nothing(
+        self, mock_trade_ctx, credentialed_service
+    ):
         mock_trade_ctx.unlock_trade.return_value = (RET_ERROR, "wrong password")
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         with pytest.raises(OrderNotSentError) as excinfo:
             _place(service)
@@ -966,7 +995,9 @@ class TestJustInTimeUnlock:
         assert "no order was sent" in str(excinfo.value)
         mock_trade_ctx.place_order.assert_not_called()
 
-    def test_an_unlock_reported_as_unnecessary_is_a_success(self, mock_trade_ctx):
+    def test_an_unlock_reported_as_unnecessary_is_a_success(
+        self, mock_trade_ctx, credentialed_service
+    ):
         """The gateway returns RET_OK with an explanatory message when it is
         already unlocked. Reading that as a failure would refuse every write."""
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, "already unlocked")
@@ -974,16 +1005,18 @@ class TestJustInTimeUnlock:
             RET_OK,
             pd.DataFrame([{"order_id": "1"}]),
         )
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         assert _place(service)["order_id"] == "1"
 
-    def test_simulate_does_not_unlock(self, mock_trade_ctx, configure_paper_journal):
+    def test_simulate_does_not_unlock(
+        self, mock_trade_ctx, configure_paper_journal, credentialed_service
+    ):
         mock_trade_ctx.place_order.return_value = (
             RET_OK,
             pd.DataFrame([{"order_id": "1"}]),
         )
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         _place(
             service, trd_env="SIMULATE", price="150", **configure_paper_journal(service)
@@ -991,12 +1024,14 @@ class TestJustInTimeUnlock:
 
         mock_trade_ctx.unlock_trade.assert_not_called()
 
-    def test_real_without_a_credential_does_not_unlock(self, mock_trade_ctx):
+    def test_real_without_a_credential_does_not_unlock(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         mock_trade_ctx.place_order.return_value = (
             RET_OK,
             pd.DataFrame([{"order_id": "1"}]),
         )
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         _place(service)
@@ -1007,12 +1042,14 @@ class TestJustInTimeUnlock:
 class TestDispatchOutcomes:
     """Each post-boundary case, and which outcome it maps to."""
 
-    def test_a_readable_success_is_the_receipt(self, mock_trade_ctx):
+    def test_a_readable_success_is_the_receipt(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         mock_trade_ctx.place_order.return_value = (
             RET_OK,
             pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}]),
         )
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         result = _place(service, trd_env="REAL")
@@ -1022,12 +1059,14 @@ class TestDispatchOutcomes:
         assert result["trd_env"] == "REAL"
         assert "gateway_relock_error" not in result
 
-    def test_a_gateway_error_code_is_an_unknown_outcome(self, mock_trade_ctx):
+    def test_a_gateway_error_code_is_an_unknown_outcome(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """Not a rejection: the text cannot tell a broker refusal from a
         timeout, and guessing "rejected" would tell the caller nothing was
         sent when something may have been."""
         mock_trade_ctx.place_order.return_value = (RET_ERROR, "gateway said no")
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         result = _place(service, trd_env="REAL")
@@ -1039,20 +1078,24 @@ class TestDispatchOutcomes:
         assert "gateway said no" in message
         assert "reached" not in message
 
-    def test_a_raising_sdk_call_is_an_unknown_outcome(self, mock_trade_ctx):
+    def test_a_raising_sdk_call_is_an_unknown_outcome(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         mock_trade_ctx.place_order.side_effect = TimeoutError("socket timeout")
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         result = _place(service, trd_env="REAL")
         assert result["state"] == "UNKNOWN_OUTCOME"
         assert "socket timeout" in result["error"]
 
-    def test_an_unreadable_success_forbids_a_resend(self, mock_trade_ctx):
+    def test_an_unreadable_success_forbids_a_resend(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """The order exists and its identifier is lost. Resending would double
         it; reporting an unknown outcome would understate what is known."""
         mock_trade_ctx.place_order.return_value = (RET_OK, "not a frame")
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         result = _place(service, trd_env="REAL")
@@ -1067,7 +1110,9 @@ class TestDispatchOutcomes:
 class TestRelockAlwaysAttempted:
     """The gateway is unlocked right now; nothing may leave it that way."""
 
-    def test_an_unexpected_failure_still_relocks(self, mock_trade_ctx, monkeypatch):
+    def test_an_unexpected_failure_still_relocks(
+        self, mock_trade_ctx, monkeypatch, credentialed_service
+    ):
         """A conversion that raises something the boundary does not classify.
 
         The relock lives in a `finally` precisely so that a path nobody
@@ -1078,7 +1123,7 @@ class TestRelockAlwaysAttempted:
             RET_OK,
             pd.DataFrame([{"order_id": "1"}]),
         )
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         def exploding_convert(_kind, _data):
             raise KeyboardInterrupt("operator interrupted")
@@ -1089,14 +1134,16 @@ class TestRelockAlwaysAttempted:
 
         mock_trade_ctx.unlock_trade.assert_called_with(is_unlock=False)
 
-    def test_the_relock_runs_before_the_failure_propagates(self, mock_trade_ctx):
+    def test_the_relock_runs_before_the_failure_propagates(
+        self, mock_trade_ctx, credentialed_service
+    ):
         order = []
         mock_trade_ctx.unlock_trade.side_effect = lambda **kwargs: (
             order.append("lock" if kwargs.get("is_unlock") is False else "unlock"),
             (RET_OK, None),
         )[1]
         mock_trade_ctx.place_order.return_value = (RET_ERROR, "gateway said no")
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         result = _place(service)
         assert result["state"] == "UNKNOWN_OUTCOME"
@@ -1107,23 +1154,8 @@ class TestRelockAlwaysAttempted:
 class TestExecutionHalt:
     """A failed relock halts execution until someone locks the gateway."""
 
-    @staticmethod
-    def _halted_service(ctx: MagicMock) -> TradeService:
-        """A service that has already halted, via a real relock failure."""
-        ctx.unlock_trade.side_effect = [
-            (RET_OK, None),  # the write's unlock
-            (RET_ERROR, "lock refused"),  # the relock that halts it
-        ]
-        ctx.place_order.return_value = (RET_OK, pd.DataFrame([{"order_id": "1"}]))
-        service = _credentialed_service(ctx)
-        _place(service)
-        assert service.execution_state["execution_halted"] is True
-        ctx.unlock_trade.side_effect = None
-        ctx.reset_mock()
-        return service
-
     def test_an_acknowledged_write_keeps_its_receipt_when_the_relock_fails(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, credentialed_service
     ):
         """Losing an order identifier to a lock failure would be strictly worse
         than reporting both facts."""
@@ -1135,7 +1167,7 @@ class TestExecutionHalt:
             RET_OK,
             pd.DataFrame([{"order_id": "1"}]),
         )
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         result = _place(service)
 
@@ -1145,14 +1177,14 @@ class TestExecutionHalt:
         assert service.execution_state["execution_halted"] is True
 
     def test_a_failed_write_reports_the_relock_failure_alongside_its_own(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, credentialed_service
     ):
         mock_trade_ctx.unlock_trade.side_effect = [
             (RET_OK, None),
             (RET_ERROR, "lock refused"),
         ]
         mock_trade_ctx.place_order.return_value = (RET_ERROR, "gateway said no")
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         result = _place(service)
         assert result["state"] == "UNKNOWN_OUTCOME"
@@ -1161,36 +1193,10 @@ class TestExecutionHalt:
         assert "may have been sent" in message
         assert "lock refused" in message
 
-    def test_a_halt_refuses_new_exposure(self, mock_trade_ctx):
-        service = self._halted_service(mock_trade_ctx)
-
-        with pytest.raises(OrderNotSentError) as excinfo:
-            _place(service)
-
-        message = str(excinfo.value)
-        assert "halted" in message
-        assert "lock_trade" in message
-        mock_trade_ctx.place_order.assert_not_called()
-
-    @pytest.mark.parametrize("op", ["NORMAL", "ENABLE"])
-    def test_a_halt_refuses_exposing_modifications(self, mock_trade_ctx, op):
-        service = self._halted_service(mock_trade_ctx)
-
-        with pytest.raises(OrderNotSentError, match="halted"):
-            service.modify_order(
-                order_id="123456",
-                modify_order_op=op,
-                price=1.0,
-                trd_env="REAL",
-                acc_id=123,
-            )
-
-        mock_trade_ctx.modify_order.assert_not_called()
-
     @pytest.mark.parametrize("op", ["CANCEL", "DISABLE", "DELETE"])
-    def test_a_halt_allows_reducing_exposure(self, mock_trade_ctx, op):
+    def test_a_halt_allows_reducing_exposure(self, mock_trade_ctx, op, halted_service):
         """An operator facing a halt must still be able to pull orders."""
-        service = self._halted_service(mock_trade_ctx)
+        service = halted_service
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
         mock_trade_ctx.modify_order.return_value = (
             RET_OK,
@@ -1198,61 +1204,63 @@ class TestExecutionHalt:
         )
 
         service.modify_order(
-            order_id="123456", modify_order_op=op, trd_env="REAL", acc_id=123
+            order_id="123456",
+            modify_order_op=op,
+            trd_env="REAL",
+            acc_id=123,
+            **real_request(service),
         )
-
-        mock_trade_ctx.modify_order.assert_called_once()
-
-    def test_cancellation_is_allowed_while_halted(self, mock_trade_ctx):
-        service = self._halted_service(mock_trade_ctx)
-        mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
-        mock_trade_ctx.modify_order.return_value = (
-            RET_OK,
-            pd.DataFrame([{"order_id": "123456"}]),
-        )
-
-        service.cancel_order(order_id="123456", trd_env="REAL", acc_id=123)
 
         mock_trade_ctx.modify_order.assert_called_once()
 
     def test_a_cancellations_successful_relock_does_not_clear_the_halt(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, halted_service
     ):
         """That relock only undoes the unlock this server made a moment ago.
 
         It says nothing about why the earlier one failed.
         """
-        service = self._halted_service(mock_trade_ctx)
+        service = halted_service
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
         mock_trade_ctx.modify_order.return_value = (
             RET_OK,
             pd.DataFrame([{"order_id": "123456"}]),
         )
 
-        service.cancel_order(order_id="123456", trd_env="REAL", acc_id=123)
+        service.cancel_order(
+            order_id="123456", trd_env="REAL", acc_id=123, **real_request(service)
+        )
 
+        mock_trade_ctx.modify_order.assert_called_once()
         assert service.execution_state["execution_halted"] is True
 
-    def test_a_reconnect_lock_does_not_clear_the_halt(self, mock_trade_ctx):
+    def test_a_reconnect_lock_does_not_clear_the_halt(
+        self, mock_trade_ctx, halted_service
+    ):
         """A reconnect lock happens without anyone seeing the halt."""
-        service = self._halted_service(mock_trade_ctx)
+        service = halted_service
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
 
         service._enforce_gateway_lock(mock_trade_ctx, "reconnecting")
 
         assert service.execution_state["execution_halted"] is True
 
-    def test_a_health_check_neither_clears_nor_probes(self, mock_trade_ctx):
-        service = self._halted_service(mock_trade_ctx)
+    def test_a_health_check_neither_clears_nor_probes(
+        self, mock_trade_ctx, halted_service
+    ):
+        service = halted_service
 
         first = service.execution_state
         second = service.execution_state
 
         assert first["execution_halted"] is True
         assert second == first
+        assert mock_trade_ctx.method_calls == []
 
-    def test_a_successful_lock_trade_clears_the_halt(self, mock_trade_ctx):
-        service = self._halted_service(mock_trade_ctx)
+    def test_a_successful_lock_trade_clears_the_halt(
+        self, mock_trade_ctx, halted_service
+    ):
+        service = halted_service
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
 
         result = service.lock_trade()
@@ -1265,9 +1273,9 @@ class TestExecutionHalt:
         assert service.execution_state["execution_halted"] is False
 
     def test_a_failed_lock_trade_keeps_the_halt_and_its_start_time(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, halted_service
     ):
-        service = self._halted_service(mock_trade_ctx)
+        service = halted_service
         started = service.execution_state["halted_since"]
         mock_trade_ctx.unlock_trade.return_value = (RET_ERROR, "still refused")
 
@@ -1279,16 +1287,20 @@ class TestExecutionHalt:
         assert state["halted_since"] == started
         assert "still refused" in state["halt_error"]
 
-    def test_lock_trade_reports_no_clear_when_already_armed(self, mock_trade_ctx):
+    def test_lock_trade_reports_no_clear_when_already_armed(
+        self, mock_trade_ctx, credentialed_service
+    ):
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         result = service.lock_trade()
 
         assert result["halt_cleared"] is False
         assert result["execution_halted"] is False
 
-    def test_lock_trade_waits_for_an_in_flight_write(self, mock_trade_ctx):
+    def test_lock_trade_waits_for_an_in_flight_write(
+        self, mock_trade_ctx, credentialed_service
+    ):
         """It must never lock the gateway inside another write's unlock window."""
         released = threading.Event()
         lock_issued = threading.Event()
@@ -1299,7 +1311,7 @@ class TestExecutionHalt:
 
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
         mock_trade_ctx.place_order.side_effect = slow_write
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         writer = threading.Thread(target=lambda: _place(service))
         writer.start()
@@ -1326,27 +1338,21 @@ class TestHaltRefusesBeforeAnyGatewayRequest:
     says either.
     """
 
-    @staticmethod
-    def _halted_with_accounts(ctx: MagicMock) -> TradeService:
-        service = TestExecutionHalt._halted_service(ctx)
-        ctx.get_acc_list.return_value = (
-            RET_OK,
-            pd.DataFrame(
-                [{"acc_id": 123, "trd_env": "REAL", "trdmarket_auth": ["US"]}]
-            ),
-        )
-        return service
+    def test_a_halted_placement_resolves_no_account(
+        self, mock_trade_ctx, halted_service
+    ):
+        service = halted_service
 
-    def test_a_halted_placement_resolves_no_account(self, mock_trade_ctx):
-        service = self._halted_with_accounts(mock_trade_ctx)
-
-        with pytest.raises(OrderNotSentError, match="halted"):
+        with pytest.raises(OrderNotSentError, match="halted") as failure:
             _place(service, acc_id="0")
 
-        mock_trade_ctx.get_acc_list.assert_not_called()
+        assert "lock_trade" in str(failure.value)
+        assert mock_trade_ctx.method_calls == []
 
-    def test_a_halted_combo_placement_resolves_no_account(self, mock_trade_ctx):
-        service = self._halted_with_accounts(mock_trade_ctx)
+    def test_a_halted_combo_placement_resolves_no_account(
+        self, mock_trade_ctx, halted_service
+    ):
+        service = halted_service
 
         with pytest.raises(OrderNotSentError, match="halted"):
             service.place_combo_order(
@@ -1358,15 +1364,16 @@ class TestHaltRefusesBeforeAnyGatewayRequest:
                 qty=1,
                 trd_env="REAL",
                 acc_id="0",
+                **real_request(service),
             )
 
         mock_trade_ctx.get_acc_list.assert_not_called()
 
     @pytest.mark.parametrize("op", ["NORMAL", "ENABLE"])
     def test_a_halted_exposing_modification_resolves_no_account(
-        self, mock_trade_ctx, op
+        self, mock_trade_ctx, op, halted_service
     ):
-        service = self._halted_with_accounts(mock_trade_ctx)
+        service = halted_service
 
         with pytest.raises(OrderNotSentError, match="halted"):
             service.modify_order(
@@ -1375,21 +1382,25 @@ class TestHaltRefusesBeforeAnyGatewayRequest:
                 price=1.0,
                 trd_env="REAL",
                 acc_id="0",
+                **real_request(service),
             )
 
-        mock_trade_ctx.get_acc_list.assert_not_called()
-        mock_trade_ctx.order_list_query.assert_not_called()
+        assert mock_trade_ctx.method_calls == []
 
-    def test_a_permitted_write_still_resolves_the_default_account(self, mock_trade_ctx):
+    def test_a_permitted_write_still_resolves_the_default_account(
+        self, mock_trade_ctx, halted_service
+    ):
         """The refusal moved; resolution itself did not."""
-        service = self._halted_with_accounts(mock_trade_ctx)
+        service = halted_service
         mock_trade_ctx.modify_order.return_value = (
             RET_OK,
             pd.DataFrame([{"order_id": "123456"}]),
         )
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
 
-        service.cancel_order(order_id="123456", trd_env="REAL", acc_id="0")
+        service.cancel_order(
+            order_id="123456", trd_env="REAL", acc_id="0", **real_request(service)
+        )
 
         mock_trade_ctx.get_acc_list.assert_called_once()
         assert mock_trade_ctx.modify_order.call_args.kwargs["acc_id"] == 123
@@ -1405,9 +1416,9 @@ class TestHaltIsScopedToRealWrites:
     """
 
     def test_a_simulate_placement_is_allowed_while_halted(
-        self, mock_trade_ctx, configure_paper_journal
+        self, mock_trade_ctx, configure_paper_journal, halted_service
     ):
-        service = TestExecutionHalt._halted_service(mock_trade_ctx)
+        service = halted_service
 
         result = _place(
             service,
@@ -1419,44 +1430,13 @@ class TestHaltIsScopedToRealWrites:
 
         assert result["receipt"]["order_id"] == "1"
         mock_trade_ctx.place_order.assert_called_once()
-
-    def test_a_permitted_simulate_write_does_not_touch_the_gateway_lock(
-        self, mock_trade_ctx, configure_paper_journal
-    ):
-        """It is not a just-in-time write, so there is nothing to unlock."""
-        service = TestExecutionHalt._halted_service(mock_trade_ctx)
-
-        _place(
-            service,
-            trd_env="SIMULATE",
-            acc_id=999,
-            price="150",
-            **configure_paper_journal(service, 999),
-        )
-
         mock_trade_ctx.unlock_trade.assert_not_called()
-
-    def test_a_permitted_simulate_write_leaves_the_halt_in_place(
-        self, mock_trade_ctx, configure_paper_journal
-    ):
-        """Only lock_trade clears it; letting a paper order through is not a
-        sign that the gateway can be locked again."""
-        service = TestExecutionHalt._halted_service(mock_trade_ctx)
-
-        _place(
-            service,
-            trd_env="SIMULATE",
-            acc_id=999,
-            price="150",
-            **configure_paper_journal(service, 999),
-        )
-
         assert service.execution_state["execution_halted"] is True
 
     def test_a_simulate_exposing_modification_is_allowed_while_halted(
-        self, mock_trade_ctx, configure_paper_journal
+        self, mock_trade_ctx, configure_paper_journal, halted_service
     ):
-        service = TestExecutionHalt._halted_service(mock_trade_ctx)
+        service = halted_service
         mock_trade_ctx.modify_order.return_value = (
             RET_OK,
             pd.DataFrame([{"order_id": "123456"}]),
@@ -1481,9 +1461,9 @@ class TestHaltIsScopedToRealWrites:
         mock_trade_ctx.modify_order.assert_called_once()
 
     def test_paper_enable_is_outside_journal_scope_while_halted(
-        self, mock_trade_ctx, configure_paper_journal
+        self, mock_trade_ctx, configure_paper_journal, halted_service
     ):
-        service = TestExecutionHalt._halted_service(mock_trade_ctx)
+        service = halted_service
         tokens = configure_paper_journal(service, 999)
 
         with pytest.raises(OrderNotSentError) as excinfo:
@@ -1500,33 +1480,6 @@ class TestHaltIsScopedToRealWrites:
         mock_trade_ctx.unlock_trade.assert_not_called()
         assert service.execution_state["execution_halted"] is True
 
-    def test_a_real_placement_is_still_refused_while_halted(self, mock_trade_ctx):
-        """The narrowing must not reach the writes the halt exists for."""
-        service = TestExecutionHalt._halted_service(mock_trade_ctx)
-
-        with pytest.raises(OrderNotSentError, match="halted"):
-            _place(service)
-
-        mock_trade_ctx.place_order.assert_not_called()
-
-    def test_the_in_lock_check_lets_a_simulate_write_through(self, mock_trade_ctx):
-        """The authoritative check, exercised directly."""
-        service = _credentialed_service(mock_trade_ctx)
-        service._execution.record_relock_failure("lock refused")
-
-        receipt, relock_error = service._dispatch_write(
-            "SIMULATE",
-            "place_order",
-            lambda: (RET_OK, pd.DataFrame([{"order_id": "1"}])),
-            lambda _data: {"order_id": "1"},
-            adds_exposure=True,
-            sdk_operation="place_order",
-            account_id=123,
-        )
-
-        assert receipt == {"order_id": "1"}
-        assert relock_error is None
-
 
 class TestHaltIsCheckedInsideTheLock:
     """A write queued behind another cannot slip past a halt it caused.
@@ -1538,8 +1491,10 @@ class TestHaltIsCheckedInsideTheLock:
     began — which is exactly what the halt exists to stop.
     """
 
-    def test_a_queued_write_is_refused_after_the_first_one_halts(self, mock_trade_ctx):
-        service = _credentialed_service(mock_trade_ctx)
+    def test_a_queued_write_is_refused_after_the_first_one_halts(
+        self, mock_trade_ctx, credentialed_service
+    ):
+        service = credentialed_service
         first_is_dispatching = threading.Event()
         release_first = threading.Event()
         second_is_at_the_lock = threading.Event()
@@ -1606,23 +1561,11 @@ class TestHaltIsCheckedInsideTheLock:
         assert "halted" in str(second["error"])
         assert mock_trade_ctx.place_order.call_count == 1
 
-    def test_a_queued_cancellation_still_goes_through(self, mock_trade_ctx):
-        """Reducing exposure stays permitted, which is the point of the gate."""
-        service = _credentialed_service(mock_trade_ctx)
-        service._execution.record_relock_failure("lock refused")
-        mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
-        mock_trade_ctx.modify_order.return_value = (
-            RET_OK,
-            pd.DataFrame([{"order_id": "123456"}]),
-        )
-
-        service.cancel_order(order_id="123456", trd_env="REAL", acc_id=123)
-
-        mock_trade_ctx.modify_order.assert_called_once()
-
-    def test_an_unjournaled_dispatch_refuses_before_unlocking(self, mock_trade_ctx):
+    def test_an_unjournaled_dispatch_refuses_before_unlocking(
+        self, mock_trade_ctx, credentialed_service
+    ):
         """The internal dispatch boundary cannot bypass durable execution."""
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
         service._execution.record_relock_failure("lock refused")
         mock_trade_ctx.reset_mock()
 
@@ -1643,11 +1586,13 @@ class TestHaltIsCheckedInsideTheLock:
 class TestAcknowledgedButEmptyReceipt:
     """RET_OK with no rows is not a placed order anyone can find."""
 
-    def test_an_empty_payload_is_an_unreadable_receipt(self, mock_trade_ctx):
+    def test_an_empty_payload_is_an_unreadable_receipt(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """It used to return a result holding only the routing, which reads as a
         successful order with no identifier in it."""
         mock_trade_ctx.place_order.return_value = (RET_OK, pd.DataFrame([]))
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         result = _place(service, trd_env="REAL")
@@ -1658,9 +1603,11 @@ class TestAcknowledgedButEmptyReceipt:
         assert "do not resend" in message.lower()
         assert "get_orders" in message
 
-    def test_an_empty_combo_payload_is_an_unreadable_receipt(self, mock_trade_ctx):
+    def test_an_empty_combo_payload_is_an_unreadable_receipt(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         mock_trade_ctx.place_combo_order.return_value = (RET_OK, pd.DataFrame([]))
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         result = service.place_combo_order(
@@ -1672,18 +1619,21 @@ class TestAcknowledgedButEmptyReceipt:
             qty=1,
             trd_env="REAL",
             acc_id=123,
+            **real_request(service),
         )
         assert result["state"] == "ACKNOWLEDGED"
         assert "Do not resend" in result["error"]
 
     def test_an_empty_modification_payload_is_an_unreadable_receipt(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, trade_service_factory
     ):
         mock_trade_ctx.modify_order.return_value = (RET_OK, pd.DataFrame([]))
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
-        result = service.cancel_order(order_id="123456", trd_env="REAL", acc_id=123)
+        result = service.cancel_order(
+            order_id="123456", trd_env="REAL", acc_id=123, **real_request(service)
+        )
         assert result["state"] == "ACKNOWLEDGED"
         assert "Do not resend" in result["error"]
 
@@ -1691,25 +1641,27 @@ class TestAcknowledgedButEmptyReceipt:
 class TestLockAtRest:
     """Who locks on connect and reconnect, and who must not."""
 
-    def test_real_with_a_credential_locks(self, mock_trade_ctx):
+    def test_real_with_a_credential_locks(self, mock_trade_ctx, credentialed_service):
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         service._enforce_gateway_lock(mock_trade_ctx, "connecting")
 
         mock_trade_ctx.unlock_trade.assert_called_once_with(is_unlock=False)
 
-    def test_real_without_a_credential_does_not_lock(self, mock_trade_ctx):
+    def test_real_without_a_credential_does_not_lock(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """It could not unlock again, so locking would strand the operator."""
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         service._enforce_gateway_lock(mock_trade_ctx, "connecting")
 
         mock_trade_ctx.unlock_trade.assert_not_called()
 
-    def test_simulate_does_not_lock(self, mock_trade_ctx):
-        service = TradeService(
+    def test_simulate_does_not_lock(self, mock_trade_ctx, trade_service_factory):
+        service = trade_service_factory(
             policy=TradingPolicy(TradingMode.SIMULATE), trade_password_md5="hash123"
         )
         service.trade_ctx = mock_trade_ctx
@@ -1718,13 +1670,15 @@ class TestLockAtRest:
 
         mock_trade_ctx.unlock_trade.assert_not_called()
 
-    def test_a_reconnect_during_a_write_issues_no_lock(self, mock_trade_ctx):
+    def test_a_reconnect_during_a_write_issues_no_lock(
+        self, mock_trade_ctx, credentialed_service
+    ):
         """Locking underneath a write would make it fail on a locked gateway.
 
         The write's own relock covers the window instead.
         """
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
         skipped = threading.Event()
 
         def write_holding_the_lock(**_kwargs):
@@ -1749,10 +1703,10 @@ class TestLockAtRest:
         assert mock_trade_ctx.unlock_trade.call_count == 2
 
     def test_a_successful_lock_at_rest_does_not_change_the_execution_state(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, credentialed_service
     ):
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
-        service = _credentialed_service(mock_trade_ctx)
+        service = credentialed_service
 
         service._enforce_gateway_lock(mock_trade_ctx, "connecting")
 
@@ -1762,8 +1716,10 @@ class TestLockAtRest:
 class TestManualUnlockRefusal:
     """A stored credential makes manual unlocking the wrong tool."""
 
-    def test_unlock_is_refused_when_a_credential_is_stored(self, mock_trade_ctx):
-        service = _credentialed_service(mock_trade_ctx)
+    def test_unlock_is_refused_when_a_credential_is_stored(
+        self, mock_trade_ctx, credentialed_service
+    ):
+        service = credentialed_service
 
         with pytest.raises(TradingPolicyError) as excinfo:
             service.unlock_trade(password="pw")
@@ -1771,9 +1727,11 @@ class TestManualUnlockRefusal:
         assert "unlock just in time" in str(excinfo.value)
         mock_trade_ctx.unlock_trade.assert_not_called()
 
-    def test_unlock_without_a_credential_requires_a_password(self, mock_trade_ctx):
+    def test_unlock_without_a_credential_requires_a_password(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """There is no environment fallback left to fall back to."""
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         with pytest.raises(ValueError, match="requires a password"):
@@ -1781,9 +1739,11 @@ class TestManualUnlockRefusal:
 
         mock_trade_ctx.unlock_trade.assert_not_called()
 
-    def test_unlock_with_a_password_reaches_the_gateway(self, mock_trade_ctx):
+    def test_unlock_with_a_password_reaches_the_gateway(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         mock_trade_ctx.unlock_trade.return_value = (RET_OK, None)
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
         service.trade_ctx = mock_trade_ctx
 
         service.unlock_trade(password="pw")
@@ -1797,8 +1757,10 @@ class TestInstrumentLookupIntegration:
     """When the adapter runs, and what its failures look like from outside."""
 
     @staticmethod
-    def _capped_service(ctx: MagicMock, lookup) -> TradeService:
-        service = TradeService(
+    def _capped_service(
+        ctx: MagicMock, lookup, *, trade_service_factory
+    ) -> TradeService:
+        service = trade_service_factory(
             policy=TradingPolicy(
                 TradingMode.REAL,
                 max_order_notional={"USD": 1000.0},
@@ -1809,7 +1771,9 @@ class TestInstrumentLookupIntegration:
         service.trade_ctx = ctx
         return service
 
-    def test_instrument_validation_runs_without_a_notional_cap(self, mock_trade_ctx):
+    def test_instrument_validation_runs_without_a_notional_cap(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """A monetary cap is independent of documented instrument rules."""
         lookup = MagicMock(
             return_value=[
@@ -1818,7 +1782,7 @@ class TestInstrumentLookupIntegration:
                 )
             ]
         )
-        service = TradeService(policy=REAL_POLICY, instrument_lookup=lookup)
+        service = trade_service_factory(policy=REAL_POLICY, instrument_lookup=lookup)
         service.trade_ctx = mock_trade_ctx
         mock_trade_ctx.place_order.return_value = (
             RET_OK,
@@ -1829,7 +1793,7 @@ class TestInstrumentLookupIntegration:
 
         lookup.assert_called_once_with(["US.AAPL"])
 
-    def test_a_cap_makes_the_lookup_run(self, mock_trade_ctx):
+    def test_a_cap_makes_the_lookup_run(self, mock_trade_ctx, trade_service_factory):
         lookup = MagicMock(
             return_value=[
                 InstrumentFacts(
@@ -1844,17 +1808,23 @@ class TestInstrumentLookupIntegration:
             RET_OK,
             pd.DataFrame([{"order_id": "1"}]),
         )
-        service = self._capped_service(mock_trade_ctx, lookup)
+        service = self._capped_service(
+            mock_trade_ctx, lookup, trade_service_factory=trade_service_factory
+        )
 
         _place(service, trd_env="REAL", price=150.0, qty=1)
 
         lookup.assert_called_once_with(["US.AAPL"])
 
-    def test_an_adapter_failure_is_not_sent_never_unknown(self, mock_trade_ctx):
+    def test_an_adapter_failure_is_not_sent_never_unknown(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """The adapter sits inside the pre-dispatch boundary, so a missing
         valuation fact can never surface as an order that may exist."""
         lookup = MagicMock(side_effect=InstrumentLookupError("quote server down"))
-        service = self._capped_service(mock_trade_ctx, lookup)
+        service = self._capped_service(
+            mock_trade_ctx, lookup, trade_service_factory=trade_service_factory
+        )
 
         with pytest.raises(OrderNotSentError) as excinfo:
             _place(service, trd_env="REAL")
@@ -1865,7 +1835,7 @@ class TestInstrumentLookupIntegration:
 
     @pytest.mark.parametrize("multiplier", ["N/A", 100.0])
     def test_real_adapter_option_refusal_happens_before_dispatch(
-        self, mock_trade_ctx, multiplier
+        self, mock_trade_ctx, multiplier, trade_service_factory
     ):
         code = "US.AAPL260116C300000"
         quote = MagicMock()
@@ -1892,7 +1862,11 @@ class TestInstrumentLookupIntegration:
                 ]
             ),
         )
-        service = self._capped_service(mock_trade_ctx, InstrumentAdapter(lambda: quote))
+        service = self._capped_service(
+            mock_trade_ctx,
+            InstrumentAdapter(lambda: quote),
+            trade_service_factory=trade_service_factory,
+        )
         with pytest.raises(OrderNotSentError) as error:
             _place(service, code=code, trd_env="REAL", price=3.0, qty=5)
         expected = (
@@ -1904,8 +1878,12 @@ class TestInstrumentLookupIntegration:
         mock_trade_ctx.place_order.assert_not_called()
         mock_trade_ctx.unlock_trade.assert_not_called()
 
-    def test_no_lookup_wired_with_a_cap_refuses(self, mock_trade_ctx):
-        service = self._capped_service(mock_trade_ctx, None)
+    def test_no_lookup_wired_with_a_cap_refuses(
+        self, mock_trade_ctx, trade_service_factory
+    ):
+        service = self._capped_service(
+            mock_trade_ctx, None, trade_service_factory=trade_service_factory
+        )
 
         with pytest.raises(OrderNotSentError, match="no instrument lookup"):
             _place(service, trd_env="REAL")
@@ -1917,13 +1895,15 @@ class TestModificationAssessment:
     """A modification is checked as the order that would result."""
 
     @staticmethod
-    def _service(ctx: MagicMock, existing: dict) -> TradeService:
+    def _service(
+        ctx: MagicMock, existing: dict, *, trade_service_factory
+    ) -> TradeService:
         ctx.order_list_query.return_value = (RET_OK, pd.DataFrame([existing]))
         ctx.modify_order.return_value = (
             RET_OK,
             pd.DataFrame([{"order_id": "123456", "order_status": "MODIFIED"}]),
         )
-        service = TradeService(
+        service = trade_service_factory(
             policy=TradingPolicy(
                 TradingMode.REAL,
                 max_order_notional={"USD": 1000.0},
@@ -1952,14 +1932,18 @@ class TestModificationAssessment:
     }
 
     def test_a_price_only_change_is_checked_against_the_full_order(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, trade_service_factory
     ):
         """10 x 500 = 5,000 USD.
 
         The old check passed qty=0 when only the price changed, so the notional
         came out as zero and every price change passed.
         """
-        service = self._service(mock_trade_ctx, dict(self.OPEN_ORDER))
+        service = self._service(
+            mock_trade_ctx,
+            dict(self.OPEN_ORDER),
+            trade_service_factory=trade_service_factory,
+        )
 
         with pytest.raises(OrderNotSentError) as excinfo:
             service.modify_order(
@@ -1968,16 +1952,21 @@ class TestModificationAssessment:
                 price=500.0,
                 trd_env="REAL",
                 acc_id=123,
+                **real_request(service),
             )
 
         assert "5,000.00 USD" in str(excinfo.value)
         mock_trade_ctx.modify_order.assert_not_called()
 
     def test_a_quantity_only_change_is_checked_against_the_full_order(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, trade_service_factory
     ):
         """100 x 50 = 5,000 USD."""
-        service = self._service(mock_trade_ctx, dict(self.OPEN_ORDER))
+        service = self._service(
+            mock_trade_ctx,
+            dict(self.OPEN_ORDER),
+            trade_service_factory=trade_service_factory,
+        )
 
         with pytest.raises(OrderNotSentError, match="5,000.00 USD"):
             service.modify_order(
@@ -1986,11 +1975,18 @@ class TestModificationAssessment:
                 qty=100,
                 trd_env="REAL",
                 acc_id=123,
+                **real_request(service),
             )
 
-    def test_a_permitted_modification_is_dispatched(self, mock_trade_ctx):
+    def test_a_permitted_modification_is_dispatched(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """10 x 90 = 900 USD, under the cap."""
-        service = self._service(mock_trade_ctx, dict(self.OPEN_ORDER))
+        service = self._service(
+            mock_trade_ctx,
+            dict(self.OPEN_ORDER),
+            trade_service_factory=trade_service_factory,
+        )
 
         result = service.modify_order(
             order_id="123456",
@@ -1998,14 +1994,19 @@ class TestModificationAssessment:
             price=90.0,
             trd_env="REAL",
             acc_id=123,
+            **real_request(service),
         )
 
         assert result["order_status"] == "MODIFIED"
         mock_trade_ctx.modify_order.assert_called_once()
 
-    def test_enable_is_checked_because_it_restores_exposure(self, mock_trade_ctx):
+    def test_enable_is_checked_because_it_restores_exposure(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         over_cap = dict(self.OPEN_ORDER, qty=100, price=500.0)
-        service = self._service(mock_trade_ctx, over_cap)
+        service = self._service(
+            mock_trade_ctx, over_cap, trade_service_factory=trade_service_factory
+        )
 
         with pytest.raises(OrderNotSentError, match="exceeds"):
             service.modify_order(
@@ -2013,12 +2014,17 @@ class TestModificationAssessment:
                 modify_order_op="ENABLE",
                 trd_env="REAL",
                 acc_id=123,
+                **real_request(service),
             )
 
         mock_trade_ctx.modify_order.assert_not_called()
 
-    def test_an_unknown_order_is_refused(self, mock_trade_ctx):
-        service = self._service(mock_trade_ctx, dict(self.OPEN_ORDER))
+    def test_an_unknown_order_is_refused(self, mock_trade_ctx, trade_service_factory):
+        service = self._service(
+            mock_trade_ctx,
+            dict(self.OPEN_ORDER),
+            trade_service_factory=trade_service_factory,
+        )
         mock_trade_ctx.order_list_query.return_value = (RET_OK, pd.DataFrame([]))
 
         with pytest.raises(OrderNotSentError, match="was not found"):
@@ -2028,12 +2034,19 @@ class TestModificationAssessment:
                 price=1.0,
                 trd_env="REAL",
                 acc_id=123,
+                **real_request(service),
             )
 
         mock_trade_ctx.modify_order.assert_not_called()
 
-    def test_a_failing_order_lookup_is_refused(self, mock_trade_ctx):
-        service = self._service(mock_trade_ctx, dict(self.OPEN_ORDER))
+    def test_a_failing_order_lookup_is_refused(
+        self, mock_trade_ctx, trade_service_factory
+    ):
+        service = self._service(
+            mock_trade_ctx,
+            dict(self.OPEN_ORDER),
+            trade_service_factory=trade_service_factory,
+        )
         mock_trade_ctx.order_list_query.return_value = (RET_ERROR, "query failed")
 
         with pytest.raises(OrderNotSentError, match="could not retrieve order"):
@@ -2043,12 +2056,19 @@ class TestModificationAssessment:
                 price=1.0,
                 trd_env="REAL",
                 acc_id=123,
+                **real_request(service),
             )
 
-    def test_the_existing_order_is_fetched_with_a_fresh_cache(self, mock_trade_ctx):
+    def test_the_existing_order_is_fetched_with_a_fresh_cache(
+        self, mock_trade_ctx, trade_service_factory
+    ):
         """The value at risk depends on the broker's current order, not on a
         cached copy of it."""
-        service = self._service(mock_trade_ctx, dict(self.OPEN_ORDER))
+        service = self._service(
+            mock_trade_ctx,
+            dict(self.OPEN_ORDER),
+            trade_service_factory=trade_service_factory,
+        )
 
         service.modify_order(
             order_id="123456",
@@ -2056,6 +2076,7 @@ class TestModificationAssessment:
             price=90.0,
             trd_env="REAL",
             acc_id=123,
+            **real_request(service),
         )
 
         kwargs = mock_trade_ctx.order_list_query.call_args.kwargs
@@ -2063,7 +2084,7 @@ class TestModificationAssessment:
         assert kwargs["refresh_cache"] is True
 
     def test_an_absent_trigger_price_does_not_refuse_the_modification(
-        self, mock_trade_ctx
+        self, mock_trade_ctx, trade_service_factory
     ):
         """A plain limit order has no trigger, and the SDK reports that as 'N/A'.
 
@@ -2071,7 +2092,9 @@ class TestModificationAssessment:
         every limit order the gateway reports this way.
         """
         without_trigger = dict(self.OPEN_ORDER, aux_price="N/A")
-        service = self._service(mock_trade_ctx, without_trigger)
+        service = self._service(
+            mock_trade_ctx, without_trigger, trade_service_factory=trade_service_factory
+        )
 
         result = service.modify_order(
             order_id="123456",
@@ -2079,17 +2102,26 @@ class TestModificationAssessment:
             price=90.0,
             trd_env="REAL",
             acc_id=123,
+            **real_request(service),
         )
 
         assert result["order_status"] == "MODIFIED"
 
     @pytest.mark.parametrize("op", ["CANCEL", "DISABLE", "DELETE"])
-    def test_exposure_reducing_operations_skip_the_assessment(self, mock_trade_ctx, op):
+    def test_exposure_reducing_operations_skip_the_assessment(
+        self, mock_trade_ctx, op, trade_service_factory
+    ):
         over_cap = dict(self.OPEN_ORDER, qty=100, price=500.0)
-        service = self._service(mock_trade_ctx, over_cap)
+        service = self._service(
+            mock_trade_ctx, over_cap, trade_service_factory=trade_service_factory
+        )
 
         service.modify_order(
-            order_id="123456", modify_order_op=op, trd_env="REAL", acc_id=123
+            order_id="123456",
+            modify_order_op=op,
+            trd_env="REAL",
+            acc_id=123,
+            **real_request(service),
         )
 
         mock_trade_ctx.modify_order.assert_called_once()
@@ -2099,61 +2131,9 @@ class TestModificationAssessment:
 class TestPlaceOrder:
     """Tests for place_order."""
 
-    def test_place_order_success(self, trade_service_with_mock, mock_trade_ctx):
-        """Test successful order placement."""
-        df = pd.DataFrame(
-            [
-                {
-                    "order_id": "123456",
-                    "order_status": "SUBMITTED",
-                    "code": "US.AAPL",
-                    "qty": 100,
-                    "price": 150.0,
-                }
-            ]
-        )
-        mock_trade_ctx.place_order.return_value = (0, df)
-
-        result = trade_service_with_mock.place_order(
-            code="US.AAPL",
-            price=150.0,
-            qty=100,
-            trd_side="BUY",
-            order_type="NORMAL",
-            trd_env="REAL",
-            acc_id=123,
-        )
-
-        assert result["order_id"] == "123456"
-        mock_trade_ctx.place_order.assert_called_once()
-
-    def test_place_order_error(self, trade_service_with_mock, mock_trade_ctx):
-        """Test order placement failure."""
-        # Setup mock for smart account selection
-        acc_df = pd.DataFrame(
-            [{"acc_id": 123, "trd_env": "REAL", "market_auth": ["US"]}]
-        )
-        mock_trade_ctx.get_acc_list.return_value = (0, acc_df)
-        mock_trade_ctx.place_order.return_value = (-1, "Order rejected")
-
-        # A gateway error code cannot be told apart from a timeout, so the
-        # outcome is unknown rather than a rejection.
-        result = trade_service_with_mock.place_order(
-            code="US.AAPL",
-            price=150.0,
-            qty=100,
-            trd_side="BUY",
-            trd_env="REAL",
-        )
-        assert result["state"] == "UNKNOWN_OUTCOME"
-
-        message = result["error"]
-        assert "may have been sent" in message
-        assert "Order rejected" in message
-
-    def test_place_order_no_context(self):
+    def test_place_order_no_context(self, trade_service_factory):
         """Test error when context not connected."""
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
 
         with pytest.raises(OrderNotSentError) as excinfo:
             service.place_order(
@@ -2162,110 +2142,36 @@ class TestPlaceOrder:
                 qty=100,
                 trd_side="BUY",
                 trd_env="REAL",
+                **real_request(service),
             )
 
         assert "no order was sent" in str(excinfo.value)
         assert "Trade context not connected" in str(excinfo.value)
 
-    def test_place_order_with_time_in_force_gtc(
-        self, trade_service_with_mock, mock_trade_ctx
+    @pytest.mark.parametrize(
+        "overrides, expected_time_in_force",
+        [
+            ({}, "DAY"),
+            ({"time_in_force": "GTC"}, "GTC"),
+            ({"code": "HK.00700", "order_type": "SPECIAL_LIMIT"}, "DAY"),
+        ],
+    )
+    def test_place_order_forwards_type_and_time_in_force(
+        self, trade_service_with_mock, mock_trade_ctx, overrides, expected_time_in_force
     ):
-        """Test order placement with GTC time in force."""
-        df = pd.DataFrame(
-            [
-                {
-                    "order_id": "123456",
-                    "order_status": "SUBMITTED",
-                    "code": "US.AAPL",
-                    "qty": 100,
-                    "price": 150.0,
-                    "time_in_force": "GTC",
-                }
-            ]
+        mock_trade_ctx.place_order.return_value = (
+            RET_OK,
+            pd.DataFrame([{"order_id": "123456"}]),
         )
-        mock_trade_ctx.place_order.return_value = (0, df)
 
-        result = trade_service_with_mock.place_order(
-            code="US.AAPL",
-            price=150.0,
-            qty=100,
-            trd_side="BUY",
-            order_type="NORMAL",
-            time_in_force="GTC",
-            trd_env="REAL",
-            acc_id=123,
-        )
+        result = _place(trade_service_with_mock, **overrides)
 
         assert result["order_id"] == "123456"
         mock_trade_ctx.place_order.assert_called_once()
-        call_kwargs = mock_trade_ctx.place_order.call_args.kwargs
-        assert call_kwargs["time_in_force"] == "GTC"
-
-    def test_place_order_with_time_in_force_day(
-        self, trade_service_with_mock, mock_trade_ctx
-    ):
-        """Test order placement with DAY time in force (default)."""
-        df = pd.DataFrame(
-            [
-                {
-                    "order_id": "123456",
-                    "order_status": "SUBMITTED",
-                    "code": "US.AAPL",
-                    "qty": 100,
-                    "price": 150.0,
-                    "time_in_force": "DAY",
-                }
-            ]
-        )
-        mock_trade_ctx.place_order.return_value = (0, df)
-
-        result = trade_service_with_mock.place_order(
-            code="US.AAPL",
-            price=150.0,
-            qty=100,
-            trd_side="BUY",
-            order_type="NORMAL",
-            trd_env="REAL",
-            acc_id=123,
-        )
-
-        assert result["order_id"] == "123456"
-        mock_trade_ctx.place_order.assert_called_once()
-        call_kwargs = mock_trade_ctx.place_order.call_args.kwargs
-        # Default should be DAY
-        assert call_kwargs["time_in_force"] == "DAY"
-
-    def test_place_order_with_special_limit_order_type(
-        self, trade_service_with_mock, mock_trade_ctx
-    ):
-        """Test order placement with SPECIAL_LIMIT order type."""
-        df = pd.DataFrame(
-            [
-                {
-                    "order_id": "123456",
-                    "order_status": "SUBMITTED",
-                    "code": "HK.00700",
-                    "qty": 100,
-                    "price": 300.0,
-                }
-            ]
-        )
-        mock_trade_ctx.place_order.return_value = (0, df)
-
-        result = trade_service_with_mock.place_order(
-            code="HK.00700",
-            price=300.0,
-            qty=100,
-            trd_side="BUY",
-            order_type="SPECIAL_LIMIT",
-            time_in_force="DAY",
-            trd_env="REAL",
-            acc_id=123,
-        )
-
-        assert result["order_id"] == "123456"
-        call_kwargs = mock_trade_ctx.place_order.call_args.kwargs
-        assert call_kwargs["order_type"] == "SPECIAL_LIMIT"
+        sent = mock_trade_ctx.place_order.call_args.kwargs
+        assert sent["time_in_force"] == expected_time_in_force
+        assert sent["order_type"] == overrides.get("order_type", "NORMAL")
+        assert sent["code"] == overrides.get("code", "US.AAPL")
 
 
 class TestModifyOrder:
@@ -2290,6 +2196,7 @@ class TestModifyOrder:
             price=155.0,
             trd_env="REAL",
             acc_id=123,
+            **real_request(trade_service_with_mock),
         )
 
         assert result["order_status"] == "MODIFIED"
@@ -2304,6 +2211,7 @@ class TestModifyOrder:
             modify_order_op="NORMAL",
             trd_env="REAL",
             acc_id=123,
+            **real_request(trade_service_with_mock),
         )
         assert result["state"] == "UNKNOWN_OUTCOME"
         assert "may have been sent" in result["error"]
@@ -2328,6 +2236,7 @@ class TestCancelOrder:
             order_id="123456",
             trd_env="REAL",
             acc_id=123,
+            **real_request(trade_service_with_mock),
         )
 
         assert result["order_status"] == "CANCELLED"
@@ -2342,7 +2251,10 @@ class TestCancelOrder:
         mock_trade_ctx.modify_order.return_value = (-1, "Cancel failed")
 
         result = trade_service_with_mock.cancel_order(
-            order_id="123456", trd_env="REAL", acc_id=123
+            order_id="123456",
+            trd_env="REAL",
+            acc_id=123,
+            **real_request(trade_service_with_mock),
         )
         assert result["state"] == "UNKNOWN_OUTCOME"
         assert "may have been sent" in result["error"]
@@ -2653,44 +2565,15 @@ class TestPlaceComboOrder:
 
         with pytest.raises(OrderNotSentError, match="missing 'qty_ratio'"):
             trade_service_with_mock.place_combo_order(
-                combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+                combo_legs=legs,
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
-
-    def test_position_id_passed_through_when_closing(
-        self, trade_service_with_mock, mock_trade_ctx
-    ):
-        """Test position_id reaches the gateway, as required for closing orders."""
-        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
-        mock_trade_ctx.place_combo_order.return_value = (0, df)
-        legs = self._legs()
-        legs[0]["position_id"] = 1111111111111111111
-        legs[1]["position_id"] = "2222222222222222222"
-
-        trade_service_with_mock.place_combo_order(
-            combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
-        )
-
-        sent = mock_trade_ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
-        assert [leg.position_id for leg in sent] == [
-            1111111111111111111,
-            2222222222222222222,
-        ]
-
-    def test_position_id_omitted_when_opening(
-        self, trade_service_with_mock, mock_trade_ctx
-    ):
-        """Test legs without position_id leave it unset rather than inventing one."""
-        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
-        mock_trade_ctx.place_combo_order.return_value = (0, df)
-
-        trade_service_with_mock.place_combo_order(
-            combo_legs=self._legs(), price=2.5, qty=1, trd_env="REAL", acc_id=123
-        )
-
-        sent = mock_trade_ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
-        assert all(leg.position_id is None for leg in sent)
 
     def test_rejects_non_numeric_position_id(
         self, trade_service_with_mock, mock_trade_ctx
@@ -2701,7 +2584,12 @@ class TestPlaceComboOrder:
 
         with pytest.raises(OrderNotSentError, match="non-integer 'position_id'"):
             trade_service_with_mock.place_combo_order(
-                combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+                combo_legs=legs,
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
@@ -2713,7 +2601,12 @@ class TestPlaceComboOrder:
 
         with pytest.raises(OrderNotSentError, match="boolean 'position_id'"):
             trade_service_with_mock.place_combo_order(
-                combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+                combo_legs=legs,
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
@@ -2725,7 +2618,12 @@ class TestPlaceComboOrder:
 
         with pytest.raises(OrderNotSentError, match="non-integer 'position_id'"):
             trade_service_with_mock.place_combo_order(
-                combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+                combo_legs=legs,
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
@@ -2741,7 +2639,12 @@ class TestPlaceComboOrder:
         legs[1]["position_id"] = 3333333333333333333
 
         trade_service_with_mock.place_combo_order(
-            combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+            combo_legs=legs,
+            price=2.5,
+            qty=1,
+            trd_env="REAL",
+            acc_id=123,
+            **real_request(trade_service_with_mock),
         )
 
         sent = mock_trade_ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
@@ -2750,18 +2653,11 @@ class TestPlaceComboOrder:
             3333333333333333333,
         ]
 
-    def test_place_combo_order_success(self, trade_service_with_mock, mock_trade_ctx):
-        """Test successful combo order placement."""
-        df = pd.DataFrame(
-            [
-                {
-                    "order_id": "998877",
-                    "order_status": "SUBMITTED",
-                    "qty": 1,
-                    "price": 2.5,
-                }
-            ]
-        )
+    def test_legs_mapped_to_combo_leg_objects(
+        self, trade_service_with_mock, mock_trade_ctx
+    ):
+        """Test dict legs are converted to ComboLeg with the right attributes."""
+        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
         mock_trade_ctx.place_combo_order.return_value = (0, df)
 
         result = trade_service_with_mock.place_combo_order(
@@ -2770,26 +2666,11 @@ class TestPlaceComboOrder:
             qty=1,
             trd_env="REAL",
             acc_id=123,
+            **real_request(trade_service_with_mock),
         )
 
-        assert result["order_id"] == "998877"
+        assert result["order_id"] == "1"
         mock_trade_ctx.place_combo_order.assert_called_once()
-
-    def test_legs_mapped_to_combo_leg_objects(
-        self, trade_service_with_mock, mock_trade_ctx
-    ):
-        """Test dict legs are converted to ComboLeg with the right attributes."""
-        df = pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}])
-        mock_trade_ctx.place_combo_order.return_value = (0, df)
-
-        trade_service_with_mock.place_combo_order(
-            combo_legs=self._legs(),
-            price=2.5,
-            qty=1,
-            trd_env="REAL",
-            acc_id=123,
-        )
-
         sent = mock_trade_ctx.place_combo_order.call_args.kwargs["combo_leg_list"]
         assert [leg.code for leg in sent] == [
             "US.XYZ260101C100000",
@@ -2797,6 +2678,7 @@ class TestPlaceComboOrder:
         ]
         assert [leg.trd_side for leg in sent] == ["SELL", "BUY"]
         assert [leg.qty_ratio for leg in sent] == [1, 1]
+        assert all(leg.position_id is None for leg in sent)
 
     def test_rejects_single_leg(self, trade_service_with_mock, mock_trade_ctx):
         """Test a one-leg combo is refused and never reaches the gateway."""
@@ -2807,6 +2689,7 @@ class TestPlaceComboOrder:
                 qty=1,
                 trd_env="REAL",
                 acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
@@ -2818,7 +2701,12 @@ class TestPlaceComboOrder:
 
         with pytest.raises(OrderNotSentError, match="Invalid trd_side"):
             trade_service_with_mock.place_combo_order(
-                combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+                combo_legs=legs,
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
@@ -2830,7 +2718,12 @@ class TestPlaceComboOrder:
 
         with pytest.raises(OrderNotSentError, match="same market"):
             trade_service_with_mock.place_combo_order(
-                combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+                combo_legs=legs,
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
@@ -2844,7 +2737,12 @@ class TestPlaceComboOrder:
 
         with pytest.raises(OrderNotSentError, match="qty_ratio"):
             trade_service_with_mock.place_combo_order(
-                combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+                combo_legs=legs,
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
@@ -2856,7 +2754,12 @@ class TestPlaceComboOrder:
 
         with pytest.raises(OrderNotSentError, match="code"):
             trade_service_with_mock.place_combo_order(
-                combo_legs=legs, price=2.5, qty=1, trd_env="REAL", acc_id=123
+                combo_legs=legs,
+                price=2.5,
+                qty=1,
+                trd_env="REAL",
+                acc_id=123,
+                **real_request(trade_service_with_mock),
             )
 
         mock_trade_ctx.place_combo_order.assert_not_called()
@@ -2871,13 +2774,14 @@ class TestPlaceComboOrder:
             qty=1,
             trd_env="REAL",
             acc_id=123,
+            **real_request(trade_service_with_mock),
         )
         assert result["state"] == "UNKNOWN_OUTCOME"
         assert "may have been sent" in result["error"]
 
-    def test_place_combo_order_no_context(self):
+    def test_place_combo_order_no_context(self, trade_service_factory):
         """Test error when context not connected."""
-        service = TradeService(policy=REAL_POLICY)
+        service = trade_service_factory(policy=REAL_POLICY)
 
         with pytest.raises(OrderNotSentError, match="Trade context not connected"):
             service.place_combo_order(
@@ -2886,6 +2790,7 @@ class TestPlaceComboOrder:
                 qty=1,
                 trd_env="REAL",
                 acc_id=123,
+                **real_request(service),
             )
 
     def test_resolves_account_from_leg_market(
@@ -2904,6 +2809,7 @@ class TestPlaceComboOrder:
             price=2.5,
             qty=1,
             trd_env="REAL",
+            **real_request(trade_service_with_mock),
         )
 
         assert mock_trade_ctx.place_combo_order.call_args.kwargs["acc_id"] == 456
@@ -2957,23 +2863,6 @@ class TestAutomaticAccountSelection:
         message = str(excinfo.value)
         assert "2 SIMULATE accounts" in message
         assert "acc_id" in message
-
-    def test_candidates_are_named_by_their_last_four_digits_only(
-        self, trade_service_with_mock
-    ):
-        accounts = [
-            {"acc_id": 11112222, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]},
-            {"acc_id": 33334444, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]},
-        ]
-        with (
-            patch.object(
-                trade_service_with_mock, "get_accounts", return_value=accounts
-            ),
-            pytest.raises(ValueError) as excinfo,
-        ):
-            trade_service_with_mock._resolve_account("SIMULATE", "US", 0)
-
-        message = str(excinfo.value)
         assert "...2222" in message
         assert "...4444" in message
         assert "11112222" not in message
@@ -3060,8 +2949,10 @@ class TestRealAccountAllowlistRouting:
         ):
             assert trade_service_with_mock._resolve_account("REAL", "US", 0) == 123
 
-    def test_real_mode_with_no_allowlist_refuses(self, mock_trade_ctx):
-        service = TradeService(policy=TradingPolicy(TradingMode.REAL))
+    def test_real_mode_with_no_allowlist_refuses(
+        self, mock_trade_ctx, trade_service_factory
+    ):
+        service = trade_service_factory(policy=TradingPolicy(TradingMode.REAL))
         service.trade_ctx = mock_trade_ctx
 
         with pytest.raises(ValueError, match="No REAL accounts are configured"):
@@ -3096,13 +2987,16 @@ class TestAutoSelectionThroughPlaceOrder:
                 trd_side="BUY",
                 trd_env="REAL",
                 acc_id=0,
+                **real_request(trade_service_with_mock),
             )
 
             kwargs = mock_trade_ctx.place_order.call_args[1]
             assert kwargs["acc_id"] == 123
             assert kwargs["code"] == "JP.8058"
 
-    def test_visible_hk_and_us_accounts_are_selected_by_order_market(self):
+    def test_visible_hk_and_us_accounts_are_selected_by_order_market(
+        self, trade_service_factory
+    ):
         ctx = MagicMock()
         ctx.get_acc_list.return_value = (
             RET_OK,
@@ -3125,7 +3019,7 @@ class TestAutoSelectionThroughPlaceOrder:
             RET_OK,
             pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}]),
         )
-        service = TradeService(
+        service = trade_service_factory(
             policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({101, 202}))
         )
         service.trade_ctx = ctx
@@ -3136,6 +3030,7 @@ class TestAutoSelectionThroughPlaceOrder:
             qty=1,
             trd_side="BUY",
             trd_env="REAL",
+            **real_request(service),
         )
         service.place_order(
             code="HK.00700",
@@ -3143,6 +3038,7 @@ class TestAutoSelectionThroughPlaceOrder:
             qty=1,
             trd_side="BUY",
             trd_env="REAL",
+            **real_request(service),
         )
 
         assert [call.kwargs["acc_id"] for call in ctx.place_order.call_args_list] == [
@@ -3151,7 +3047,9 @@ class TestAutoSelectionThroughPlaceOrder:
         ]
 
     @pytest.mark.parametrize("operation", ["modify", "cancel"])
-    def test_modify_and_cancel_refuse_hk_us_account_ambiguity(self, operation):
+    def test_modify_and_cancel_refuse_hk_us_account_ambiguity(
+        self, operation, trade_service_factory
+    ):
         ctx = MagicMock()
         ctx.get_acc_list.return_value = (
             RET_OK,
@@ -3170,7 +3068,7 @@ class TestAutoSelectionThroughPlaceOrder:
                 ]
             ),
         )
-        service = TradeService(
+        service = trade_service_factory(
             policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({101, 202}))
         )
         service.trade_ctx = ctx
@@ -3181,9 +3079,12 @@ class TestAutoSelectionThroughPlaceOrder:
                     order_id="1",
                     modify_order_op="CANCEL",
                     trd_env="REAL",
+                    **real_request(service),
                 )
             else:
-                service.cancel_order(order_id="1", trd_env="REAL")
+                service.cancel_order(
+                    order_id="1", trd_env="REAL", **real_request(service)
+                )
 
         assert isinstance(excinfo.value.__cause__, ValueError)
         assert "2 REAL accounts" in str(excinfo.value.__cause__)

@@ -17,7 +17,7 @@ from moomoo_mcp.services.rate_limit import (
     ProviderRateLimitError,
     ProviderRequestLimiter,
 )
-from tests.conftest import call_mcp_tool
+from tests.mcp_helpers import call_mcp_tool
 from tests.rate_limit_clock import FakeClock
 
 

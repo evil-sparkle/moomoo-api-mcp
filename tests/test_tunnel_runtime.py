@@ -111,7 +111,7 @@ def test_child_environment_discards_proxy_and_credential_overrides(monkeypatch):
         "CONTROL_PLANE_API_KEY",
         "MCP_EXTRA_HEADERS",
         "MOOMOO_LOGIN_ACCOUNT",
-        "MCP_OPERATOR_TOKEN",
+        "MOOMOO_OPERATOR_AUTH_TOKEN",
         "MCP_AUTHORIZATION",
     ):
         monkeypatch.setenv(key, "synthetic-must-not-inherit")
@@ -182,6 +182,9 @@ def test_main_never_launches_child_when_authenticated_gate_fails(monkeypatch):
         ("CHATGPT_TUNNEL_API_KEY", "synthetic\r\ninjection"),
         ("CHATGPT_TUNNEL_ID", ""),
         ("CHATGPT_TUNNEL_ID", "https://unexpected.invalid"),
+        ("CHATGPT_TUNNEL_ID", "tunnel_"),
+        ("CHATGPT_TUNNEL_ID", "tunnel_" + "a" * 129),
+        ("CHATGPT_TUNNEL_ID", "tunnel_non-ascii-é"),
     ],
 )
 def test_invalid_openai_settings_never_connect_or_spawn(

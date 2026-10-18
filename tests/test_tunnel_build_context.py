@@ -1,7 +1,6 @@
 """Build preparation must transmit only enumerated public inputs."""
 
 import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -53,7 +52,10 @@ pathlib.Path(os.environ['CONTEXT_RESULT']).write_text(json.dumps(files))
         text=True,
     )
     if not local_build:
-        assert re.fullmatch(r"[0-9a-f]{64}\n", completed.stdout)
+        digest = completed.stdout.removesuffix("\n")
+        assert completed.stdout == digest + "\n"
+        assert len(digest) == 64
+        assert all(character in "0123456789abcdef" for character in digest)
         assert not result.exists()  # CI preparation never invokes Docker.
         result.write_text(json.dumps(sorted(p.name for p in context.iterdir())))
         assert all("never-send-this" not in p.read_text() for p in context.iterdir())

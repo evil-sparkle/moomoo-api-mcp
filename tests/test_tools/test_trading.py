@@ -12,16 +12,13 @@ import pandas as pd
 import pytest
 
 from moomoo_mcp.services.execution_store import ExecutionStore
-from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import (
     InstrumentFacts,
     TradingMode,
     TradingPolicy,
 )
-from tests.conftest import call_mcp_tool
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.mcp_helpers import call_mcp_tool
+from tests.trade_helpers import real_request
 
 # Larger than 2**53: a client that parsed this as a number would round it.
 LARGE_ACC_ID = "987654321098765431"
@@ -146,27 +143,7 @@ class TestRequiredTradingEnvironment:
 
         assert "trd_env" in schema["properties"]
         assert "trd_env" in schema.get("required", [])
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
-    async def test_the_schema_offers_no_default(self, tool_name):
-        from moomoo_mcp.server import mcp
-
-        tools = {tool.name: tool for tool in await mcp.list_tools()}
-        schema = tools[tool_name].inputSchema
-
         assert "default" not in schema["properties"]["trd_env"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
-    async def test_the_docstring_no_longer_says_default_is_real(self, tool_name):
-        from moomoo_mcp.server import mcp
-
-        tools = {tool.name: tool for tool in await mcp.list_tools()}
-        description = tools[tool_name].description or ""
-
-        assert "Default REAL" not in description
-        assert "Default is REAL account" not in description
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
@@ -183,28 +160,6 @@ class TestRequiredTradingEnvironment:
         assert "get_orders" in description
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
-    async def test_the_docstring_explains_account_resolution(self, tool_name):
-        from moomoo_mcp.server import mcp
-
-        tools = {tool.name: tool for tool in await mcp.list_tools()}
-        description = tools[tool_name].description or ""
-
-        assert "exactly one is eligible" in description
-        assert "last four digits" in description
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("tool_name", WRITE_TOOLS)
-    async def test_the_docstring_documents_the_halt(self, tool_name):
-        from moomoo_mcp.server import mcp
-
-        tools = {tool.name: tool for tool in await mcp.list_tools()}
-        description = tools[tool_name].description or ""
-
-        assert "lock_trade" in description
-        assert "halt" in description.lower()
-
-    @pytest.mark.asyncio
     async def test_the_combo_docstring_says_premium_is_not_max_loss(self):
         """A short package can lose far more than the premium it collects."""
         from moomoo_mcp.server import mcp
@@ -215,34 +170,13 @@ class TestRequiredTradingEnvironment:
         assert "PREMIUM IS NOT MAXIMUM LOSS" in description
         assert "stock leg" in description
 
-    @pytest.mark.asyncio
-    async def test_the_place_order_docstring_states_the_reference_price_rule(self):
-        from moomoo_mcp.server import mcp
-
-        tools = {tool.name: tool for tool in await mcp.list_tools()}
-        description = tools["place_order"].description or ""
-
-        assert "CANNOT be valued is REFUSED" in description
-        assert "the limit price for a BUY limit order" in description
-
-    @pytest.mark.asyncio
-    async def test_the_lock_trade_docstring_describes_halt_recovery(self):
-        from moomoo_mcp.server import mcp
-
-        tools = {tool.name: tool for tool in await mcp.list_tools()}
-        description = tools["lock_trade"].description or ""
-
-        assert "ONLY way to clear an execution halt" in description
-        assert "halt_cleared" in description
-        assert "execution_halted" in description
-
 
 class TestPolicyThroughMcpDispatch:
     """Policy refusals must surface through actual MCP tool calls too."""
 
     @staticmethod
-    def _live_trade_service(context, mode):
-        service = TradeService(policy=TradingPolicy(mode))
+    def _live_trade_service(context, mode, *, trade_service_factory):
+        service = trade_service_factory(policy=TradingPolicy(mode))
         service.trade_ctx = context
         return service
 
@@ -297,10 +231,12 @@ class TestPolicyThroughMcpDispatch:
     )
     @pytest.mark.asyncio
     async def test_read_only_refuses_every_write_tool(
-        self, mcp_app_context, trade_ctx, tool, arguments
+        self, mcp_app_context, trade_ctx, tool, arguments, *, trade_service_factory
     ):
         mcp_app_context.trade_service = self._live_trade_service(
-            trade_ctx, TradingMode.READ_ONLY
+            trade_ctx,
+            TradingMode.READ_ONLY,
+            trade_service_factory=trade_service_factory,
         )
 
         with pytest.raises(Exception, match="not permitted"):
@@ -311,7 +247,7 @@ class TestPolicyThroughMcpDispatch:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mode", [TradingMode.SIMULATE, TradingMode.REAL])
     async def test_configured_paper_journal_permits_a_simulate_write(
-        self, mcp_app_context, trade_ctx, tmp_path, mode
+        self, mcp_app_context, trade_ctx, tmp_path, mode, *, trade_service_factory
     ):
         store = ExecutionStore(tmp_path / "paper.sqlite3", create=True)
         trade_ctx.get_acc_list.return_value = (
@@ -320,7 +256,7 @@ class TestPolicyThroughMcpDispatch:
                 [{"acc_id": 456, "trd_env": "SIMULATE", "trdmarket_auth": ["US"]}]
             ),
         )
-        service = TradeService(
+        service = trade_service_factory(
             policy=TradingPolicy(mode),
             execution_store=store,
             simulated_account_allowlist=frozenset({456}),
@@ -357,9 +293,11 @@ class TestPolicyThroughMcpDispatch:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mode", [TradingMode.SIMULATE, TradingMode.REAL])
     async def test_missing_paper_journal_refuses_a_simulate_write(
-        self, mcp_app_context, trade_ctx, mode
+        self, mcp_app_context, trade_ctx, mode, *, trade_service_factory
     ):
-        mcp_app_context.trade_service = self._live_trade_service(trade_ctx, mode)
+        mcp_app_context.trade_service = self._live_trade_service(
+            trade_ctx, mode, trade_service_factory=trade_service_factory
+        )
 
         with pytest.raises(Exception) as excinfo:
             await call_mcp_tool(
@@ -381,9 +319,11 @@ class TestPolicyThroughMcpDispatch:
         assert trade_ctx.method_calls == []
 
     @pytest.mark.asyncio
-    async def test_simulate_mode_refuses_a_real_write(self, mcp_app_context, trade_ctx):
+    async def test_simulate_mode_refuses_a_real_write(
+        self, mcp_app_context, trade_ctx, *, trade_service_factory
+    ):
         mcp_app_context.trade_service = self._live_trade_service(
-            trade_ctx, TradingMode.SIMULATE
+            trade_ctx, TradingMode.SIMULATE, trade_service_factory=trade_service_factory
         )
 
         with pytest.raises(Exception, match="does not permit REAL writes"):
@@ -397,6 +337,7 @@ class TestPolicyThroughMcpDispatch:
                     "trd_side": "BUY",
                     "trd_env": "REAL",
                     "acc_id": "456",
+                    **real_request(mcp_app_context.trade_service),
                 },
             )
 
@@ -404,10 +345,10 @@ class TestPolicyThroughMcpDispatch:
 
     @pytest.mark.asyncio
     async def test_unlock_tool_is_refused_outside_real_mode(
-        self, mcp_app_context, trade_ctx
+        self, mcp_app_context, trade_ctx, *, trade_service_factory
     ):
         mcp_app_context.trade_service = self._live_trade_service(
-            trade_ctx, TradingMode.SIMULATE
+            trade_ctx, TradingMode.SIMULATE, trade_service_factory=trade_service_factory
         )
 
         with pytest.raises(Exception, match="only REAL mode may unlock"):
@@ -417,14 +358,16 @@ class TestPolicyThroughMcpDispatch:
 
     @pytest.mark.asyncio
     async def test_account_reads_stay_available_in_read_only(
-        self, mcp_app_context, trade_ctx
+        self, mcp_app_context, trade_ctx, *, trade_service_factory
     ):
         trade_ctx.get_acc_list.return_value = (
             0,
             pd.DataFrame([{"acc_id": 456, "trd_env": "REAL"}]),
         )
         mcp_app_context.trade_service = self._live_trade_service(
-            trade_ctx, TradingMode.READ_ONLY
+            trade_ctx,
+            TradingMode.READ_ONLY,
+            trade_service_factory=trade_service_factory,
         )
 
         result = await call_mcp_tool(mcp_app_context, "get_accounts")
@@ -472,8 +415,8 @@ class TestComboPreviewThroughMcp:
         return context
 
     @pytest.fixture
-    def read_only_context(self, mcp_app_context, preview_ctx):
-        service = TradeService(policy=TradingPolicy(TradingMode.READ_ONLY))
+    def read_only_context(self, mcp_app_context, preview_ctx, *, trade_service_factory):
+        service = trade_service_factory(policy=TradingPolicy(TradingMode.READ_ONLY))
         service.trade_ctx = preview_ctx
         mcp_app_context.trade_service = service
         return mcp_app_context

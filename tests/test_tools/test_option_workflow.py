@@ -14,7 +14,7 @@ import pytest
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
-from tests.conftest import call_mcp_tool
+from tests.mcp_helpers import call_mcp_tool
 
 IMPACT_COLUMNS = pd.Index(
     [

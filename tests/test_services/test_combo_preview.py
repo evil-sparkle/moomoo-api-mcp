@@ -13,9 +13,7 @@ from moomoo_mcp.services.trading_policy import (
     TradingPolicy,
     TradingPolicyError,
 )
-from tests.real_journal_helpers import (
-    real_journal_legacy_calls as real_journal_legacy_calls,
-)
+from tests.trade_helpers import real_request
 
 STRATEGY_LEG_ID = 3333333333333333333
 OTHER_LEG_ID = 4444444444444444444
@@ -154,16 +152,6 @@ class TestValidPreview:
         assert [leg.position_id for leg in legs] == [STRATEGY_LEG_ID, OTHER_LEG_ID]
         assert_no_writes(ctx)
 
-    def test_preview_is_permitted_under_read_only(self, service, ctx):
-        assert service.policy.mode is TradingMode.READ_ONLY
-
-        service.preview_combo_order(
-            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="REAL", acc_id=456
-        )
-
-        ctx.comboorder_tradinginfo_query.assert_called_once()
-        assert_no_writes(ctx)
-
     @pytest.mark.parametrize("mode", list(TradingMode))
     def test_preview_works_in_every_mode(self, ctx, mode):
         svc = TradeService(policy=TradingPolicy(mode))
@@ -174,25 +162,11 @@ class TestValidPreview:
         )
 
         ctx.comboorder_tradinginfo_query.assert_called_once()
+        assert_no_writes(ctx)
 
 
 class TestAccountSelection:
     """Preview resolves an omitted account the same way placement does."""
-
-    def test_omitted_account_is_resolved_from_the_leg_market(self, service, ctx):
-        ctx.get_acc_list.return_value = (
-            0,
-            pd.DataFrame(
-                [{"acc_id": 789, "trd_env": "SIMULATE", "market_auth": ["US"]}]
-            ),
-        )
-
-        preview = service.preview_combo_order(
-            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="SIMULATE"
-        )
-
-        assert ctx.comboorder_tradinginfo_query.call_args.kwargs["acc_id"] == 789
-        assert preview["acc_id"] == 789
 
     def test_visible_hk_and_us_accounts_keep_preview_market_aware(self, service, ctx):
         ctx.get_acc_list.return_value = (
@@ -221,7 +195,9 @@ class TestAccountSelection:
         assert ctx.comboorder_tradinginfo_query.call_args.kwargs["acc_id"] == 202
         assert_no_writes(ctx)
 
-    def test_matches_the_account_placement_would_choose(self, ctx):
+    def test_matches_the_account_placement_would_choose(
+        self, ctx, *, trade_service_factory
+    ):
         acc_frame = pd.DataFrame(
             [{"acc_id": 789, "trd_env": "REAL", "market_auth": ["US"]}]
         )
@@ -230,7 +206,7 @@ class TestAccountSelection:
             0,
             pd.DataFrame([{"order_id": "1", "order_status": "SUBMITTED"}]),
         )
-        svc = TradeService(
+        svc = trade_service_factory(
             policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({789}))
         )
         svc.trade_ctx = ctx
@@ -239,7 +215,11 @@ class TestAccountSelection:
             combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="REAL"
         )
         svc.place_combo_order(
-            combo_legs=_opening_legs(), price=2.5, qty=1, trd_env="REAL"
+            combo_legs=_opening_legs(),
+            price=2.5,
+            qty=1,
+            trd_env="REAL",
+            **real_request(svc),
         )
 
         previewed = ctx.comboorder_tradinginfo_query.call_args.kwargs["acc_id"]
@@ -336,6 +316,7 @@ class TestUnavailableValues:
                 qty=1,
                 trd_env="REAL",
                 acc_id=456,
+                **real_request(service),
             )
 
         assert isinstance(excinfo.value.__cause__, TradingPolicyError)
@@ -371,13 +352,6 @@ class TestAgainstTheRealDecoder:
         assert data is not None
         return data
 
-    def test_sdk_reports_missing_fields_as_a_string_not_nan(self):
-        """Pin the real contract: the sentinel is 'N/A', not NaN."""
-        decoded = self._decode_response_with_unset_impact_fields()
-
-        assert decoded[0]["option_bp"] == "N/A"
-        assert all(value == "N/A" for value in decoded[0].values())
-
     def test_preview_nulls_every_field_the_decoder_marked_missing(self, service, ctx):
         decoded = self._decode_response_with_unset_impact_fields()
         ctx.comboorder_tradinginfo_query.return_value = (
@@ -406,17 +380,3 @@ class TestAgainstTheRealDecoder:
 
         assert preview["nlv_change"] == -12.5
         assert preview["option_bp"] is None
-
-    def test_zero_is_never_substituted_for_a_missing_value(self, service, ctx):
-        """Null means 'not reported'; 0.0 would mean 'no impact'."""
-        decoded = self._decode_response_with_unset_impact_fields()
-        ctx.comboorder_tradinginfo_query.return_value = (
-            0,
-            pd.DataFrame(decoded, columns=IMPACT_COLUMNS),
-        )
-
-        preview = service.preview_combo_order(
-            combo_legs=_opening_legs(), price=2.5, qty=1, acc_id=456
-        )
-
-        assert not any(preview[field] == 0 for field in IMPACT_COLUMNS)

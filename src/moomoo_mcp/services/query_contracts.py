@@ -74,6 +74,24 @@ class QueryPage(TypedDict):
     fetched_at: str
 
 
+def plain_combo_legs(records: list[dict]) -> list[dict]:
+    """Normalize SDK legs while retaining exact identifiers for MCP serialization.
+
+    DataFrame.to_dict owns these records, so updating them does not mutate SDK data.
+    """
+    for record in records:
+        legs = record.get("combo_legs")
+        if not isinstance(legs, (list, tuple)):
+            continue
+        record["combo_legs"] = [
+            {field: getattr(leg, field, None) for field in COMBO_FIELDS}
+            if isinstance(leg, ComboLeg)
+            else leg
+            for leg in legs
+        ]
+    return records
+
+
 def exact_identifier(value: Any, field: str) -> str | None:
     """Refuse floating-point IDs instead of hiding lost precision."""
     if value is None:
