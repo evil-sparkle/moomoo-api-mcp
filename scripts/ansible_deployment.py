@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 from deployment_lock import ROOT_ENV, deployment_lock
 from deployment_manifest import require_hex, validate_image, validate_project
@@ -201,10 +202,13 @@ def runtime_service(container: dict) -> dict:
     for source, target in [
         ("CapDrop", "cap_drop"),
         ("SecurityOpt", "security_opt"),
-        ("Tmpfs", "tmpfs"),
     ]:
         if host.get(source):
             service[target] = host[source]
+    if host.get("Tmpfs"):
+        service["tmpfs"] = [
+            target + ":" + options for target, options in host["Tmpfs"].items()
+        ]
     return service
 
 
@@ -241,8 +245,8 @@ def state_mounts(container: dict) -> tuple[list[dict], dict]:
     return mounts, volumes
 
 
-def prepare(directory: Path, value: dict) -> None:
-    """Freeze the candidate and actual predecessor without mutating containers."""
+def prepare(directory: Path, value: dict, *, capture_predecessor: bool = False) -> None:
+    """Freeze the candidate; reconstruct legacy state only on first cutover."""
     if (directory / SNAPSHOT).exists():
         raise ValueError(
             "A prepared release is immutable; select a fresh release directory."
@@ -256,28 +260,35 @@ def prepare(directory: Path, value: dict) -> None:
     ):
         raise ValueError("Existing container does not belong to the selected project.")
     mounts, volumes = state_mounts(container)
-    previous = runtime_service(container)
-    previous["container_name"] = "moomoo-api-mcp"
-    previous["volumes"] = mounts.copy()
-    predecessor = {"services": {"moomoo-mcp": previous}, "volumes": dict(volumes)}
-    tunnel_ids = execute(
-        [
-            "docker",
-            "ps",
-            "-aq",
-            "--filter",
-            "label=com.docker.compose.project=" + value["project"],
-            "--filter",
-            "label=com.docker.compose.service=chatgpt-tunnel",
-        ]
-    ).split()
-    if len(tunnel_ids) > 1:
-        raise ValueError("More than one existing tunnel container was found.")
-    if tunnel_ids:
-        old_tunnel = inspect_runtime(tunnel_ids[0])
-        predecessor["services"]["chatgpt-tunnel"] = runtime_service(old_tunnel)
-        predecessor["services"]["chatgpt-tunnel"].pop("container_name", None)
-    private_json(directory / "previous-compose.json", escape_runtime(predecessor))
+    if capture_predecessor:
+        previous = runtime_service(container)
+        previous["container_name"] = "moomoo-api-mcp"
+        previous["volumes"] = mounts.copy()
+        predecessor = {"services": {"moomoo-mcp": previous}, "volumes": dict(volumes)}
+        tunnel_ids = execute(
+            [
+                "docker",
+                "ps",
+                "-aq",
+                "--filter",
+                "label=com.docker.compose.project=" + value["project"],
+                "--filter",
+                "label=com.docker.compose.service=chatgpt-tunnel",
+            ]
+        ).split()
+        if len(tunnel_ids) > 1:
+            raise ValueError("More than one existing tunnel container was found.")
+        if tunnel_ids:
+            old_tunnel = inspect_runtime(tunnel_ids[0])
+            predecessor["services"]["chatgpt-tunnel"] = runtime_service(old_tunnel)
+            predecessor["services"]["chatgpt-tunnel"].pop("container_name", None)
+        previous_path = directory / "previous-compose.json"
+        private_json(previous_path, escape_runtime(predecessor))
+        # A malformed rescue document must fail before replacing the old stack.
+        execute(
+            compose(directory, value, sources=[])
+            + ["-f", str(previous_path), "config", "--quiet"]
+        )
     base = json.loads(
         execute(
             compose(directory, value, sources=["docker-compose.yml"])
@@ -469,9 +480,52 @@ def verify(directory: Path, value: dict) -> None:
     print("Authenticated MCP and " + value["expected_mode"] + " mode verified.")
 
 
+def rollback(directory: Path, value: dict, release: str) -> None:
+    """Select a previously frozen native release without consulting edited .env."""
+    root = directory.parent.parent
+    current = root / "current"
+    if (
+        directory.parent.name != "releases"
+        or not current.is_symlink()
+        or current.resolve() != directory.resolve()
+        or not release
+        or any(character not in "0123456789abcdef-" for character in release)
+    ):
+        raise ValueError("Select a saved release from the current native deployment.")
+    target = (root / "releases" / release).resolve(strict=True)
+    if target.parent != directory.parent.resolve():
+        raise ValueError("Rollback must remain inside this deployment's releases.")
+    selected = settings(target)
+    if selected["project"] != value["project"]:
+        raise ValueError("Rollback must preserve the existing Compose project.")
+    preflight(target, selected)
+    temporary = root / (".current-" + uuid4().hex)
+    try:
+        execute(
+            compose(target, selected) + ["up", "-d", "--no-build", "--remove-orphans"]
+        )
+        verify(target, selected)
+        temporary.symlink_to(target, target_is_directory=True)
+        temporary.replace(current)
+    except (ValueError, KeyError, OSError, TypeError, subprocess.SubprocessError):
+        execute(
+            compose(directory, value) + ["up", "-d", "--no-build", "--remove-orphans"]
+        )
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    print("Restored frozen release " + release + ".")
+
+
 def operate(directory: Path, value: dict, mode: str, arguments: list[str]) -> None:
     if mode == "prepare":
-        prepare(directory, value)
+        if arguments not in ([], ["--capture-predecessor"]):
+            raise ValueError("Unsupported preparation option.")
+        prepare(directory, value, capture_predecessor=bool(arguments))
+    elif mode == "rollback":
+        if len(arguments) != 1:
+            raise ValueError("Select one saved native release identifier.")
+        rollback(directory, value, arguments[0])
     elif mode == "validate":
         validate_configuration(directory, value)
     elif mode == "preflight":
@@ -545,6 +599,7 @@ def main() -> int:
             "preflight",
             "compose",
             "restore",
+            "rollback",
             "verify",
             "gateway",
             "tunnel",
@@ -570,3 +625,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

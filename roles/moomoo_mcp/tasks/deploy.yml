@@ -80,7 +80,7 @@
 
 - name: Preserve the existing project and state and validate server-side configuration
   ansible.builtin.command:
-    argv: [python3, scripts/ansible_deployment.py, prepare]
+    argv: "{{ ['python3', 'scripts/ansible_deployment.py', 'prepare'] + ([] if (moomoo_mcp_previous.stat.islnk | default(false)) else ['--capture-predecessor']) }}"
     chdir: "{{ moomoo_mcp_release }}"
   changed_when: false
 
@@ -184,3 +184,4 @@
   ansible.builtin.command:
     argv: [systemctl, --user, disable, moomoo.service]
   changed_when: false
+

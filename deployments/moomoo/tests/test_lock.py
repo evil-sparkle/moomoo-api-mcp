@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -127,3 +128,54 @@ class LockTests(unittest.TestCase):
         ):
             raise RuntimeError("synthetic failure")
         self.assertFalse((self.root / ".deployment-lock").exists())
+
+    def test_legacy_lifecycle_obeys_lock_and_delegation(self):
+        checkout = self.root / "legacy"
+        (checkout / "scripts").mkdir(parents=True)
+        for filename in ["compose-prod.sh", "deployment_lock.py"]:
+            shutil.copy(ROOT / "scripts" / filename, checkout / "scripts" / filename)
+        snapshot = checkout / ".deploy-config.json"
+        snapshot.write_text('{"services":{}}')
+        binaries = self.root / "bin"
+        binaries.mkdir()
+        marker = self.root / "docker-called"
+        docker = binaries / "docker"
+        docker.write_text(
+            "#!"
+            + sys.executable
+            + "\nfrom pathlib import Path\nPath("
+            + repr(str(marker))
+            + ").touch()\n"
+        )
+        docker.chmod(0o755)
+        environment = self.environment | {
+            "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
+        }
+        token = self.command("acquire").stdout.strip()
+        try:
+            for action in ["up", "stop", "restart", "down", "rm", "run"]:
+                with self.subTest(action=action):
+                    result = subprocess.run(
+                        ["bash", str(checkout / "scripts/compose-prod.sh"), action],
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(marker.exists())
+            allowed = subprocess.run(
+                ["bash", str(checkout / "scripts/compose-prod.sh"), "stop"],
+                env=environment | {locking.TOKEN_ENV: token},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(allowed.returncode, 0, allowed.stderr)
+            self.assertTrue(marker.exists())
+            self.assertTrue((self.root / ".deployment-lock").exists())
+        finally:
+            self.command(
+                "release", environment=environment | {locking.TOKEN_ENV: token}
+            )
+

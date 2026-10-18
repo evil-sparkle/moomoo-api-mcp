@@ -2,6 +2,20 @@
 # Use identical deployment settings from interactive shells and systemd.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Lifecycle entrypoints (including the legacy systemd unit) must participate in
+# the same transaction as rollout and rollback. Read-only config resolution can
+# recurse through this wrapper, so leave diagnostics outside the mutation lock.
+for argument in "$@"; do
+  case "$argument" in
+    up|start|stop|restart|run|create|down|rm|kill|pause|unpause|pull|build|exec|scale|watch)
+      if [ -z "${MOOMOO_DEPLOY_LOCK_TOKEN:-}" ]; then
+        exec python3 scripts/deployment_lock.py run -- bash "$0" "$@"
+      fi
+      python3 scripts/deployment_lock.py run -- true
+      break
+      ;;
+  esac
+done
 # The saved deployment is authoritative, including after a new deployment.
 unset ECR_REGISTRY IMAGE_TAG COMPOSE_PROJECT_NAME
 unset MOOMOO_APP_IMAGE
@@ -70,3 +84,4 @@ if [ -f .chatgpt-deploy.json ]; then
 fi
 exec docker --context rootless compose --env-file .env --env-file .deploy.env \
   -f docker-compose.yml -f docker-compose.prod.yml "${optional[@]}" "$@"
+

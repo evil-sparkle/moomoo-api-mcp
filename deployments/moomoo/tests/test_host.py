@@ -93,17 +93,28 @@ class HostTests(unittest.TestCase):
             shutil.copy(ROOT / filename, self.root / filename)
 
     def prepare(
-        self, value=None, *, container=None, base=None, final=None, old_tunnel=None
+        self,
+        value=None,
+        *,
+        container=None,
+        base=None,
+        final=None,
+        old_tunnel=None,
+        capture_predecessor=True,
     ):
-        responses = [
-            json.dumps(container or existing()),
-            "synthetic-tunnel\n" if old_tunnel else "",
-        ]
-        if old_tunnel:
-            responses.append(json.dumps(old_tunnel))
+        responses = [json.dumps(container or existing())]
+        if capture_predecessor:
+            responses.append("synthetic-tunnel\n" if old_tunnel else "")
+            if old_tunnel:
+                responses.append(json.dumps(old_tunnel))
+            responses.append("")  # Compose validates the rescue document first.
         responses += [json.dumps(base or model()), json.dumps(final or base or model())]
         with patch.object(host, "execute", side_effect=responses) as execute:
-            host.prepare(self.root, value or self.value)
+            host.prepare(
+                self.root,
+                value or self.value,
+                capture_predecessor=capture_predecessor,
+            )
         return execute
 
     def test_prepare_preserves_state_and_freezes_actual_predecessor(self):
@@ -174,7 +185,6 @@ class HostTests(unittest.TestCase):
                     "execute",
                     side_effect=[
                         json.dumps(existing()),
-                        "",
                         json.dumps(resolved),
                         json.dumps(resolved),
                     ],
@@ -229,7 +239,6 @@ class HostTests(unittest.TestCase):
                     "execute",
                     side_effect=[
                         json.dumps(container),
-                        "",
                         json.dumps(resolved),
                         json.dumps(resolved),
                     ],
@@ -245,9 +254,24 @@ class HostTests(unittest.TestCase):
                 self.assertEqual(len(volumes), 4)
 
     def test_explicit_tunnel_disable_freezes_previous_tunnel_for_rollback(self):
-        self.prepare(old_tunnel=existing())
+        tunnel = existing()
+        tunnel["host"] = {
+            "Tmpfs": {"/run/moomoo-chatgpt-tunnel": "mode=0700,size=16m"},
+            "ReadonlyRootfs": True,
+        }
+        commands = self.prepare(old_tunnel=tunnel)
         previous = json.loads((self.root / "previous-compose.json").read_text())
         self.assertIn("chatgpt-tunnel", previous["services"])
+        self.assertEqual(
+            previous["services"]["chatgpt-tunnel"]["tmpfs"],
+            ["/run/moomoo-chatgpt-tunnel:mode=0700,size=16m"],
+        )
+        validation = next(
+            call.args[0]
+            for call in commands.call_args_list
+            if "--quiet" in call.args[0]
+        )
+        self.assertIn(str(self.root / "previous-compose.json"), validation)
         self.assertNotIn(
             "chatgpt-tunnel",
             json.loads((self.root / host.SNAPSHOT).read_text())["services"],
@@ -257,6 +281,75 @@ class HostTests(unittest.TestCase):
                 self.root, self.value, "compose", ["up", "-d", "--remove-orphans"]
             )
         self.assertIn("--remove-orphans", execute.call_args.args[0])
+
+    def test_managed_upgrade_does_not_reconstruct_legacy_configuration(self):
+        commands = self.prepare(capture_predecessor=False)
+        self.assertFalse((self.root / "previous-compose.json").exists())
+        self.assertFalse(any("ps" in call.args[0] for call in commands.call_args_list))
+
+    def test_invalid_legacy_snapshot_stops_before_candidate_resolution(self):
+        with patch.object(
+            host,
+            "execute",
+            side_effect=[json.dumps(existing()), "", ValueError("invalid rescue")],
+        ) as command:
+            with self.assertRaises(ValueError):
+                host.prepare(self.root, self.value, capture_predecessor=True)
+        self.assertEqual(command.call_count, 3)
+        self.assertFalse((self.root / host.SNAPSHOT).exists())
+
+    def test_saved_release_rollback_ignores_edited_settings_and_preserves_journals(
+        self,
+    ):
+        for fails in [False, True]:
+            with self.subTest(fails=fails), tempfile.TemporaryDirectory() as name:
+                root = Path(name)
+                releases = root / "releases"
+                old = releases / ("a" * 40 + "-" + "b" * 32)
+                active = releases / ("c" * 40 + "-" + "d" * 32)
+                for release, token in [(old, "saved-token"), (active, "active-token")]:
+                    release.mkdir(parents=True)
+                    (release / "deployment.json").write_text(json.dumps(self.value))
+                    frozen = model()
+                    frozen["services"]["moomoo-mcp"]["environment"].update(
+                        MCP_AUTH_TOKEN=token
+                    )
+                    host.private_json(release / host.SNAPSHOT, frozen)
+                current = root / "current"
+                current.symlink_to(active, target_is_directory=True)
+                journal = root / "journal.db"
+                journal.write_bytes(b"subsequent journal evidence")
+                self.env.write_text("MCP_AUTH_TOKEN=edited-token\n")
+                old_snapshot = (old / host.SNAPSHOT).read_bytes()
+                with (
+                    patch.object(host, "preflight") as preflight,
+                    patch.object(
+                        host,
+                        "verify",
+                        side_effect=ValueError("failed") if fails else None,
+                    ),
+                    patch.object(host, "execute") as command,
+                ):
+                    with self.assertRaises(ValueError):
+                        host.rollback(active, self.value, "../outside")
+                    preflight.assert_not_called()
+                    command.assert_not_called()
+                    if fails:
+                        with self.assertRaises(ValueError):
+                            host.rollback(active, self.value, old.name)
+                    else:
+                        host.rollback(active, self.value, old.name)
+                    preflight.assert_called_once_with(old, self.value)
+                self.assertEqual(current.resolve(), active if fails else old)
+                self.assertEqual((old / host.SNAPSHOT).read_bytes(), old_snapshot)
+                self.assertEqual(journal.read_bytes(), b"subsequent journal evidence")
+                self.assertEqual(command.call_count, 2 if fails else 1)
+                self.assertIn(
+                    str(old / host.SNAPSHOT), command.call_args_list[0].args[0]
+                )
+                for call in command.call_args_list:
+                    self.assertNotIn("--env-file", call.args[0])
+                    self.assertNotIn("--volumes", call.args[0])
 
     def test_tunnel_requires_independent_restricted_identity(self):
         selected = self.value | {"tunnel_enabled": True, "expected_mode": "REAL"}
@@ -313,13 +406,34 @@ class HostTests(unittest.TestCase):
 
         def commands(arguments, **kwargs):
             if arguments[1] == "inspect":
-                return json.dumps(existing())
+                container = existing()
+                if arguments[2] != "moomoo-api-mcp":
+                    container["host"] = {
+                        "Tmpfs": {"/run/tunnel": "mode=0700,size=16m"}
+                    }
+                return json.dumps(container)
             if arguments[1] == "ps":
-                return ""
+                return "synthetic-tunnel"
             return execute(arguments, **kwargs)
 
         with patch.object(host, "execute", side_effect=commands):
-            host.prepare(self.root, self.value)
+            host.prepare(self.root, self.value, capture_predecessor=True)
+        predecessor = json.loads(
+            execute(
+                host.compose(self.root, self.value, sources=[])
+                + [
+                    "-f",
+                    str(self.root / "previous-compose.json"),
+                    "config",
+                    "--format",
+                    "json",
+                ]
+            )
+        )
+        self.assertEqual(
+            predecessor["services"]["chatgpt-tunnel"]["tmpfs"],
+            ["/run/tunnel:mode=0700,size=16m"],
+        )
         resolved = json.loads(
             host.execute(
                 host.compose(self.root, self.value) + ["config", "--format", "json"]
@@ -373,8 +487,10 @@ class HostTests(unittest.TestCase):
             }
         )
         previous_mounts = None
+        saved_releases = []
         for index, mode in enumerate(["SIMULATE", "REAL", "READ_ONLY"]):
-            release = self.root / ("release-" + str(index))
+            release = self.root / "releases" / (f"{index:040x}-" + "e" * 32)
+            saved_releases.append(release)
             (release / "scripts").mkdir(parents=True)
             for filename in [
                 "ansible_deployment.py",
@@ -442,3 +558,26 @@ class HostTests(unittest.TestCase):
                 runtime["environment"],
             )
             self.assertFalse((self.root / "deployment-state/.deployment-lock").exists())
+        current = self.root / "current"
+        current.symlink_to(saved_releases[-1], target_is_directory=True)
+        self.env.write_text("MCP_AUTH_TOKEN=edited-after-release\n")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(current / "scripts/ansible_deployment.py"),
+                "rollback",
+                saved_releases[0].name,
+            ],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(current.resolve(), saved_releases[0])
+        restored = json.loads(state.read_text())
+        self.assertIn("MCP_AUTH_TOKEN=synthetic-primary", restored["environment"])
+        self.assertIn("MOOMOO_TRADING_MODE=SIMULATE", restored["environment"])
+        self.assertNotIn("edited-after-release", result.stdout + result.stderr)
+

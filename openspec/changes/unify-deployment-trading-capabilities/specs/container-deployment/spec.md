@@ -40,9 +40,20 @@ Managed deployments SHALL retain private atomic effective-configuration snapshot
 - **WHEN** candidate configuration or verification fails after operator settings changed
 - **THEN** the previous effective release SHALL remain selected or be restored without reusing the changed settings
 
+#### Scenario: Restore a saved native configuration
+- **WHEN** an operator selects a previously saved native release for rollback
+- **THEN** the runtime and future-start selection SHALL use its validated frozen settings without reloading the edited operator configuration
+- **AND** failure SHALL restore the current release without deleting or rewinding journal data
+
+#### Scenario: Migration compatibility is no longer needed by ordinary upgrades
+- **WHEN** the host already has a verified native release
+- **THEN** subsequent rollouts SHALL use that release's snapshot for failure recovery without reconstructing the legacy runtime
+- **AND** initial migration SHALL validate its reconstructed rescue configuration before replacing containers
+
 ### Requirement: Exclusive lifecycle ownership
 All deployment, rollback and service lifecycle mutations of the same project SHALL share exclusive ownership. A competing restart or rollout SHALL fail or wait without changing runtime state.
 
 #### Scenario: Restart during deployment
 - **WHEN** a deployment owns the project and another caller requests a restart
 - **THEN** the second caller SHALL NOT replace containers from a competing release
+

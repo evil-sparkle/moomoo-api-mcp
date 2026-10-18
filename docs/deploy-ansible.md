@@ -122,17 +122,46 @@ the **Vultr deployment** run and its Ansible readiness report for the result.
 
 ## Manual rollback
 
-Dispatch the same workflow with an older successful main CI run that contains
-`moomoo-deployment-<attempt>` and the native deployment files. Manual rollback
-can select an older revision; automatic deployment skips it if it is no longer
-main. Failed/in-progress CI, foreign repositories and mismatched attempts are
-refused. Tags such as `latest` are never accepted.
+To restore the exact settings of a previously verified native release, run its
+public release identifier through the current helper on the server:
+
+```sh
+release_root="$HOME/.local/share/moomoo-api-mcp"
+ls "$release_root/releases"
+python3 "$release_root/current/scripts/ansible_deployment.py" rollback '<revision>-<configuration-id>'
+```
+
+The helper holds the deployment lock, validates the selected private snapshot and
+storage, starts its frozen configuration and verifies authenticated MCP before
+atomically selecting it for future starts. Failure restores the current release.
+It never reloads edited `.env` settings or rewinds/deletes journal data. Select a
+release from this same project; older releases without frozen snapshots are not
+eligible for this operation.
+
+Dispatching the workflow with an older successful main CI run instead deploys
+that older image **with current server settings**. This is an image redeployment,
+not restoration of a historical configuration. Automatic deployment skips a
+revision that is no longer main. Failed/in-progress CI, foreign repositories and
+mismatched attempts are refused. Tags such as `latest` are never accepted.
 
 CI artifacts are retained for 30 days. ECR image retention is independent: a
 record can outlive its image, in which case pulling fails before the current
 application is replaced. Check configuration/schema compatibility before
 rolling back across application changes. State volumes are reused, not restored
 from a historical snapshot.
+
+## Migration compatibility lifetime
+
+Only first cutover reconstructs the legacy runtime, including its optional tunnel,
+and validates `previous-compose.json` before changing containers. Once `current`
+identifies a verified native release, later rollouts use that release's existing
+snapshot for failure recovery and do not reconstruct legacy configuration.
+
+After cutover, a native restart, and a frozen-release rollback have been verified
+on the host, remove the first-cutover capture/restore branch and retire the legacy
+deployment scripts/service in a cleanup PR. Keep normal native rollback and its
+private release snapshots. Do not remove migration support before that evidence
+exists; this code change does not itself perform a live cutover.
 
 ## Local controller entrypoint
 
@@ -194,3 +223,4 @@ For a selected tunnel, local liveness/readiness verifies only the client on
 the server. A hosted ChatGPT tool call is still required to prove forwarding.
 Broker availability, ECR publication, GitHub environment access and hosted
 ChatGPT acceptance must be checked live after deployment.
+

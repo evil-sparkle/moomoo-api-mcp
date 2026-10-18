@@ -29,4 +29,8 @@ The final implementation passed the complete Python suite, native deployment and
 
 ## Workflow follow-up
 
+- [x] Correct legacy tunnel tmpfs conversion and validate first-cutover rescue configuration before replacement; cover the saved runtime with Compose and fixture tests.
+- [x] Route legacy lifecycle commands through the shared deployment lock and test refusal/delegation at the real wrapper boundary.
+- [x] Keep legacy reconstruction out of normal native upgrades, add explicit frozen-release rollback and document the evidence required before removing migration compatibility.
 - After the user approves merging the completed implementation PR, archive this OpenSpec change in a separate PR and automatically merge that archive PR according to repository guidance.
+

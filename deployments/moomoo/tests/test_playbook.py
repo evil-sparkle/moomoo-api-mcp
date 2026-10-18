@@ -212,12 +212,14 @@ class PlaybookTests(unittest.TestCase):
         current = self.server / ".local/share/moomoo-api-mcp/current"
         previous = current.resolve()
         frozen = (previous / "resolved-compose.json").read_text()
+        self.assertTrue((previous / "previous-compose.json").exists())
         self.env.write_text(
             "MCP_AUTH_TOKEN=new-synthetic-token\nMOOMOO_TRADING_MODE=READ_ONLY\n"
         )
         result = self.deploy()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotEqual(current.resolve(), previous)
+        self.assertFalse((current / "previous-compose.json").exists())
         self.assertEqual((previous / "resolved-compose.json").read_text(), frozen)
         self.assertIn(
             "new-synthetic-token", (current / "resolved-compose.json").read_text()
@@ -320,3 +322,4 @@ class PlaybookTests(unittest.TestCase):
             json.loads((lock / "owner.json").read_text())["token"],
             "synthetic-other-owner",
         )
+

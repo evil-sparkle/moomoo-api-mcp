@@ -65,7 +65,8 @@ systemctl --user status docker.service
 ```
 
 The scripts explicitly select the `rootless` context, including under systemd.
-Use a Compose v2 release supporting `!reset` and multiple `--env-file` arguments.
+Use Docker Compose 2.24.4 or newer, supporting `!reset`, `!override` and multiple
+`--env-file` arguments.
 Keep the checkout and credentials in this user's home directory. If moving an
 existing rootful deployment, migrate its OpenD volume separately before starting;
 the rootless daemon has its own storage.
@@ -284,7 +285,8 @@ success criteria. A listening endpoint alone does not prove broker login.
 
 Use a user unit alongside the rootless Docker user service. Both units belong
 to the same systemd manager, so `Requires=docker.service` resolves correctly.
-The Compose wrapper reads the current `.env` and `.deploy.env` on every start.
+The Compose wrapper uses the verified private snapshot for subsequent starts.
+Edit `.env` and deploy again to validate and apply new settings.
 
 **Every `systemctl` command for this stack takes `--user` and no `sudo`.** The
 unit lives in the deploy user's manager, so `sudo systemctl restart moomoo`
@@ -957,3 +959,4 @@ visibility, retention, response-loss accounting, combo evidence or an actual
 real-money caller chain. This change does not deploy a service, unlock an account,
 or submit a live order. Provider-side exactly-once execution, automatic replacement
 and Stage 3 operator approval remain outside this contract.
+
