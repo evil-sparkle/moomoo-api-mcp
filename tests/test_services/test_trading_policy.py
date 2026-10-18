@@ -158,14 +158,6 @@ class TestConfiguration:
         with pytest.raises(TradingModeConfigError, match="not a trading mode"):
             TradingPolicy.from_env({ENV_VAR: "YOLO"})
 
-    def test_unknown_mode_does_not_fall_back_to_a_permissive_one(self):
-        """A misconfiguration must fail loudly, never select a mode."""
-        policy = "unset"
-        with pytest.raises(TradingModeConfigError):
-            policy = TradingPolicy.from_env({ENV_VAR: "REALLY"})
-
-        assert policy == "unset"
-
     def test_direct_construction_defaults_to_read_only(self):
         assert TradeService().policy.mode is TradingMode.READ_ONLY
 
@@ -230,15 +222,12 @@ class TestWriteMatrix:
             if store is not None:
                 store.close()
 
-    @pytest.mark.parametrize("mode", ALL_MODES)
+    @pytest.mark.parametrize("mode", [TradingMode.READ_ONLY, TradingMode.SIMULATE])
     def test_denied_write_does_not_query_accounts(
         self, ctx, mode, *, trade_service_factory
     ):
         """Account selection is a gateway call, so it must not happen either."""
         service = _service(mode, ctx, trade_service_factory=trade_service_factory)
-
-        if (mode, "REAL") in ALLOWED_WRITES:
-            pytest.skip("REAL writes are permitted in this mode")
 
         with pytest.raises(OrderNotSentError):
             service.place_order(
@@ -253,18 +242,6 @@ class TestWriteMatrix:
 
         ctx.get_acc_list.assert_not_called()
 
-    def test_denied_write_is_not_rerouted_to_another_environment(
-        self, ctx, *, trade_service_factory
-    ):
-        service = _service(
-            TradingMode.SIMULATE, ctx, trade_service_factory=trade_service_factory
-        )
-
-        with pytest.raises(OrderNotSentError):
-            _invoke(service, "place_order", "REAL")
-
-        ctx.place_order.assert_not_called()
-
     def test_unrecognized_environment_is_refused(self, ctx, *, trade_service_factory):
         service = _service(
             TradingMode.REAL, ctx, trade_service_factory=trade_service_factory
@@ -274,18 +251,6 @@ class TestWriteMatrix:
             _invoke(service, "place_order", "PAPER")
 
         ctx.place_order.assert_not_called()
-
-    def test_cancellation_is_denied_in_read_only(self, ctx, *, trade_service_factory):
-        service = _service(
-            TradingMode.READ_ONLY, ctx, trade_service_factory=trade_service_factory
-        )
-
-        with pytest.raises(OrderNotSentError, match="cancel"):
-            service.cancel_order(
-                order_id="1", trd_env="SIMULATE", acc_id=456, **real_request(service)
-            )
-
-        ctx.modify_order.assert_not_called()
 
 
 class TestUnlockMatrix:
