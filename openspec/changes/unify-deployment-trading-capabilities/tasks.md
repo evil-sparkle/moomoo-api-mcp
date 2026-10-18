@@ -22,8 +22,10 @@
 
 ## 4. Integration verification
 
-- [ ] 4.1 Pass complete Python tests, native deployment tests, Ruff lint/format, basedpyright and strict OpenSpec validation; independently review the security and deployment boundaries and fix findings.
+- [x] 4.1 Pass complete Python tests, native deployment tests, Ruff lint/format, basedpyright and strict OpenSpec validation; independently review the security and deployment boundaries and fix findings.
 - [x] 4.2 Review the public diff for secrets, create the implementation PR and register it with this thread.
+
+The final implementation passed the complete Python suite, native deployment and rollback checks, Ruff lint/format, basedpyright and strict OpenSpec validation in CI. Independent reviews also verified account-scoped journal responses, historical error redaction and deployment lock handoff regressions.
 
 ## Workflow follow-up
 
