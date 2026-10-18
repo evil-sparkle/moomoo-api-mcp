@@ -6,6 +6,7 @@ from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 from pydantic import StrictInt
 
+from moomoo_mcp.client_authorization import check_account_access
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.tools.annotations import (
     CONSEQUENTIAL_TOOL,
@@ -842,6 +843,7 @@ async def get_execution(
     row = await run_blocking(execution.store.lookup, operation_id)
     if row is None:
         raise ValueError("Operation is not owned by this journal")
+    check_account_access(trd_env, row["account"])
     return await run_blocking(execution.result, row)
 
 
@@ -860,4 +862,8 @@ async def reconcile_execution(
     five clean negative rounds. Errors never count as clean observations.
     """
     execution = _execution_for_environment(ctx, trd_env)
+    row = await run_blocking(execution.store.lookup, operation_id)
+    if row is None:
+        raise ValueError("Operation is not owned by this journal")
+    check_account_access(trd_env, row["account"])
     return await run_blocking(execution.reconcile, operation_id)

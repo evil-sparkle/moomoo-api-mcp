@@ -121,6 +121,9 @@ class RealExecution:
         return {key: value for key, value in params.items() if key not in ROUTING}
 
     def _retry(self, row: dict, kind: str, params: dict) -> dict:
+        from moomoo_mcp.client_authorization import check_account_access
+
+        check_account_access("REAL", row["account"], write=True)
         account = self.service._exact_account_id(
             params.get("acc_id", "0"), allow_zero=True
         )

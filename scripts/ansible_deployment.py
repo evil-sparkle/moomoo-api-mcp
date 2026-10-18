@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Operate an exact public release without copying or printing server credentials."""
+"""Operate a frozen public release without printing server configuration."""
 
 from __future__ import annotations
 
@@ -11,13 +11,22 @@ import subprocess
 import sys
 from pathlib import Path
 
+from deployment_lock import ROOT_ENV, deployment_lock
 from deployment_manifest import require_hex, validate_image, validate_project
 
 STATE_TARGETS = {
     "/home/opend/.com.moomoo.OpenD": "opend-state",
     "/var/lib/moomoo-mcp/data": "paper-state",
     "/app/real-execution-data": "real-state",
+    "/var/lib/moomoo/trading-controls": "controls-state",
 }
+STATE_SUFFIXES = {
+    "opend-state": "opend-data",
+    "paper-state": "execution-data",
+    "real-state": "real-execution-data",
+    "controls-state": "trading-controls-data",
+}
+SNAPSHOT = "resolved-compose.json"
 
 
 def execute(arguments: list[str], *, stdin: str | None = None) -> str:
@@ -25,9 +34,42 @@ def execute(arguments: list[str], *, stdin: str | None = None) -> str:
         arguments, input=stdin, capture_output=True, text=True, check=False
     )
     if result.returncode != 0:
-        # Compose errors can contain an offending credential-file line.
         raise ValueError("Deployment command failed; raw output was suppressed.")
     return result.stdout
+
+
+def private_json(path: Path, value: dict) -> None:
+    temporary = path.with_name(path.name + ".pending")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(value, stream)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def escape_runtime(value):
+    """Compose snapshots escape dollars; Docker inspection returns raw values."""
+    if isinstance(value, str):
+        return value.replace("$", "$$")
+    if isinstance(value, list):
+        return [escape_runtime(item) for item in value]
+    if isinstance(value, dict):
+        return {key: escape_runtime(item) for key, item in value.items()}
+    return value
+
+
+def decoded_environment(model: dict) -> dict[str, str]:
+    environment = model["services"]["moomoo-mcp"]["environment"]
+    return {
+        key: str(value).replace("$$", "$")
+        for key, value in environment.items()
+        if value is not None
+    }
 
 
 def settings(directory: Path) -> dict:
@@ -35,18 +77,19 @@ def settings(directory: Path) -> dict:
     require_hex(value["revision"], 40, "Source revision")
     validate_image(value["image"])
     validate_image(value["tunnel_image"])
-    if value["expected_mode"] != "READ_ONLY":
-        raise ValueError("This migration requires READ_ONLY operation.")
+    if value["expected_mode"] not in {"READ_ONLY", "SIMULATE", "REAL"}:
+        raise ValueError("Select an explicit supported trading mode.")
     if type(value["tunnel_enabled"]) is not bool:
         raise ValueError("Select a boolean tunnel setting.")
     validate_project(value["project"])
-    credential_path = Path(value["env_file"])
-    if not credential_path.is_absolute():
+    if not Path(value["env_file"]).is_absolute():
         raise ValueError("Select an absolute server-side credential path.")
     return value
 
 
-def compose(directory: Path, value: dict) -> list[str]:
+def compose(
+    directory: Path, value: dict, *, sources: list[str] | None = None
+) -> list[str]:
     command = [
         "docker",
         "compose",
@@ -54,17 +97,17 @@ def compose(directory: Path, value: dict) -> list[str]:
         value["project"],
         "--project-directory",
         str(directory),
-        "--env-file",
-        value["env_file"],
-        "-f",
-        str(directory / "docker-compose.yml"),
-        "-f",
-        str(directory / "compose.ansible.yml"),
     ]
+    if sources is None:
+        return command + ["-f", str(directory / SNAPSHOT)]
+    if sources:
+        command += ["--env-file", value["env_file"]]
+    for source in sources:
+        command += ["-f", str(directory / source)]
     return command
 
 
-def validate_configuration(directory: Path, value: dict) -> None:
+def credential_metadata(value: dict) -> None:
     metadata = Path(value["env_file"]).stat()
     if (
         not stat.S_ISREG(metadata.st_mode)
@@ -72,60 +115,152 @@ def validate_configuration(directory: Path, value: dict) -> None:
         or stat.S_IMODE(metadata.st_mode) != 0o600
     ):
         raise ValueError(
-            "The existing credential file must be owned by this user at 0600."
+            "The existing configuration must be owned by this user at 0600."
         )
-    model = json.loads(
-        execute(compose(directory, value) + ["config", "--format", "json"])
-    )
+
+
+def validate_model(model: dict, value: dict) -> None:
     environment = model["services"]["moomoo-mcp"]["environment"]
-    if environment.get("MOOMOO_TRADING_MODE", "READ_ONLY") != value["expected_mode"]:
-        raise ValueError(
-            "Migration refused: the existing trading mode is not READ_ONLY."
-        )
+    mode = environment.get("MOOMOO_TRADING_MODE", "READ_ONLY").strip().upper()
+    if mode != value["expected_mode"]:
+        raise ValueError("The resolved trading mode differs from the public selection.")
     token = environment.get("MCP_AUTH_TOKEN", "")
-    if (
-        not token
-        or not token.strip()
-        or environment.get("MCP_ALLOW_UNAUTHENTICATED_HTTP")
-    ):
-        raise ValueError("Migration requires ordinary authenticated MCP HTTP.")
+    if not token.strip() or environment.get("MCP_ALLOW_UNAUTHENTICATED_HTTP"):
+        raise ValueError("Deployment requires ordinary authenticated MCP HTTP.")
     if environment.get("MCP_TRANSPORT", "streamable-http") != "streamable-http":
-        raise ValueError("Migration requires Streamable HTTP transport.")
+        raise ValueError("Deployment requires Streamable HTTP transport.")
     if environment.get("OPEND_INTERACTIVE", "0") != "0":
         raise ValueError(
-            "Complete interactive OpenD login before unattended migration."
+            "Complete interactive OpenD login before unattended deployment."
         )
     if value["tunnel_enabled"]:
         tunnel = model["services"]["chatgpt-tunnel"]["environment"]
         if not tunnel.get("CHATGPT_TUNNEL_API_KEY", "").strip():
-            raise ValueError("The selected tunnel needs its existing server-side key.")
-        identifier = tunnel.get("CHATGPT_TUNNEL_ID", "")
-        if not identifier.startswith("tunnel_"):
+            raise ValueError("The selected tunnel needs its server-side runtime key.")
+        if not tunnel.get("CHATGPT_TUNNEL_ID", "").startswith("tunnel_"):
             raise ValueError(
                 "The selected tunnel needs its existing public identifier."
             )
+        restricted = environment.get("MCP_RESTRICTED_AUTH_TOKEN", "")
+        if (
+            not restricted
+            or restricted == token
+            or tunnel.get("MCP_AUTH_TOKEN") != restricted
+        ):
+            raise ValueError(
+                "The tunnel requires its independent restricted MCP identity."
+            )
 
 
-def prepare(directory: Path, value: dict) -> None:
-    """Discover only mount metadata; never read remembered login or journal data."""
-    container = json.loads(
+def validate_configuration(directory: Path, value: dict) -> dict:
+    path = directory / SNAPSHOT
+    metadata = path.stat()
+    if stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_uid != os.getuid():
+        raise ValueError("The frozen configuration must be owned by this user at 0600.")
+    model = json.loads(path.read_text())
+    validate_model(model, value)
+    return model
+
+
+def runtime_service(container: dict) -> dict:
+    """Freeze only Compose-relevant runtime settings, including private environment."""
+    configuration = container["config"]
+    host = container["host"]
+    environment = {}
+    for entry in configuration.get("Env") or []:
+        key, separator, value = entry.partition("=")
+        if separator:
+            environment[key] = value
+    service = {
+        "image": container["image"],
+        "container_name": configuration.get("Hostname", ""),
+        "environment": environment,
+        "user": configuration.get("User", ""),
+        "restart": (host.get("RestartPolicy") or {}).get("Name", "unless-stopped"),
+        "stdin_open": bool(configuration.get("OpenStdin")),
+        "tty": bool(configuration.get("Tty")),
+        "read_only": bool(host.get("ReadonlyRootfs")),
+    }
+    for source, target in [("Entrypoint", "entrypoint"), ("Cmd", "command")]:
+        if configuration.get(source) is not None:
+            service[target] = configuration[source]
+    ports = []
+    for target, bindings in (host.get("PortBindings") or {}).items():
+        number, _, protocol = target.partition("/")
+        for binding in bindings or []:
+            ports.append(
+                {
+                    "target": int(number),
+                    "published": binding["HostPort"],
+                    "host_ip": binding["HostIp"],
+                    "protocol": protocol or "tcp",
+                }
+            )
+    if ports:
+        service["ports"] = ports
+    for source, target in [
+        ("CapDrop", "cap_drop"),
+        ("SecurityOpt", "security_opt"),
+        ("Tmpfs", "tmpfs"),
+    ]:
+        if host.get(source):
+            service[target] = host[source]
+    return service
+
+
+def inspect_runtime(identifier: str) -> dict:
+    return json.loads(
         execute(
             [
                 "docker",
                 "inspect",
-                "moomoo-api-mcp",
+                identifier,
                 "--format",
-                '{"mounts":{{json .Mounts}},"labels":{{json .Config.Labels}}}',
+                '{"mounts":{{json .Mounts}},"labels":{{json .Config.Labels}},'
+                '"config":{{json .Config}},"host":{{json .HostConfig}},'
+                '"image":{{json .Image}}}',
             ]
         )
     )
+
+
+def state_mounts(container: dict) -> tuple[list[dict], dict]:
+    mounts = []
+    volumes = {}
+    for mount in container["mounts"]:
+        target = mount.get("Destination")
+        if target not in STATE_TARGETS:
+            raise ValueError("Existing deployment has an unsupported additional mount.")
+        if mount.get("Type") != "volume" or not mount.get("Name"):
+            raise ValueError("Deployment requires existing named state volumes.")
+        alias = STATE_TARGETS[target]
+        volumes[alias] = {"external": True, "name": mount["Name"]}
+        mounts.append({"type": "volume", "source": alias, "target": target})
+    if "opend-state" not in volumes:
+        raise ValueError("Existing OpenD volume was not found; deployment stopped.")
+    return mounts, volumes
+
+
+def prepare(directory: Path, value: dict) -> None:
+    """Freeze the candidate and actual predecessor without mutating containers."""
+    if (directory / SNAPSHOT).exists():
+        raise ValueError(
+            "A prepared release is immutable; select a fresh release directory."
+        )
+    credential_metadata(value)
+    container = inspect_runtime("moomoo-api-mcp")
     labels = container.get("labels") or {}
     if (
         labels.get("com.docker.compose.project") != value["project"]
         or labels.get("com.docker.compose.service") != "moomoo-mcp"
     ):
         raise ValueError("Existing container does not belong to the selected project.")
-    tunnel_containers = execute(
+    mounts, volumes = state_mounts(container)
+    previous = runtime_service(container)
+    previous["container_name"] = "moomoo-api-mcp"
+    previous["volumes"] = mounts.copy()
+    predecessor = {"services": {"moomoo-mcp": previous}, "volumes": dict(volumes)}
+    tunnel_ids = execute(
         [
             "docker",
             "ps",
@@ -135,34 +270,67 @@ def prepare(directory: Path, value: dict) -> None:
             "--filter",
             "label=com.docker.compose.service=chatgpt-tunnel",
         ]
-    ).strip()
-    if tunnel_containers and not value["tunnel_enabled"]:
-        raise ValueError("Select the existing tunnel before migrating this deployment.")
-    mounts = []
-    volumes = {}
-    for mount in container["mounts"]:
-        target = mount.get("Destination")
-        if target not in STATE_TARGETS:
-            raise ValueError("Existing deployment has an unsupported additional mount.")
-        if mount.get("Type") != "volume" or not mount.get("Name"):
-            raise ValueError(
-                "Migration currently requires existing named state volumes."
-            )
-        alias = STATE_TARGETS[target]
-        volumes[alias] = {"external": True, "name": mount["Name"]}
-        mounts.append({"type": "volume", "source": alias, "target": target})
-    if "opend-state" not in volumes:
-        raise ValueError("Existing OpenD volume was not found; migration stopped.")
+    ).split()
+    if len(tunnel_ids) > 1:
+        raise ValueError("More than one existing tunnel container was found.")
+    if tunnel_ids:
+        old_tunnel = inspect_runtime(tunnel_ids[0])
+        predecessor["services"]["chatgpt-tunnel"] = runtime_service(old_tunnel)
+        predecessor["services"]["chatgpt-tunnel"].pop("container_name", None)
+    private_json(directory / "previous-compose.json", escape_runtime(predecessor))
+    base = json.loads(
+        execute(
+            compose(directory, value, sources=["docker-compose.yml"])
+            + ["config", "--format", "json"]
+        )
+    )
+    environment = base["services"]["moomoo-mcp"]["environment"]
+    mode = environment.get("MOOMOO_TRADING_MODE", "READ_ONLY").strip().upper()
+    selected = set()
+    if mode == "SIMULATE" or environment.get("MOOMOO_SIMULATED_ACC_IDS", "").strip():
+        selected.add("paper-state")
+    if environment.get("MOOMOO_JOURNAL_PATH"):
+        selected.add("paper-state")
+    if mode == "REAL":
+        selected.add("real-state")
+    if environment.get("MOOMOO_REAL_JOURNAL_PATH"):
+        selected.add("real-state")
+    if (
+        environment.get("MOOMOO_TRADING_CONTROLS_PATH")
+        or environment.get("MOOMOO_MAX_DAILY_NOTIONAL_BY_CURRENCY") is not None
+        or environment.get("MOOMOO_REQUIRE_TRADE_APPROVAL", "0") == "1"
+        or environment.get("MOOMOO_OPERATOR_AUTH_TOKEN")
+    ):
+        selected.add("controls-state")
+    required = set(volumes) | selected
+    for target, alias in STATE_TARGETS.items():
+        if alias in required and alias not in volumes:
+            volumes[alias] = {"name": value["project"] + "_" + STATE_SUFFIXES[alias]}
+            mounts.append({"type": "volume", "source": alias, "target": target})
     service = {
-        "image": value["image"],
         "volumes": mounts,
         "environment": {
             "MCP_ALLOW_CHATGPT_TUNNEL_HOST": "1" if value["tunnel_enabled"] else ""
         },
     }
-    services = {"moomoo-mcp": service}
+    sources = ["docker-compose.yml"]
+    for alias, overlay in [
+        ("paper-state", "docker-compose.paper.yml"),
+        ("real-state", "docker-compose.real.yml"),
+        ("controls-state", "docker-compose.controls.yml"),
+    ]:
+        if alias in selected:
+            sources.append(overlay)
+    text = (
+        "services:\n  moomoo-mcp:\n    build: !reset null\n    image: "
+        + json.dumps(value["image"])
+        + "\n"
+    )
+    # Override rather than merge target mounts, so no duplicate aliases create volumes.
+    text += "    volumes: !override " + json.dumps(service["volumes"]) + "\n"
+    text += "    environment: " + json.dumps(service["environment"]) + "\n"
     if value["tunnel_enabled"]:
-        services["chatgpt-tunnel"] = {
+        tunnel = {
             "image": value["tunnel_image"],
             "platform": "linux/amd64",
             "user": "10002:10002",
@@ -172,29 +340,86 @@ def prepare(directory: Path, value: dict) -> None:
             "restart": "unless-stopped",
             "stop_grace_period": "20s",
             "environment": {
-                name: "${" + name + ":-}"
-                for name in [
-                    "MCP_AUTH_TOKEN",
-                    "CHATGPT_TUNNEL_API_KEY",
-                    "CHATGPT_TUNNEL_ID",
-                ]
+                "MCP_AUTH_TOKEN": "${MCP_RESTRICTED_AUTH_TOKEN:-}",
+                "CHATGPT_TUNNEL_API_KEY": "${CHATGPT_TUNNEL_API_KEY:-}",
+                "CHATGPT_TUNNEL_ID": "${CHATGPT_TUNNEL_ID:-}",
             },
             "tmpfs": [
                 "/run/moomoo-chatgpt-tunnel:uid=10002,gid=10002,mode=0700,size=16m,noexec,nosuid,nodev"
             ],
         }
-    # JSON is valid YAML. Reset build in a second YAML document is unsupported,
-    # so remove the base build through an explicit YAML override first.
-    text = "services:\n  moomoo-mcp:\n    build: !reset null\n"
-    text += "    image: " + json.dumps(service.pop("image")) + "\n"
-    for key, item in service.items():
-        text += "    " + key + ": " + json.dumps(item) + "\n"
-    if value["tunnel_enabled"]:
-        text += "  chatgpt-tunnel: " + json.dumps(services["chatgpt-tunnel"]) + "\n"
+        text += "  chatgpt-tunnel: " + json.dumps(tunnel) + "\n"
     text += "volumes: " + json.dumps(volumes) + "\n"
     (directory / "compose.ansible.yml").write_text(text)
+    model = json.loads(
+        execute(
+            compose(directory, value, sources=sources + ["compose.ansible.yml"])
+            + ["config", "--format", "json"]
+        )
+    )
+    validate_model(model, value)
+    private_json(directory / SNAPSHOT, model)
     (directory / "state-volumes.json").write_text(json.dumps(volumes) + "\n")
-    validate_configuration(directory, value)
+
+
+def preflight(directory: Path, value: dict) -> None:
+    model = validate_configuration(directory, value)
+    environment = decoded_environment(model)
+    execute(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "--network",
+            "none",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev",
+            "--env",
+            "HOME=/tmp",
+            "--entrypoint",
+            "python",
+            value["image"],
+            "-m",
+            "moomoo_mcp.settings",
+            "--validate",
+        ],
+        stdin=json.dumps(environment),
+    )
+    arguments = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev",
+        "--env",
+        "HOME=/tmp",
+        "--entrypoint",
+        "python",
+    ]
+    for mount in model["services"]["moomoo-mcp"].get("volumes", []):
+        if (
+            mount.get("target") in STATE_TARGETS
+            and mount.get("target") != "/home/opend/.com.moomoo.OpenD"
+        ):
+            volume = model["volumes"][mount["source"]]["name"]
+            arguments += [
+                "--mount",
+                "type=volume,source="
+                + volume
+                + ",target="
+                + mount["target"]
+                + ",readonly",
+            ]
+    execute(
+        arguments + [value["image"], "-m", "moomoo_mcp.settings", "--validate-storage"],
+        stdin=json.dumps(environment),
+    )
 
 
 def verify(directory: Path, value: dict) -> None:
@@ -207,28 +432,30 @@ def verify(directory: Path, value: dict) -> None:
             "python",
             "-c",
             (directory / "scripts/deployment_probe.py").read_text(),
+            "application",
+            value["expected_mode"],
         ]
     )
-    public = execute(
-        [
-            "docker",
-            "inspect",
-            "moomoo-api-mcp",
-            "--format",
-            '{"user":{{json .Config.User}},"ports":{{json .HostConfig.PortBindings}},'
-            '"mounts":{{json .Mounts}},"image":{{json .Image}}}',
-        ]
+    runtime = json.loads(
+        execute(
+            [
+                "docker",
+                "inspect",
+                "moomoo-api-mcp",
+                "--format",
+                '{"user":{{json .Config.User}},'
+                '"ports":{{json .HostConfig.PortBindings}},'
+                '"mounts":{{json .Mounts}},"image":{{json .Image}}}',
+            ]
+        )
     )
-    runtime = json.loads(public)
     identity = execute(
         ["docker", "image", "inspect", value["image"], "--format", "{{.Id}}"]
     )
     if runtime["user"] not in ["opend", "10001", "10001:10001"]:
         raise ValueError("Runtime must use the existing non-root OpenD identity.")
     if runtime["image"] != identity.strip():
-        raise ValueError(
-            "Runtime does not use the selected immutable application image."
-        )
+        raise ValueError("Runtime does not use the selected immutable image.")
     if runtime["ports"] != {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8000"}]}:
         raise ValueError("MCP must remain host-loopback-only with OpenD unpublished.")
     expected = json.loads((directory / "state-volumes.json").read_text())
@@ -238,71 +465,103 @@ def verify(directory: Path, value: dict) -> None:
         if mount.get("Destination") in STATE_TARGETS
     }
     if actual != {name: volume["name"] for name, volume in expected.items()}:
-        raise ValueError("Runtime did not preserve the existing state volumes.")
-    print("Authenticated MCP initialize, tools and READ_ONLY mode verified.")
+        raise ValueError("Runtime did not preserve the selected state volumes.")
+    print("Authenticated MCP and " + value["expected_mode"] + " mode verified.")
+
+
+def operate(directory: Path, value: dict, mode: str, arguments: list[str]) -> None:
+    if mode == "prepare":
+        prepare(directory, value)
+    elif mode == "validate":
+        validate_configuration(directory, value)
+    elif mode == "preflight":
+        preflight(directory, value)
+    elif mode == "compose":
+        if any(
+            item in {"up", "start", "restart", "run", "create"} for item in arguments
+        ):
+            preflight(directory, value)
+        if "--volumes" in arguments or "-v" in arguments:
+            raise ValueError("Runtime operations must preserve persistent volumes.")
+        execute(compose(directory, value) + arguments)
+    elif mode == "restore":
+        execute(
+            compose(directory, value, sources=[])
+            + [
+                "-f",
+                str(directory / "previous-compose.json"),
+                "up",
+                "-d",
+                "--no-build",
+                "--remove-orphans",
+            ]
+        )
+    elif mode == "verify":
+        verify(directory, value)
+    elif mode == "gateway":
+        print(
+            execute(
+                compose(directory, value)
+                + [
+                    "exec",
+                    "-T",
+                    "moomoo-mcp",
+                    "python",
+                    "-c",
+                    (directory / "scripts/deployment_probe.py").read_text(),
+                    "gateway",
+                    value["expected_mode"],
+                ]
+            ).strip()
+        )
+    else:
+        if not value["tunnel_enabled"]:
+            raise ValueError("Tunnel is not selected.")
+        print(
+            execute(
+                compose(directory, value)
+                + [
+                    "exec",
+                    "-T",
+                    "chatgpt-tunnel",
+                    "python",
+                    "-c",
+                    "import sys; sys.path.insert(0, '/opt/tunnel'); "
+                    "from runtime import probe; "
+                    "raise SystemExit(0 if probe('healthz') "
+                    "and probe('readyz') else 1)",
+                ]
+            ).strip()
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "mode",
-        choices=["prepare", "validate", "compose", "verify", "gateway", "tunnel"],
+        choices=[
+            "prepare",
+            "validate",
+            "preflight",
+            "compose",
+            "restore",
+            "verify",
+            "gateway",
+            "tunnel",
+        ],
     )
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     directory = Path(__file__).resolve().parents[1]
+    if ROOT_ENV not in os.environ and directory.parent.name == "releases":
+        os.environ[ROOT_ENV] = str(directory.parent.parent)
     try:
         value = settings(directory)
-        if args.mode == "prepare":
-            prepare(directory, value)
-        elif args.mode == "validate":
-            validate_configuration(directory, value)
-        elif args.mode == "compose":
-            if any(
-                item in {"up", "start", "restart", "run", "create"}
-                for item in args.arguments
-            ):
-                validate_configuration(directory, value)
-            execute(compose(directory, value) + args.arguments)
-        elif args.mode == "verify":
-            verify(directory, value)
-        elif args.mode == "gateway":
-            print(
-                execute(
-                    compose(directory, value)
-                    + [
-                        "exec",
-                        "-T",
-                        "moomoo-mcp",
-                        "python",
-                        "-c",
-                        (directory / "scripts/deployment_probe.py").read_text(),
-                        "gateway",
-                    ]
-                ).strip()
-            )
-        else:
-            if not value["tunnel_enabled"]:
-                raise ValueError("Tunnel is not selected.")
-            print(
-                execute(
-                    compose(directory, value)
-                    + [
-                        "exec",
-                        "-T",
-                        "chatgpt-tunnel",
-                        "python",
-                        "-c",
-                        "import sys; sys.path.insert(0, '/opt/tunnel'); "
-                        "from runtime import probe; "
-                        "raise SystemExit(0 if probe('healthz') "
-                        "and probe('readyz') else 1)",
-                    ]
-                ).strip()
-            )
-    except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+        with deployment_lock():
+            operate(directory, value, args.mode, args.arguments)
+    except (ValueError, KeyError, OSError, TypeError, subprocess.SubprocessError):
         print(
-            "Deployment validation failed; credentials and command output suppressed.",
+            "Deployment validation failed; settings and command output suppressed.",
             file=sys.stderr,
         )
         return 1

@@ -398,9 +398,11 @@ class TradingPolicy:
             _require_positive_finite(ENV_MAX_ORDER_QTY, "limit", max_order_qty)
 
         # 3. Parse optional currency-qualified notional caps.
-        raw_by_currency = (env.get(ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY) or "").strip()
+        raw_by_currency = (
+            env.get(ENV_MAX_ORDER_NOTIONAL_BY_CURRENCY) or "USD:500"
+        ).strip() or "USD:500"
         max_order_notional: dict[str, float] = {}
-        if raw_by_currency:
+        if raw_by_currency.upper() != "NONE":
             max_order_notional = _parse_notional_caps(raw_by_currency)
 
         # 4. The REAL account allowlist. Required in REAL mode, ignored otherwise:

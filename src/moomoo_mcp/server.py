@@ -19,6 +19,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from moomoo_mcp.agent_server import AGENT_INSTRUCTIONS, AgentFriendlyMCP
+from moomoo_mcp.client_authorization import ClientGrants, client_grants_context
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
 from moomoo_mcp.services.execution_store import ExecutionStore
@@ -40,23 +41,37 @@ logger = logging.getLogger(__name__)
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Enforces constant-time bearer token authorization on HTTP requests."""
 
-    def __init__(self, app, auth_token: str, operator_token: str = "") -> None:
+    def __init__(
+        self,
+        app,
+        auth_token: str,
+        operator_token: str = "",
+        restricted_auth_token: str = "",
+        restricted_grants: ClientGrants | None = None,
+    ) -> None:
         super().__init__(app)
         self.auth_token = auth_token
         self.operator_token = operator_token
+        self.restricted_auth_token = restricted_auth_token
+        self.restricted_grants = restricted_grants or ClientGrants()
 
     async def dispatch(self, request: Request, call_next) -> Response:
         headers = request.headers.getlist("Authorization")
         auth_header = headers[0] if len(headers) == 1 else ""
         if auth_header.startswith("Bearer ") and auth_header.isascii():
             token = auth_header[7:].strip()
-            expected = (
-                self.operator_token
-                if self.operator_token and request.url.path.startswith("/operator/")
-                else self.auth_token
-            )
+            operator_route = request.url.path.startswith("/operator/")
+            expected = self.operator_token if operator_route else self.auth_token
             if expected and hmac.compare_digest(token, expected):
-                return await call_next(request)
+                with client_grants_context(None):
+                    return await call_next(request)
+            if (
+                not operator_route
+                and self.restricted_auth_token
+                and hmac.compare_digest(token, self.restricted_auth_token)
+            ):
+                with client_grants_context(self.restricted_grants):
+                    return await call_next(request)
 
         return JSONResponse(
             {"detail": "Unauthorized: Invalid or missing bearer token."},
@@ -242,7 +257,10 @@ def get_services() -> AppContext:
 
     with _services_lock:
         if _services is None:
-            _services = _build_services()
+            # Process connections and recovery belong to the deployment, not
+            # whichever restricted request first needed them.
+            with client_grants_context(None):
+                _services = _build_services()
             # Sessions come and go; the connections outlive them and are
             # released when the process is.
             atexit.register(close_services)
@@ -345,6 +363,8 @@ def create_streamable_http_app(
     allow_chatgpt_tunnel_host: bool | None = None,
     operator_auth_token: str = "",
     operator_id: str = "",
+    restricted_auth_token: str = "",
+    restricted_grants: ClientGrants | None = None,
 ):
     """Build the Starlette Streamable HTTP application with optional bearer auth."""
     enabled = (
@@ -365,6 +385,16 @@ def create_streamable_http_app(
     app = mcp.streamable_http_app()
     raw = auth_token if auth_token is not None else os.environ.get("MCP_AUTH_TOKEN", "")
     token = raw.strip()
+    if restricted_auth_token and (
+        not token
+        or restricted_auth_token in {token, operator_auth_token}
+        or not restricted_auth_token.isascii()
+        or not restricted_auth_token.isprintable()
+        or any(character.isspace() for character in restricted_auth_token)
+    ):
+        raise TradingModeConfigError(
+            "Restricted client authentication requires a distinct ASCII credential"
+        )
     if operator_auth_token:
         if (
             not token
@@ -434,9 +464,71 @@ def create_streamable_http_app(
                 methods=["GET", "POST"],
             )
         )
+
+        async def operator_pause(request: Request) -> Response:
+            security_error = await TransportSecurityMiddleware(
+                mcp.settings.transport_security
+            ).validate_request(request, is_post=request.method == "POST")
+            if security_error is not None:
+                return security_error
+            service = get_services().trade_service
+            if service.trading_controls is None:
+                return JSONResponse(
+                    {"detail": "Trading controls are unavailable"}, status_code=503
+                )
+            from moomoo_mcp.tools.offload import run_blocking
+
+            try:
+                environment = request.path_params["trd_env"]
+                if request.method == "GET":
+                    result = await run_blocking(
+                        service.trading_controls.pause_state,
+                        environment,
+                        request.query_params.get("acc_id", "0"),
+                    )
+                else:
+                    import json
+
+                    body = bytearray()
+                    async for chunk in request.stream():
+                        body.extend(chunk)
+                        if len(body) > 8192:
+                            return JSONResponse(
+                                {"detail": "Decision body too large"}, status_code=413
+                            )
+                    payload = json.loads(body)
+                    if (
+                        not isinstance(payload, dict)
+                        or set(payload) - {"paused", "reason", "acc_id"}
+                        or type(payload.get("paused")) is not bool
+                        or not isinstance(payload.get("reason"), str)
+                        or not isinstance(payload.get("acc_id", "0"), str)
+                    ):
+                        raise ValueError("Supply paused, reason, and optional acc_id")
+                    result = await run_blocking(
+                        service.set_execution_paused,
+                        environment,
+                        payload["paused"],
+                        operator_id=operator_id,
+                        reason=payload["reason"],
+                        account=payload.get("acc_id", "0"),
+                    )
+                return JSONResponse(result)
+            except (ValueError, TradingControlError) as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=409)
+
+        app.routes.append(
+            Route(
+                "/operator/execution/{trd_env}", operator_pause, methods=["GET", "POST"]
+            )
+        )
     if token:
         app.add_middleware(
-            BearerAuthMiddleware, auth_token=token, operator_token=operator_auth_token
+            BearerAuthMiddleware,
+            auth_token=token,
+            operator_token=operator_auth_token,
+            restricted_auth_token=restricted_auth_token,
+            restricted_grants=restricted_grants,
         )
     return app
 
@@ -491,6 +583,8 @@ def main():
             allow_chatgpt_tunnel_host=settings.allow_chatgpt_tunnel_host,
             operator_auth_token=settings.operator_auth_token,
             operator_id=settings.operator_id,
+            restricted_auth_token=settings.restricted_auth_token,
+            restricted_grants=settings.restricted_grants,
         )
         uvicorn.run(app, host=host, port=port)
     except BaseException:

@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from moomoo_mcp.client_authorization import check_account_access
 from moomoo_mcp.services.query_contracts import (
     DealView,
     OrderView,
@@ -63,6 +64,7 @@ class QuerySnapshots:
 
     @staticmethod
     def _page(snapshot: _Snapshot, key: str, offset: int, limit: int) -> QueryPage:
+        check_account_access(snapshot.scope["trd_env"], snapshot.scope["acc_id"])
         items = copy.deepcopy(snapshot.items[offset : offset + limit])
         following = offset + len(items)
         return {

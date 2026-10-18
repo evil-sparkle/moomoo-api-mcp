@@ -118,6 +118,7 @@ docs/deploy-*.md
 !docs/deploy-vps.md
 !docs/deploy-ansible.md
 .deploy.env
+.deploy-config*
 .deploy.reexec*
 
 .codex/

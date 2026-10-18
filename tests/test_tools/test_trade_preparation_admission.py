@@ -279,3 +279,22 @@ def test_bound_combo_parameters_copy_nested_leg_identity(preparation):
     original["combo_legs"][0]["qty_ratio"] = 999
     assert bound["combo_legs"][0]["qty_ratio"] == 1
     context.get_acc_list.assert_not_called()
+
+
+def test_preparation_resolves_write_account_before_read_planning(preparation):
+    service, context = preparation
+    context.get_acc_list.return_value = (
+        RET_OK,
+        pd.DataFrame(
+            [
+                {"acc_id": 123, "trd_env": "REAL", "trdmarket_auth": ["US"]},
+                {"acc_id": 456, "trd_env": "REAL", "trdmarket_auth": ["US"]},
+            ]
+        ),
+    )
+    plan = prepare_plan(service)
+    assert requests(plan) == [
+        ("get_market_snapshot", None, 1),
+        ("acctradinginfo_query", 123, 1),
+    ]
+    assert_reads_only(plan)

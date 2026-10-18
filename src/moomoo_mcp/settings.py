@@ -23,6 +23,7 @@ from pathlib import Path
 
 from moomoo import SecurityFirm
 
+from moomoo_mcp.client_authorization import DEFAULT_RESTRICTED_PERMISSIONS, ClientGrants
 from moomoo_mcp.services.trading_market import (
     DEFAULT_TRADING_MARKET,
     TRADING_MARKET_FILTERS,
@@ -90,10 +91,10 @@ class Settings:
     trading_market: str
     # The stored trade credential, already resolved to one of the two forms.
     # Plain text wins when both are set, as the spec requires.
-    trade_password: str | None
-    trade_password_md5: str | None
+    trade_password: str | None = field(repr=False)
+    trade_password_md5: str | None = field(repr=False)
     transport: str
-    auth_token: str
+    auth_token: str = field(repr=False)
     allow_unauthenticated_http: bool
     simulated_account_allowlist: frozenset[int] = frozenset()
     journal_path: str | None = None
@@ -107,6 +108,9 @@ class Settings:
     operator_auth_token: str = field(default="", repr=False)
     operator_id: str = ""
     reporting_currency: str | None = None
+    observe_execution: bool = False
+    restricted_auth_token: str = field(default="", repr=False)
+    restricted_grants: ClientGrants | None = None
 
     @property
     def has_trade_credential(self) -> bool:
@@ -243,7 +247,12 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     lock_wait = 5000
     real_journal_path = None
     create_real_journal = False
-    if policy.mode is not TradingMode.READ_ONLY:
+    observe = (env.get("MOOMOO_OBSERVE_EXECUTION") or "0").strip()
+    if observe not in {"0", "1"}:
+        raise TradingModeConfigError("MOOMOO_OBSERVE_EXECUTION must be 0 or 1")
+    observe_execution = observe == "1"
+    writable = policy.mode is not TradingMode.READ_ONLY
+    if writable or observe_execution:
         raw_ids = (env.get("MOOMOO_SIMULATED_ACC_IDS") or "").strip()
         if raw_ids:
             for item in raw_ids.split(","):
@@ -262,7 +271,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         creation = (env.get("MOOMOO_CREATE_JOURNAL") or "0").strip()
         if creation not in {"0", "1"}:
             raise TradingModeConfigError("MOOMOO_CREATE_JOURNAL must be 0 or 1")
-        create_journal = creation == "1"
+        create_journal = creation == "1" and writable
         raw_wait = (env.get("MOOMOO_JOURNAL_LOCK_WAIT_MS") or "5000").strip()
         if (
             not raw_wait.isascii()
@@ -273,7 +282,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
                 "MOOMOO_JOURNAL_LOCK_WAIT_MS must be between 1 and 60000"
             )
         lock_wait = int(raw_wait)
-        if (
+        if writable and (
             policy.mode is TradingMode.SIMULATE
             or journal_path
             or allowlist
@@ -292,19 +301,23 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
                     "MOOMOO_TRADING_MARKET must be US or NONE for paper execution"
                 )
 
-    if policy.mode is TradingMode.REAL:
+    if policy.mode is TradingMode.REAL or observe_execution:
         real_journal_path = (env.get("MOOMOO_REAL_JOURNAL_PATH") or "").strip() or None
-        if not real_journal_path:
+        if not real_journal_path and policy.mode is TradingMode.REAL:
             raise TradingModeConfigError(
                 "MOOMOO_REAL_JOURNAL_PATH is required for durable REAL execution"
             )
         creation = (env.get("MOOMOO_CREATE_REAL_JOURNAL") or "0").strip()
         if creation not in {"0", "1"}:
             raise TradingModeConfigError("MOOMOO_CREATE_REAL_JOURNAL must be 0 or 1")
-        create_real_journal = creation == "1"
-        if journal_path and (
-            Path(journal_path).resolve().parent
-            == Path(real_journal_path).resolve().parent
+        create_real_journal = creation == "1" and policy.mode is TradingMode.REAL
+        if (
+            journal_path
+            and real_journal_path
+            and (
+                Path(journal_path).resolve().parent
+                == Path(real_journal_path).resolve().parent
+            )
         ):
             raise TradingModeConfigError(
                 "MOOMOO_REAL_JOURNAL_PATH and MOOMOO_JOURNAL_PATH must use "
@@ -331,19 +344,19 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             raise TradingModeConfigError("MOOMOO_OPERATOR_AUTH_TOKEN is invalid")
         if not operator_id or len(operator_id) > 128 or not operator_id.isprintable():
             raise TradingModeConfigError("MOOMOO_OPERATOR_ID is required and bounded")
-    if policy.mode is not TradingMode.READ_ONLY:
+    if writable or observe_execution or operator_token:
         controls_path = (env.get("MOOMOO_TRADING_CONTROLS_PATH") or "").strip() or None
         creation = (env.get("MOOMOO_CREATE_TRADING_CONTROLS") or "0").strip()
         if creation not in {"0", "1"}:
             raise TradingModeConfigError(
                 "MOOMOO_CREATE_TRADING_CONTROLS must be 0 or 1"
             )
-        create_controls = creation == "1"
+        create_controls = creation == "1" and writable
         if (
             policy.require_approval or policy.max_daily_notional or operator_token
         ) and not controls_path:
             raise TradingModeConfigError("MOOMOO_TRADING_CONTROLS_PATH is required")
-        if policy.require_approval and not operator_token:
+        if writable and policy.require_approval and not operator_token:
             raise TradingModeConfigError(
                 "MOOMOO_OPERATOR_AUTH_TOKEN is required for approvals"
             )
@@ -353,6 +366,42 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
                     raise TradingModeConfigError(
                         "Trading controls must use distinct storage"
                     )
+
+    restricted_token = (env.get("MCP_RESTRICTED_AUTH_TOKEN") or "").strip()
+    restricted_grants = None
+    if restricted_token:
+        if (
+            not auth_token
+            or restricted_token in {auth_token, operator_token}
+            or not restricted_token.isascii()
+            or any(not c.isprintable() or c.isspace() for c in restricted_token)
+        ):
+            raise TradingModeConfigError(
+                "MCP_RESTRICTED_AUTH_TOKEN must be valid and distinct from other tokens"
+            )
+        raw_permissions = env.get("MCP_RESTRICTED_PERMISSIONS")
+        permissions = (
+            frozenset(item.strip() for item in raw_permissions.split(","))
+            if raw_permissions is not None
+            else DEFAULT_RESTRICTED_PERMISSIONS
+        )
+        account_scopes = []
+        for name in ("MCP_RESTRICTED_REAL_ACC_IDS", "MCP_RESTRICTED_SIMULATE_ACC_IDS"):
+            raw_scope = env.get(name)
+            if raw_scope is None:
+                account_scopes.append(None)
+                continue
+            parts = [item.strip() for item in raw_scope.split(",")]
+            if any(
+                not p or not p.isascii() or not p.isdecimal() or int(p) <= 0
+                for p in parts
+            ):
+                raise TradingModeConfigError(f"{name} must list positive account IDs")
+            account_scopes.append(frozenset(int(p) for p in parts))
+        try:
+            restricted_grants = ClientGrants(permissions, *account_scopes)
+        except ValueError as exc:
+            raise TradingModeConfigError(str(exc)) from exc
 
     return Settings(
         opend_host=(env.get(ENV_OPEND_HOST) or "").strip() or DEFAULT_HOST,
@@ -377,6 +426,9 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         operator_auth_token=operator_token,
         operator_id=operator_id,
         reporting_currency=_load_reporting_currency(env),
+        observe_execution=observe_execution,
+        restricted_auth_token=restricted_token,
+        restricted_grants=restricted_grants,
     )
 
 
@@ -419,3 +471,93 @@ def check_transport_authentication(settings: Settings) -> None:
     raise TradingModeConfigError(
         f"{ENV_AUTH_TOKEN} is required for the {settings.transport} transport. {detail}"
     )
+
+
+def validate_storage(settings: Settings) -> None:
+    """Probe mounted storage read-only without competing for executor ownership."""
+    import sqlite3
+
+    stores = (
+        (settings.journal_path, settings.create_journal, "SIMULATE"),
+        (settings.real_journal_path, settings.create_real_journal, "REAL"),
+        (settings.controls_path, settings.create_controls, None),
+    )
+    for location, create, environment in stores:
+        if not location:
+            continue
+        path = Path(location)
+        if not path.exists():
+            if create:
+                continue
+            raise TradingModeConfigError("Configured storage requires initialization")
+        try:
+            with sqlite3.connect(
+                path.resolve().as_uri() + "?mode=ro", uri=True
+            ) as conn:
+                if conn.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                    raise TradingModeConfigError("Configured storage integrity failed")
+                if environment:
+                    from moomoo_mcp.services.execution_store import SCHEMA_VERSION
+
+                    if conn.execute("SELECT environment FROM metadata").fetchall() != [
+                        (environment,)
+                    ] or conn.execute("PRAGMA user_version").fetchone()[0] not in {
+                        1,
+                        2,
+                        SCHEMA_VERSION,
+                    }:
+                        raise TradingModeConfigError(
+                            "Configured journal identity is invalid"
+                        )
+                    conn.execute(
+                        "SELECT operation_id, account, state FROM operations LIMIT 0"
+                    )
+                else:
+                    if conn.execute("SELECT version FROM metadata").fetchall() != [
+                        (1,)
+                    ]:
+                        raise TradingModeConfigError(
+                            "Configured controls schema is invalid"
+                        )
+                    conn.execute("SELECT request_id, canonical FROM prepared LIMIT 0")
+                    conn.execute("SELECT environment, account FROM charges LIMIT 0")
+        except sqlite3.Error as exc:
+            raise TradingModeConfigError("Configured storage is unavailable") from exc
+
+
+def main() -> None:
+    """Offline deployment preflight; configuration stays on stdin, never in argv."""
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(description="Validate MCP configuration offline")
+    parser.add_argument("--validate", action="store_true")
+    parser.add_argument("--validate-storage", action="store_true")
+    arguments = parser.parse_args()
+    if not arguments.validate and not arguments.validate_storage:
+        parser.error("select --validate or --validate-storage")
+    try:
+        raw = sys.stdin.read(1048577)
+        if len(raw) > 1048576:
+            raise ValueError("Configuration exceeds the allowed size")
+        values = json.loads(raw)
+        if not isinstance(values, dict) or any(
+            not isinstance(key, str) or not isinstance(value, (str, type(None)))
+            for key, value in values.items()
+        ):
+            raise ValueError("Supply a JSON environment mapping")
+        settings = load_settings(
+            {key: value for key, value in values.items() if value is not None}
+        )
+        check_transport_authentication(settings)
+        if arguments.validate_storage:
+            validate_storage(settings)
+    except (ValueError, TradingModeConfigError) as exc:
+        print(f"Configuration validation failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    print("Configuration validation passed")
+
+
+if __name__ == "__main__":
+    main()

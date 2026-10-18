@@ -202,9 +202,19 @@ def validate_timeout(timeout: float) -> None:
 def validate_trading_mode(health: Any) -> str:
     """Require server-enforced read-only or paper-only access before forwarding."""
     mode = health.get("trading_mode") if isinstance(health, dict) else None
+    if mode == "REAL":
+        authorization = health.get("client_authorization")
+        if isinstance(authorization, dict) and authorization.get("restricted") is True:
+            permissions = authorization.get("permissions")
+            allowed = {"market_read", "real_read", "simulate_read", "simulate_write"}
+            if isinstance(permissions, list) and all(
+                isinstance(value, str) and value in allowed for value in permissions
+            ):
+                return mode
     if not isinstance(mode, str) or mode not in {"READ_ONLY", "SIMULATE"}:
         raise PreflightError(
-            "check_health did not prove READ_ONLY or SIMULATE operation."
+            "check_health did not prove READ_ONLY or SIMULATE operation, "
+            "or a restricted REAL client without live-write and gateway authority."
         )
     return mode
 

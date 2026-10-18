@@ -16,7 +16,7 @@ services:
     stop_grace_period: 20s
     environment:
       # Startup validation requires these; empty values still permit disablement.
-      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      MCP_AUTH_TOKEN: ${MCP_RESTRICTED_AUTH_TOKEN:-${MCP_AUTH_TOKEN:-}}
       CHATGPT_TUNNEL_API_KEY: ${CHATGPT_TUNNEL_API_KEY:-}
       CHATGPT_TUNNEL_ID: ${CHATGPT_TUNNEL_ID:-}
     tmpfs:

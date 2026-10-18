@@ -24,10 +24,13 @@ def test_paper_volume_survives_mode_changes_without_moving_gateway(mode):
     assert service["environment"]["MOOMOO_SIMULATED_ACC_IDS"] == "123"
 
 
-def test_default_read_only_has_no_execution_volume():
+def test_default_read_only_retains_execution_volumes_without_enabling_writes():
     rendered = render_compose("docker-compose.yml")
     service = rendered["services"][SERVICE]
     assert service["environment"]["MOOMOO_TRADING_MODE"] == "READ_ONLY"
-    assert all(
-        item["target"] != "/var/lib/moomoo-mcp/data" for item in service["volumes"]
-    )
+    targets = {item["target"] for item in service["volumes"]}
+    assert {
+        "/var/lib/moomoo-mcp/data",
+        "/app/real-execution-data",
+        "/var/lib/moomoo/trading-controls",
+    } <= targets

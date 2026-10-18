@@ -5,17 +5,18 @@ repository owns the playbook and role, CI publishes a release record, and a
 separate deployment workflow rolls out its immutable image digests. Host
 provisioning remains outside this release workflow.
 
-The first migration supports an existing **READ_ONLY** stack on Linux AMD64
-with the application user's rootless Docker daemon and named OpenD/state
-volumes. It refuses REAL/SIMULATE configuration, bind-mounted state, missing
-OpenD state and a project mismatch before replacing containers. Keep using the
-legacy bootstrap method for those configurations until their deployment
-migration is separately implemented and verified.
+Native deployment supports **READ_ONLY**, **SIMULATE** and **REAL** on Linux
+AMD64 with the application user's rootless Docker daemon and named OpenD/state
+volumes. Set the public expected mode explicitly and match it in the protected
+server configuration. Paper, REAL and controls use the same overlays and stable
+volume names as production. Existing state mounts remain attached when trading
+is disabled so inspection and recovery can remain available.
 
-The first native version preserves an existing enabled tunnel. It refuses an
-implicit disable selection when that tunnel still exists. Make any required
-legacy tunnel disablement before cutover; native tunnel disablement is outside
-this first migration's scope.
+The tunnel is an independent selection. Selecting `false` removes a previous
+tunnel during the verified rollout; selecting `true` requires a separate
+`MCP_RESTRICTED_AUTH_TOKEN` and the server-side tunnel settings. The primary MCP
+credential is never forwarded to the tunnel. Client permissions still remain
+bounded by the deployment's trading policy.
 
 ## What a release does
 
@@ -32,22 +33,27 @@ this first migration's scope.
    uses a shared deployment lock, exports an allowlist of public files from the
    exact source commit and installs a separate release directory. It never
    copies a workstation credential file or writes the server's `.env`.
-5. The host helper checks credential **file metadata** and lets Compose consume
-   the existing file. Resolved settings stay in memory; raw command failures,
-   response bodies and credentials are suppressed. This resolution runs on the
-   server, not in GitHub Actions.
-6. It verifies the existing container's project and mount metadata, and pins
-   those same external volume names into the new Compose overlay. It pulls the
-   selected digests before recreating containers. It never deletes volumes or
-   initializes a new journal.
-7. Checks inside MCP verify rejection of unauthenticated requests, authenticated
-   initialization, required read-only tools and READ_ONLY mode. Runtime checks
-   require the selected image, non-root OpenD identity, unchanged state volumes
-   and host `127.0.0.1:8000` with no published OpenD port.
+5. The host helper checks configuration file ownership and mode 0600, then
+   lets Compose resolve it on the server. Each rollout saves the complete
+   resolved model as `resolved-compose.json` at mode 0600. This private file
+   contains credentials: keep it on the server and exclude it from support
+   bundles, Git, logs and artifacts. Commands suppress raw errors and settings.
+6. Existing container project and mount metadata determine the persistent
+   volume names. New paper, REAL or controls storage is added only when selected;
+   existing volumes remain attached across mode changes. The selected image
+   validates the complete application configuration without networking, then
+   checks journal/control schemas on read-only mounts before replacing any
+   container. Missing journals require their explicit creation flags; deployment
+   never silently initializes or resets them.
+7. Inside MCP, checks verify unauthenticated rejection, authenticated
+   initialization, required inspection tools and the exact selected trading
+   mode. Runtime checks require the selected image, non-root OpenD identity,
+   selected state volumes and host `127.0.0.1:8000` with no published OpenD port.
 8. A failed start, MCP check or selected tunnel check restores the previous
-   release. On the first migration, it uses the untouched legacy Compose
-   wrapper. The workflow still fails after rollback so the failed release is
-   visible. Recovery preserves state; it does not undo a journal schema upgrade.
+   release's frozen configuration. First migration freezes the actual running
+   container configuration and any existing tunnel before changes. Rollback
+   therefore does not depend on an edited `.env`. The workflow still fails
+   after rollback. State is preserved; rollback does not undo a schema upgrade.
 9. OpenD readiness is reported separately: quote login and quote/trade probes
    must succeed for the ready result. A broker login/availability problem keeps
    a verified MCP application running with a readiness warning.
@@ -71,7 +77,8 @@ Configure these public variables with independently verified metadata:
 | `VPS_HOST_KEY` | The pinned public known-hosts entry for the exact host and port |
 | `MOOMOO_COMPOSE_PROJECT` | The running Moomoo container's existing Compose project |
 | `MOOMOO_ENV_FILE` | Absolute path to its existing protected configuration file |
-| `MOOMOO_TUNNEL_ENABLED` | `true` when preserving an existing tunnel; otherwise `false` |
+| `MOOMOO_EXPECTED_MODE` | Exact `READ_ONLY`, `SIMULATE` or `REAL`; defaults to `READ_ONLY` |
+| `MOOMOO_TUNNEL_ENABLED` | Explicit `true` to enable/preserve the tunnel; `false` to disable it |
 
 The environment also needs the operator-installed deployment secret
 `VPS_SSH_KEY`. The workflow loads it into a temporary SSH agent and removes
@@ -92,8 +99,8 @@ validation of the implementation.
 ## First cutover and normal deployment
 
 Complete the [initial host/OpenD setup](deploy-vps.md) first. Confirm the
-current application is READ_ONLY, its configuration file is owned by the
-application user at mode 0600, and the running container uses the intended
+selected expected mode matches the protected configuration, its file is owned
+by the application user at mode 0600, and the running container uses the intended
 Compose project and named state volumes. Perform account login and device
 verification directly as the operator.
 
@@ -141,6 +148,7 @@ on the server. Example settings are:
   "moomoo_mcp_tunnel_image": "<registry>/moomoo-api-mcp@sha256:<64-character-tunnel-digest>",
   "moomoo_mcp_project": "<existing-compose-project>",
   "moomoo_mcp_env_file": "/home/<application-user>/moomoo/.env",
+  "moomoo_mcp_expected_mode": "READ_ONLY",
   "moomoo_mcp_tunnel_enabled": false
 }
 ```
@@ -153,23 +161,34 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook deploy.yml --limit vultr \
 ```
 
 Use settings from a verified successful CI manifest. The selected source commit
-must exist in the controller checkout. Never run the legacy deployment script
-concurrently with native deployment or use it to upgrade an already migrated
-server. The Ansible lock serializes native callers; the legacy script predates
-that lock. A leftover lock after an interrupted controller requires operator
-inspection before removal.
+must exist in the controller checkout. Each deployment gets a fresh release
+identity, including configuration-only changes. Prior private snapshots remain
+unchanged for rollback.
+
+Native releases, direct native lifecycle commands, the current legacy helper,
+and systemd lifecycle commands share
+`~/.local/share/moomoo-api-mcp/.deployment-lock`. Ansible holds it for the whole
+transaction and delegates ownership to its subprocesses with a private token;
+other callers fail before changing runtime state. Set `MOOMOO_DEPLOY_LOCK_ROOT`
+consistently if using a custom deployment root. Older legacy versions without
+this helper must not run concurrently. An interrupted controller can leave a
+lock: inspect the deployment and confirm no owner remains before removing it.
 
 ## Restarts and verification limits
 
 After cutover, use `systemctl --user restart moomoo-ansible.service` to restart
-the selected release. Persistent OpenD and journal volumes survive recreation.
-The legacy checkout and its private configuration remain available for first
-cutover recovery; automatic upgrades never modify its Git checkout.
+the selected release. Start/restart uses its frozen configuration and repeats
+offline application/storage validation under the shared lock. Editing `.env`
+does not alter a running or saved release; deploy again to validate and apply
+configuration changes. Persistent OpenD and journal volumes survive recreation.
+Automatic upgrades never modify the legacy checkout.
 
 Local tests run the actual playbook against disposable files and Docker command
 stubs, and separately render the production definition through real Compose.
 MCP probes run against a synthetic local HTTP service. These checks establish
-deployment/rollback behavior, not a logged-in broker or a live VPS rollout.
+deployment/rollback behavior, mode and tunnel transitions, private snapshots,
+and exclusion of concurrent lifecycle changes. They do not establish a
+logged-in broker or a live VPS rollout.
 
 For a selected tunnel, local liveness/readiness verifies only the client on
 the server. A hosted ChatGPT tool call is still required to prove forwarding.

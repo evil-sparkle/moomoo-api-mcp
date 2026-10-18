@@ -4,9 +4,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # The saved deployment is authoritative, including after a new deployment.
 unset ECR_REGISTRY IMAGE_TAG COMPOSE_PROJECT_NAME
+unset MOOMOO_APP_IMAGE
+# A verified snapshot contains the exact private effective configuration. Normal
+# lifecycle actions keep using it when the operator edits .env for the next release.
+snapshot="${MOOMOO_COMPOSE_CONFIG:-}"
+if [ -z "$snapshot" ] && [ -f .deploy-config.json ]; then
+  snapshot=.deploy-config.json
+  for argument in "$@"; do
+    if [ "$argument" = config ]; then snapshot=""; fi
+  done
+fi
+if [ -n "$snapshot" ]; then
+  exec docker --context rootless compose -f "$snapshot" "$@"
+fi
 # chatgpt-selection-env-v2: CI-managed immutable images; credentials stay in .env.
 optional=()
-paper_selected=false
 resolve_storage=true
 # Stopping/removing a selected tunnel must work without validating the current
 # trading settings. No service definitions are added by the storage overlays.
@@ -25,9 +37,6 @@ if [ "$resolve_storage" = true ]; then
     mapfile -t storage_overlays <<< "$execution_files"
     for overlay in "${storage_overlays[@]}"; do
       optional+=(-f "$overlay")
-      if [ "$overlay" = docker-compose.paper.yml ]; then
-        paper_selected=true
-      fi
     done
   fi
 fi
@@ -38,13 +47,9 @@ if [ -f .chatgpt-deploy.json ]; then
   fi
   mapfile -t selected <<< "$values"
   export CHATGPT_TUNNEL_IMAGE="${selected[0]}"
-  # Preserve the paper volume across READ_ONLY/SIMULATE mode changes. READ_ONLY
-  # never opens the journal; SIMULATE still requires explicit account admission
-  # and first-time journal initialization through the paper overlay settings.
+  # Exposure and execution are independent: base storage remains mounted while
+  # execution_overlays selects journal settings only for configured capabilities.
   optional=(-p "${selected[1]}" "${optional[@]}")
-  if [ "$paper_selected" = false ]; then
-    optional+=(-f docker-compose.paper.yml)
-  fi
   optional+=(-f docker-compose.chatgpt.yml)
   for argument in "$@"; do
   case "$argument" in

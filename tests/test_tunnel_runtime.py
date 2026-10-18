@@ -35,6 +35,29 @@ def test_shared_token_normalization_matches_mcp_settings(monkeypatch):
 
 
 @pytest.mark.usefixtures("authorization")
+def test_real_backend_accepts_proven_restricted_credential(monkeypatch):
+    client = Mock()
+    client.call_tool.return_value = {
+        "trading_mode": "REAL",
+        "client_authorization": {
+            "restricted": True,
+            "permissions": [
+                "market_read",
+                "real_read",
+                "simulate_read",
+                "simulate_write",
+            ],
+        },
+    }
+    monkeypatch.setattr(runtime, "McpClient", Mock(return_value=client))
+    assert runtime.gate(threading.Event())
+    client.call_tool.return_value["client_authorization"]["permissions"].append(
+        "real_write"
+    )
+    assert not runtime.gate(threading.Event())
+
+
+@pytest.mark.usefixtures("authorization")
 @pytest.mark.parametrize("mode", ["REAL", "UNKNOWN", "simulate", "", None, [], {}])
 def test_fatal_mode_never_spawns_client(monkeypatch, mode):
     client = Mock()

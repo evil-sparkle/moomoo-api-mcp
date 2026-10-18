@@ -5,6 +5,10 @@ from typing import Any
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
+from moomoo_mcp.client_authorization import (
+    client_authorization_status,
+    visible_journal_health,
+)
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.tools.annotations import READ_ONLY_TOOL
 from moomoo_mcp.tools.offload import await_futures
@@ -66,6 +70,13 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
     status["real_execution_journal"] = trade_service.collect_real_journal_health(
         real_journal_future
     )
+    status["execution_journal"] = visible_journal_health(
+        status["execution_journal"], "SIMULATE"
+    )
+    status["real_execution_journal"] = visible_journal_health(
+        status["real_execution_journal"], "REAL"
+    )
+    status["client_authorization"] = client_authorization_status()
 
     await ctx.info(f"Health check status: {status.get('status')}")
 

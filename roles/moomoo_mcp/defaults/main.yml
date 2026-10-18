@@ -5,7 +5,8 @@ moomoo_mcp_revision: ""
 moomoo_mcp_source_dir: ""
 moomoo_mcp_home: "/home/{{ ansible_user }}"
 moomoo_mcp_root: "{{ moomoo_mcp_home }}/.local/share/moomoo-api-mcp"
-moomoo_mcp_release: "{{ moomoo_mcp_root }}/releases/{{ moomoo_mcp_revision }}-{{ moomoo_mcp_image.split('@sha256:')[-1] }}-{{ moomoo_mcp_tunnel_image.split('@sha256:')[-1] }}-{{ moomoo_mcp_tunnel_enabled | ternary('tunnel', 'local') }}"
+# Each deployment freezes its resolved private settings independently of older releases.
+moomoo_mcp_release: "{{ moomoo_mcp_root }}/releases/{{ moomoo_mcp_revision }}-{{ moomoo_mcp_release_nonce.stdout }}"
 # Set the existing project explicitly; changing it can select different state.
 moomoo_mcp_project: ""
 moomoo_mcp_env_file: "{{ moomoo_mcp_home }}/moomoo/.env"

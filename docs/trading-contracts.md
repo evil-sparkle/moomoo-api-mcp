@@ -320,3 +320,63 @@ quotas, cursor bounds, concurrent callbacks and durable control decisions.
 They do not prove live broker behavior or complete the separate paper-provider
 validation change. Verify deployed readiness and authorized integration
 behavior independently before claiming live trading acceptance.
+# Execution lifecycle and client permissions
+
+`MOOMOO_TRADING_MODE` caps deployment writes. `REAL` permits both live and
+configured paper execution; paper retains its own allowlist, journal and verified
+US stock/ETF NORMAL/DAY/RTH scope. The same account eligibility now governs
+capability discovery, approval preparation and mutation execution.
+
+An optional `MCP_RESTRICTED_AUTH_TOKEN` provides a second client credential. It
+must differ from the ordinary MCP and operator tokens. Configure its grants with
+`MCP_RESTRICTED_PERMISSIONS`, a comma-separated subset of `market_read`,
+`real_read`, `simulate_read`, `simulate_write`, `real_write`, and `gateway_control`.
+The default includes market/account reads and paper writes; it excludes live
+writes and gateway control. `MCP_RESTRICTED_REAL_ACC_IDS` and
+`MCP_RESTRICTED_SIMULATE_ACC_IDS` optionally restrict readable/writable accounts
+to exact decimal IDs. Omitted account scopes retain the permissions' account
+scope; explicitly malformed or empty scopes fail startup. Client grants always
+intersect with the deployment policy, allowlists, executor support and readiness.
+
+The ChatGPT tunnel selects the restricted token when configured. A REAL backend
+requires this distinct credential without `real_write` or `gateway_control`.
+Ordinary MCP clients retain their existing deployment authority. Restricted
+clients cannot use operator endpoints, inspect another account through cached
+pagination, or recover stored execution evidence outside their readable scope.
+
+## Pause new risk
+
+Configure the separate operator credential, operator ID and initialized controls
+storage described above. The authenticated operator endpoint is
+`/operator/execution/{trd_env}`, where `trd_env` is `REAL` or `SIMULATE`.
+
+- `GET` returns the persistent pause state; optional `?acc_id=...` includes that
+  account's pause and the environment-wide pause.
+- `POST` accepts `{"paused": true, "reason": "operator review"}`. An optional
+  exact string `acc_id` scopes the decision to an account; omitted/`"0"` scopes
+  it to the environment. Resume with `paused: false` and an attributed reason.
+
+Pauses survive restarts and block exposure-adding dispatch. Environment and
+account pauses combine: resuming one account does not override an environment
+pause. A successful pause decision serializes with both execution dispatch paths.
+Cancellations and broker-query recovery remain available subject to their normal
+authorization, approval and journal safety checks. An unresolved outcome still
+requires reconciliation; pausing does not bypass that gate. Gateway `lock_trade`
+remains separate from this persistent operator pause.
+
+## Observe after disabling writes
+
+Ordinary READ_ONLY requires no journals. Set `MOOMOO_OBSERVE_EXECUTION=1` and
+explicit existing `MOOMOO_JOURNAL_PATH` and/or `MOOMOO_REAL_JOURNAL_PATH` to retain
+inspection and query-only recovery outside writable modes. Observation never
+initializes journals or enables broker mutations. Only one process owns each
+journal. Existing configured controls remain inspectable through the trusted
+operator channel. Keep the same persistent storage across mode changes.
+
+## Common limit defaults
+
+Source and Compose launches default `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` to
+`USD:500` when omitted or blank. Choose explicit currency-qualified caps for the
+intended order sizes, or explicitly set `NONE` to disable this cap. This changes
+the earlier source-launch default, which had no notional cap. Instrument support
+and all other policy checks still apply.

@@ -164,6 +164,44 @@ def run_gateway_readiness(url, token=TOKEN, timeout=0):
 class ResolveTokenTest(unittest.TestCase):
     """The token is Compose's resolved value, or a configuration error."""
 
+    def test_private_snapshot_preserves_escaped_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / ".deploy-config.json"
+            effective = model("synthetic$$token")
+            deploy_verify.save_private_model(path, effective)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(path.read_text()), effective)
+
+    def test_offline_validator_hides_credentials_and_mounts_storage_read_only(self):
+        effective = model("synthetic$$token")
+        service = effective["services"]["moomoo-mcp"]
+        service["image"] = "synthetic-image@sha256:" + "a" * 64
+        service["volumes"] = [
+            {"type": "volume", "source": "paper", "target": "/var/lib/moomoo-mcp/data"}
+        ]
+        effective["volumes"] = {"paper": {"name": "original-paper-state"}}
+        with mock.patch.object(deploy_verify.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0)
+            deploy_verify.validate_application(effective)
+        arguments = run.call_args.args[0]
+        self.assertEqual(arguments[arguments.index("--network") + 1], "none")
+        self.assertIn(
+            "type=volume,source=original-paper-state,target=/var/lib/moomoo-mcp/data,readonly",
+            arguments,
+        )
+        self.assertNotIn("synthetic$token", " ".join(arguments))
+        self.assertEqual(
+            json.loads(run.call_args.kwargs["input"])["MCP_AUTH_TOKEN"],
+            "synthetic$token",
+        )
+        with mock.patch.object(deploy_verify.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [], 1, stderr=b"synthetic-secret"
+            )
+            with self.assertRaises(deploy_verify.ConfigError) as failure:
+                deploy_verify.validate_application(effective)
+        self.assertNotIn("synthetic-secret", str(failure.exception))
+
     def test_nonempty_token_is_used_exactly_as_resolved(self):
         # Quotes, inner and surrounding spaces, '=' and '$' are all Compose's
         # business. Whatever it resolved is what gets sent.

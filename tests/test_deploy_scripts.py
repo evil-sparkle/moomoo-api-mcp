@@ -51,6 +51,7 @@ class DeployScriptsTest(unittest.TestCase):
             "deploy_verify.py",
             "tunnel_deployment.py",
             "deployment_manifest.py",
+            "deployment_lock.py",
         ):
             shutil.copy2(ROOT / "scripts" / name, self.repo / "scripts" / name)
         for name in (
@@ -132,18 +133,41 @@ if name == "aws":
         else:
             print("None")
     else:
-        print("sha256:test-digest")
+        print("sha256:" + "a" * 64)
 if name == "docker":
+    if args[2:3] == ["ps"]:
+        if pathlib.Path('.chatgpt-deploy.json').exists():
+            print('synthetic-tunnel-container')
+        sys.exit(0)
     if args[2:4] == ["container", "inspect"]:
         if os.environ.get("DOCKER_TEST_FAIL_INSPECT") == "1":
             sys.exit(1)
         if "com.docker.compose.project" in " ".join(args):
             print(os.environ.get("DOCKER_TEST_PROJECT", "existing-project"))
             sys.exit(0)
+        if "{{{{json .}}}}" in args:
+            if args[-1] == 'synthetic-tunnel-container':
+                selection = json.loads(pathlib.Path('.chatgpt-deploy.json').read_text())
+                print(json.dumps({{
+                    "Image": selection['image'], "Name": "/previous-chatgpt-tunnel",
+                    "Config": {{"Env": ["MCP_AUTH_TOKEN=previous-runtime-token"]}},
+                    "HostConfig": {{}}, "Mounts": [],
+                }}))
+                sys.exit(0)
+            print(json.dumps({{
+                "Image": "sha256:previous", "Name": "/moomoo-api-mcp",
+                "Config": {{"Env": ["MCP_AUTH_TOKEN=previous-runtime-token",
+                                      "MOOMOO_TRADING_MODE=READ_ONLY"],
+                            "Labels": {{"com.docker.compose.project":
+                                        "existing-project"}}}},
+                "HostConfig": {{}}, "Mounts": [],
+            }}))
+            sys.exit(0)
         calls = pathlib.Path(os.environ["CALL_LOG"]).read_text().splitlines()
         inspections = sum(
             "container" in json.loads(line)[1]
             and "com.docker.compose.project" not in " ".join(json.loads(line)[1])
+            and "{{{{json .}}}}" not in json.loads(line)[1]
             for line in calls
         )
         if (inspections > 1
@@ -168,7 +192,13 @@ if name == "docker":
             print("invalid env file", file=sys.stderr)
             sys.exit(15)
         token = os.environ.get("DOCKER_TEST_TOKEN", "test-only")
-        service = {{"environment": {{
+        snapshot = next((pathlib.Path(arg) for arg in args
+                         if '.deploy-config' in arg and arg.endswith('.json')), None)
+        if snapshot is not None:
+            print(snapshot.read_text())
+            sys.exit(0)
+        service = {{"image": "{REGISTRY}/moomoo-api-mcp@sha256:" + "a" * 64,
+                    "environment": {{
             "MCP_AUTH_TOKEN": token,
             "MOOMOO_TRADING_MODE": os.environ.get("DOCKER_TEST_MODE", "READ_ONLY"),
         }}}}
@@ -180,10 +210,22 @@ if name == "docker":
                     'DOCKER_TEST_TUNNEL_KEY', 'synthetic-key'),
                 'CHATGPT_TUNNEL_ID': 'tunnel_synthetic',
             }}}}
-        print(json.dumps({{"services": services}}))
+        print(json.dumps({{"name": os.environ.get('DOCKER_TEST_PROJECT',
+                                                'existing-project'),
+                          "services": services}}))
+    if "run" in args and "--network" in args:
+        if os.environ.get("DOCKER_TEST_FAIL_PREFLIGHT") == "1":
+            print("synthetic-private-config-value", file=sys.stderr)
+            sys.exit(1)
     if "compose" in args and "config" not in args:
         with open(os.environ["CALL_LOG"], "a") as log:
             image = os.environ.get("CHATGPT_TUNNEL_IMAGE")
+            snapshot = next((pathlib.Path(arg) for arg in args
+                             if '.deploy-config' in arg
+                             and arg.endswith('.json')), None)
+            if snapshot is not None:
+                selected = json.loads(snapshot.read_text())
+                image = selected['services'].get('chatgpt-tunnel', {{}}).get('image')
             log.write(json.dumps(["tunnel-image", [image], None]) + "\\n")
     if os.environ.get("DOCKER_TEST_FAIL_LOGS") == "1" and "logs" in sys.argv:
         sys.exit(1)
@@ -241,6 +283,7 @@ if name == "curl":
             DEPLOY_VERIFY_TIMEOUT="0",
             DEPLOY_GATEWAY_TIMEOUT="0",
             TMPDIR=str(self.tmpdir),
+            MOOMOO_DEPLOY_LOCK_ROOT=str(self.root / "lock-root"),
         )
 
     def git(self, *args):
@@ -283,6 +326,16 @@ if name == "curl":
         self.assertTrue(commands)
         self.assertEqual(commands[0], "config")
         return [command for command in commands if command != "config"]
+
+    def resolved_configuration_calls(self):
+        return [
+            arguments
+            for name, arguments, _ in self.calls()
+            if name == "docker" and "compose" in arguments and "config" in arguments
+        ]
+
+    def active_configuration(self):
+        return json.loads((self.repo / ".deploy-config.json").read_text())
 
     def save_previous_deploy(self):
         """A prior deployment's settings, for a rollback to restore."""
@@ -397,7 +450,7 @@ if name == "curl":
             args for name, args, _ in self.calls() if name == "docker" and "up" in args
         ]
         self.assertNotIn("docker-compose.chatgpt.yml", calls[-1])
-        self.assertIn("existing-project", calls[-1])
+        self.assertEqual(self.active_configuration()["name"], "existing-project")
 
     def test_first_enable_simulate_includes_paper_configuration(self):
         self.env["DOCKER_TEST_MODE"] = "SIMULATE"
@@ -407,9 +460,12 @@ if name == "curl":
             args for name, args, _ in self.calls() if name == "docker" and "up" in args
         ]
         self.assertEqual(len(started), 1)
-        self.assertIn("docker-compose.paper.yml", started[0])
-        self.assertIn("docker-compose.chatgpt.yml", started[0])
-        self.assertIn("existing-project", started[0])
+        configurations = self.resolved_configuration_calls()
+        self.assertTrue(
+            any("docker-compose.paper.yml" in args for args in configurations)
+        )
+        self.assertIn("chatgpt-tunnel", self.active_configuration()["services"])
+        self.assertEqual(self.active_configuration()["name"], "existing-project")
 
     def test_simulate_disable_retains_local_paper_configuration(self):
         self.select_tunnel()
@@ -422,7 +478,12 @@ if name == "curl":
             args for name, args, _ in self.calls() if name == "docker" and "up" in args
         ]
         self.assertEqual(len(started), 1)
-        self.assertIn("docker-compose.paper.yml", started[0])
+        self.assertTrue(
+            any(
+                "docker-compose.paper.yml" in args
+                for args in self.resolved_configuration_calls()
+            )
+        )
         self.assertNotIn("docker-compose.chatgpt.yml", started[0])
         self.assertIn(
             "COMPOSE_PROJECT_NAME=existing-project",
@@ -455,13 +516,8 @@ if name == "curl":
         self.assertEqual((self.repo / ".deploy.env").read_text(), previous)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), self.commit)
         self.assertEqual(self.compose_commands()[-1], "up")
-        up = next(
-            args
-            for name, args, _ in reversed(self.calls())
-            if name == "docker" and "up" in args
-        )
-        self.assertIn("docker-compose.chatgpt.yml", up)
-        self.assertIn("existing-project", up)
+        self.assertIn("chatgpt-tunnel", self.active_configuration()["services"])
+        self.assertEqual(self.active_configuration()["name"], "existing-project")
 
     def test_conflicting_tunnel_flags_and_prepare_disable_are_rejected(self):
         for args in (("--chatgpt", "--no-chatgpt"), ("--prepare", "--no-chatgpt")):
@@ -483,9 +539,9 @@ if name == "curl":
         pull = next(
             args for name, args, _ in calls if name == "docker" and "pull" in args
         )
-        self.assertEqual(pull[-3:], ["pull", "moomoo-mcp", "chatgpt-tunnel"])
-        self.assertIn("existing-project", pull)
-        self.assertIn("docker-compose.chatgpt.yml", pull)
+        self.assertEqual(pull[-1], "pull")
+        self.assertIn("chatgpt-tunnel", self.active_configuration()["services"])
+        self.assertEqual(self.active_configuration()["name"], "existing-project")
         self.assertFalse(
             any("build" in args for name, args, _ in calls if name == "docker")
         )
@@ -679,7 +735,8 @@ if name == "curl":
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             (self.repo / ".deploy.env").read_text(),
-            f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={self.commit[:7]}\n",
+            f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={self.commit[:7]}\n"
+            f"MOOMOO_APP_IMAGE={REGISTRY}/moomoo-api-mcp@sha256:{'a' * 64}\n",
         )
         calls = self.calls()
         aws = [args for name, args, _ in calls if name == "aws"]
@@ -690,11 +747,16 @@ if name == "curl":
         for args in aws:
             self.assertEqual(args[:2], ["ecr", "batch-get-image"])
             self.assertIn("imageTag=" + self.commit[:7], args)
-        docker = [args for name, args, _ in calls if name == "docker"]
+        docker = [
+            args for name, args, _ in calls if name == "docker" and "compose" in args
+        ]
         for args in docker:
             self.assertEqual(args[:3], ["--context", "rootless", "compose"])
-            self.assertIn(".env", args)
-            self.assertIn(".deploy.env", args)
+            if "config" in args and any(".deploy-config" in arg for arg in args):
+                continue
+            if "pull" not in args:
+                self.assertIn(".env", args)
+                self.assertIn(".deploy.env", args)
         # Preparation validates configuration and pulls without starting or probing.
         self.assertEqual(
             self.compose_actions(),
@@ -709,6 +771,69 @@ if name == "curl":
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Configuration error", result.stderr)
         self.assertEqual(self.compose_commands(), ["config"])
+
+    def test_offline_application_failure_keeps_running_configuration(self):
+        self.save_previous_deploy()
+        previous = {
+            "name": "existing-project",
+            "services": {
+                "moomoo-mcp": {
+                    "image": "sha256:previous",
+                    "environment": {
+                        "MCP_AUTH_TOKEN": "previous-synthetic-token",
+                        "MOOMOO_TRADING_MODE": "READ_ONLY",
+                    },
+                }
+            },
+        }
+        active = self.repo / ".deploy-config.json"
+        active.write_text(json.dumps(previous))
+        active.chmod(0o600)
+        self.env["DOCKER_TEST_FAIL_PREFLIGHT"] = "1"
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(active.read_text()), previous)
+        self.assertNotIn("up", self.compose_commands())
+        self.assertNotIn(
+            "synthetic-private-config-value", result.stdout + result.stderr
+        )
+
+    def test_first_upgrade_rolls_back_snapshot_without_the_old_wrapper(self):
+        wrapper = self.repo / "scripts/compose-prod.sh"
+        current_wrapper = wrapper.read_text()
+        wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            "echo 'OLD WRAPPER CANNOT READ SNAPSHOTS' >&2\nexit 97\n"
+        )
+        self.git("add", "scripts/compose-prod.sh")
+        self.git("commit", "-m", "older wrapper without snapshots")
+        previous = self.git("rev-parse", "HEAD").strip()
+        wrapper.write_text(current_wrapper)
+        self.git("add", "scripts/compose-prod.sh")
+        self.git("commit", "-m", "wrapper with effective configuration snapshots")
+        target = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "--quiet", "--detach", previous)
+        self.save_previous_deploy()
+        self.env["DOCKER_TEST_TOKEN"] = "candidate-synthetic-token"
+        self.env["CURL_TEST_FAIL"] = "1"
+
+        result = self.deploy(target)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Rolled back to " + previous[:7], result.stderr)
+        self.assertNotIn("OLD WRAPPER CANNOT READ SNAPSHOTS", result.stderr)
+        self.assertNotIn("restarting prior images failed", result.stderr)
+        snapshot = json.loads((self.repo / ".deploy-config.json").read_text())
+        self.assertEqual(
+            snapshot["services"]["moomoo-mcp"]["environment"]["MCP_AUTH_TOKEN"],
+            "previous-runtime-token",
+        )
+        starts = [
+            arguments
+            for name, arguments, _ in self.calls()
+            if name == "docker" and "compose" in arguments and "up" in arguments
+        ]
+        self.assertIn(str(self.repo / ".deploy-config.json"), starts[-1])
 
     def test_explicit_commit_reuses_saved_registry_and_starts(self):
         (self.repo / ".deploy.env").write_text(
@@ -1120,7 +1245,8 @@ if name == "curl":
         self.assertIn("REEXEC_PREPARE_MARKER", result.stderr)
         self.assertEqual(
             (self.repo / ".deploy.env").read_text(),
-            f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={newer_commit[:7]}\n",
+            f"ECR_REGISTRY={REGISTRY}\nIMAGE_TAG={newer_commit[:7]}\n"
+            f"MOOMOO_APP_IMAGE={REGISTRY}/moomoo-api-mcp@sha256:{'a' * 64}\n",
         )
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), newer_commit)
         self.assertEqual(

@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from moomoo import RET_ERROR, RET_OK
 
+from moomoo_mcp.client_authorization import ClientGrants, client_grants_context
 from moomoo_mcp.services.paper_execution import PaperExecution
 from moomoo_mcp.services.real_execution import RealExecution
 from moomoo_mcp.services.trade_service import TradeService
@@ -257,3 +258,47 @@ def test_controls_health_remains_separate_from_permission():
     result = service.get_trading_capabilities("US.AAPL", "SIMULATE")
     assert result["ready"]["state"] == "READY"
     assert result["ready"]["broker_acceptance_verified"] is False
+
+
+@pytest.mark.parametrize("environment", ["REAL", "SIMULATE"])
+def test_default_account_uses_the_mutation_allowlist_and_market(environment):
+    service = configured_service(environment=environment, mode=TradingMode.REAL)
+    original = mock_context(service).get_acc_list.return_value[1].iloc[0].to_dict()
+    mock_context(service).get_acc_list.return_value = (
+        RET_OK,
+        pd.DataFrame(
+            [
+                original,
+                original | {"acc_id": ACCOUNT + 1},
+                original | {"acc_id": ACCOUNT + 2, "trdmarket_auth": ["HK"]},
+            ]
+        ),
+    )
+    result = service.get_trading_capabilities("US.AAPL", environment)
+    assert result["acc_id"] == ACCOUNT
+    assert result["ready"]["state"] == "READY"
+    assert "ACCOUNT_AMBIGUOUS" not in result["ready"]["reasons"]
+
+
+def test_restricted_client_live_permission_is_separate_from_backend_policy():
+    service = configured_service(environment="REAL", mode=TradingMode.REAL)
+    with client_grants_context(ClientGrants()):
+        result = service.get_trading_capabilities("US.AAPL", "REAL", str(ACCOUNT))
+    assert result["allowed"]["account_allowlisted"] is True
+    assert result["allowed"]["client_writes"] is False
+    assert result["allowed"]["writes"] is False
+    assert "CLIENT_WRITE_NOT_AUTHORIZED" in result["ready"]["reasons"]
+
+
+def test_operator_pause_blocks_readiness_without_approval_or_budget_requirements():
+    service = configured_service(environment="REAL", mode=TradingMode.REAL)
+    controls = MagicMock()
+    controls.health.return_value = {"state": "READY"}
+    controls.pause_state.return_value = {"paused": True}
+    service.trading_controls = controls
+    result = service.get_trading_capabilities("US.AAPL", "REAL", str(ACCOUNT))
+    assert result["allowed"]["writes"] is True
+    assert result["ready"]["state"] == "BLOCKED"
+    assert result["ready"]["operator_paused"] is True
+    assert "OPERATOR_PAUSED" in result["ready"]["reasons"]
+    controls.pause_state.assert_called_once_with("REAL", str(ACCOUNT))

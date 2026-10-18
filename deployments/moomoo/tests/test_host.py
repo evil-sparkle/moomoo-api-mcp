@@ -1,6 +1,7 @@
-"""Exercise native deployment boundaries with synthetic configuration only."""
+"""Exercise frozen native releases using synthetic configuration only."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,15 +19,15 @@ IMAGE = "123456789012.dkr.ecr.us-east-1.amazonaws.com/moomoo-api-mcp@sha256:" + 
 TUNNEL = IMAGE.replace("a" * 64, "c" * 64)
 
 
-def selection(env_file):
+def selection(env_file, mode="READ_ONLY", tunnel=False):
     return {
         "revision": "b" * 40,
         "image": IMAGE,
         "tunnel_image": TUNNEL,
         "project": "original-project",
         "env_file": str(env_file),
-        "expected_mode": "READ_ONLY",
-        "tunnel_enabled": False,
+        "expected_mode": mode,
+        "tunnel_enabled": tunnel,
     }
 
 
@@ -48,6 +49,26 @@ def existing():
                 "Destination": "/var/lib/moomoo-mcp/data",
             },
         ],
+        "config": {
+            "User": "opend",
+            "Env": ["MCP_AUTH_TOKEN=old-$synthetic", "MOOMOO_TRADING_MODE=READ_ONLY"],
+        },
+        "host": {},
+        "image": "sha256:" + "d" * 64,
+    }
+
+
+def model(mode="READ_ONLY"):
+    return {
+        "services": {
+            "moomoo-mcp": {
+                "image": IMAGE,
+                "environment": {
+                    "MCP_AUTH_TOKEN": "synthetic",
+                    "MOOMOO_TRADING_MODE": mode,
+                },
+            }
+        }
     }
 
 
@@ -63,21 +84,37 @@ class HostTests(unittest.TestCase):
         self.env.chmod(0o600)
         self.value = selection(self.env)
         (self.root / "deployment.json").write_text(json.dumps(self.value))
-        shutil.copy(ROOT / "docker-compose.yml", self.root / "docker-compose.yml")
+        for filename in [
+            "docker-compose.yml",
+            "docker-compose.paper.yml",
+            "docker-compose.real.yml",
+            "docker-compose.controls.yml",
+        ]:
+            shutil.copy(ROOT / filename, self.root / filename)
 
-    def test_prepare_preserves_named_state_and_never_reads_credential_file(self):
+    def prepare(
+        self, value=None, *, container=None, base=None, final=None, old_tunnel=None
+    ):
+        responses = [
+            json.dumps(container or existing()),
+            "synthetic-tunnel\n" if old_tunnel else "",
+        ]
+        if old_tunnel:
+            responses.append(json.dumps(old_tunnel))
+        responses += [json.dumps(base or model()), json.dumps(final or base or model())]
+        with patch.object(host, "execute", side_effect=responses) as execute:
+            host.prepare(self.root, value or self.value)
+        return execute
+
+    def test_prepare_preserves_state_and_freezes_actual_predecessor(self):
         original_read = Path.read_text
 
         def public_only(path, *args, **kwargs):
             self.assertNotEqual(path, self.env)
             return original_read(path, *args, **kwargs)
 
-        with (
-            patch.object(host, "execute", side_effect=[json.dumps(existing()), ""]),
-            patch.object(host, "validate_configuration"),
-            patch.object(Path, "read_text", public_only),
-        ):
-            host.prepare(self.root, self.value)
+        with patch.object(Path, "read_text", public_only):
+            self.prepare()
         saved = json.loads((self.root / "state-volumes.json").read_text())
         self.assertEqual(
             saved["opend-state"],
@@ -86,13 +123,24 @@ class HostTests(unittest.TestCase):
         self.assertEqual(
             saved["paper-state"]["name"], "original-project_execution-data"
         )
+        previous = json.loads((self.root / "previous-compose.json").read_text())
         self.assertEqual(
-            self.env.read_text(),
-            "MCP_AUTH_TOKEN=synthetic-test-token\nMOOMOO_TRADING_MODE=READ_ONLY\n",
+            previous["services"]["moomoo-mcp"]["environment"]["MCP_AUTH_TOKEN"],
+            "old-$$synthetic",
         )
+        for filename in [host.SNAPSHOT, "previous-compose.json"]:
+            self.assertEqual((self.root / filename).stat().st_mode & 0o777, 0o600)
+        self.env.write_text("MCP_AUTH_TOKEN=changed-after-prepare\n")
+        frozen = host.validate_configuration(self.root, self.value)
+        self.assertEqual(
+            frozen["services"]["moomoo-mcp"]["environment"]["MCP_AUTH_TOKEN"],
+            "synthetic",
+        )
+        with self.assertRaises(ValueError):
+            self.prepare()
 
-    def test_refuses_wrong_project_missing_state_bind_mount_and_lost_tunnel(self):
-        cases = [
+    def test_refuses_wrong_project_missing_state_and_bind_mount(self):
+        for container in [
             existing() | {"labels": {}},
             existing() | {"mounts": []},
             existing()
@@ -101,70 +149,196 @@ class HostTests(unittest.TestCase):
                     {"Type": "bind", "Destination": "/home/opend/.com.moomoo.OpenD"}
                 ]
             },
-        ]
-        for container in cases:
+        ]:
             with (
                 self.subTest(container=container),
-                patch.object(host, "execute", side_effect=[json.dumps(container), ""]),
+                patch.object(host, "execute", return_value=json.dumps(container)),
                 self.assertRaises(ValueError),
             ):
                 host.prepare(self.root, self.value)
-        with (
-            patch.object(
-                host,
-                "execute",
-                side_effect=[json.dumps(existing()), "tunnel-container\n"],
-            ),
-            self.assertRaises(ValueError),
-        ):
-            host.prepare(self.root, self.value)
 
-    def test_real_compose_renders_pinned_images_and_original_external_volumes(self):
+    def test_modes_and_controls_select_the_same_named_state_as_production(self):
+        for mode in ["READ_ONLY", "SIMULATE", "REAL"]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                selected = selection(self.env, mode)
+                resolved = model(mode)
+                resolved["services"]["moomoo-mcp"]["environment"].update(
+                    {
+                        "MOOMOO_SIMULATED_ACC_IDS": "123",
+                        "MOOMOO_REQUIRE_TRADE_APPROVAL": "1",
+                    }
+                )
+                with patch.object(
+                    host,
+                    "execute",
+                    side_effect=[
+                        json.dumps(existing()),
+                        "",
+                        json.dumps(resolved),
+                        json.dumps(resolved),
+                    ],
+                ):
+                    host.prepare(root, selected)
+                volumes = json.loads((root / "state-volumes.json").read_text())
+                self.assertEqual(
+                    volumes["paper-state"]["name"], "original-project_execution-data"
+                )
+                self.assertEqual(
+                    volumes["controls-state"]["name"],
+                    "original-project_trading-controls-data",
+                )
+                if mode == "REAL":
+                    self.assertEqual(
+                        volumes["real-state"]["name"],
+                        "original-project_real-execution-data",
+                    )
+                commands = (root / "compose.ansible.yml").read_text()
+                self.assertNotIn("MOOMOO_CREATE_JOURNAL", commands)
+                self.assertNotIn("MOOMOO_CREATE_REAL_JOURNAL", commands)
+
+    def test_read_only_preserves_existing_live_and_control_volumes(self):
+        container = existing()
+        for target, name in [
+            ("/app/real-execution-data", "existing-live"),
+            ("/var/lib/moomoo/trading-controls", "existing-controls"),
+        ]:
+            container["mounts"].append(
+                {"Type": "volume", "Name": name, "Destination": target}
+            )
+        self.prepare(container=container)
+        saved = json.loads((self.root / "state-volumes.json").read_text())
+        self.assertEqual(saved["real-state"]["name"], "existing-live")
+        self.assertEqual(saved["controls-state"]["name"], "existing-controls")
+
+    def test_unused_retained_volumes_do_not_enable_execution_databases(self):
+        container = existing()
+        for target, name in [
+            ("/app/real-execution-data", "existing-live"),
+            ("/var/lib/moomoo/trading-controls", "existing-controls"),
+        ]:
+            container["mounts"].append(
+                {"Type": "volume", "Name": name, "Destination": target}
+            )
+        for mode in ["READ_ONLY", "REAL"]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as name:
+                release = Path(name)
+                resolved = model(mode)
+                with patch.object(
+                    host,
+                    "execute",
+                    side_effect=[
+                        json.dumps(container),
+                        "",
+                        json.dumps(resolved),
+                        json.dumps(resolved),
+                    ],
+                ) as command:
+                    host.prepare(release, selection(self.env, mode))
+                files = command.call_args.args[0]
+                self.assertNotIn(str(release / "docker-compose.paper.yml"), files)
+                self.assertNotIn(str(release / "docker-compose.controls.yml"), files)
+                self.assertEqual(
+                    str(release / "docker-compose.real.yml") in files, mode == "REAL"
+                )
+                volumes = json.loads((release / "state-volumes.json").read_text())
+                self.assertEqual(len(volumes), 4)
+
+    def test_explicit_tunnel_disable_freezes_previous_tunnel_for_rollback(self):
+        self.prepare(old_tunnel=existing())
+        previous = json.loads((self.root / "previous-compose.json").read_text())
+        self.assertIn("chatgpt-tunnel", previous["services"])
+        self.assertNotIn(
+            "chatgpt-tunnel",
+            json.loads((self.root / host.SNAPSHOT).read_text())["services"],
+        )
+        with patch.object(host, "preflight"), patch.object(host, "execute") as execute:
+            host.operate(
+                self.root, self.value, "compose", ["up", "-d", "--remove-orphans"]
+            )
+        self.assertIn("--remove-orphans", execute.call_args.args[0])
+
+    def test_tunnel_requires_independent_restricted_identity(self):
+        selected = self.value | {"tunnel_enabled": True, "expected_mode": "REAL"}
+        resolved = model("REAL")
+        environment = resolved["services"]["moomoo-mcp"]["environment"]
+        environment["MCP_RESTRICTED_AUTH_TOKEN"] = "synthetic-restricted"
+        resolved["services"]["chatgpt-tunnel"] = {
+            "environment": {
+                "MCP_AUTH_TOKEN": "synthetic-restricted",
+                "CHATGPT_TUNNEL_API_KEY": "synthetic-key",
+                "CHATGPT_TUNNEL_ID": "tunnel_synthetic",
+            }
+        }
+        host.validate_model(resolved, selected)
+        resolved["services"]["chatgpt-tunnel"]["environment"]["MCP_AUTH_TOKEN"] = (
+            environment["MCP_AUTH_TOKEN"]
+        )
+        with self.assertRaises(ValueError):
+            host.validate_model(resolved, selected)
+
+    def test_offline_preflight_uses_frozen_decoded_environment_and_readonly_storage(
+        self,
+    ):
+        resolved = model("REAL")
+        resolved["services"]["moomoo-mcp"]["environment"]["MCP_AUTH_TOKEN"] = (
+            "synthetic-$$PASSWORD"
+        )
+        resolved["services"]["moomoo-mcp"]["volumes"] = [
+            {"source": "real-state", "target": "/app/real-execution-data"}
+        ]
+        resolved["volumes"] = {
+            "real-state": {"name": "original-project_real-execution-data"}
+        }
+        host.private_json(self.root / host.SNAPSHOT, resolved)
+        with patch.object(host, "execute") as execute:
+            host.preflight(self.root, self.value | {"expected_mode": "REAL"})
+        self.assertEqual(execute.call_count, 2)
+        first, storage = execute.call_args_list
+        self.assertEqual(first.args[0][-1], "--validate")
+        self.assertIn("--network", first.args[0])
+        self.assertEqual(
+            json.loads(first.kwargs["stdin"])["MCP_AUTH_TOKEN"], "synthetic-$PASSWORD"
+        )
+        self.assertEqual(storage.args[0][-1], "--validate-storage")
+        self.assertIn(
+            "type=volume,source=original-project_real-execution-data,target=/app/real-execution-data,readonly",
+            storage.args[0],
+        )
+
+    def test_real_compose_renders_frozen_images_and_original_external_volumes(self):
         if not shutil.which("docker"):
             self.skipTest("Docker Compose is unavailable")
-        with (
-            patch.object(host, "execute", side_effect=[json.dumps(existing()), ""]),
-            patch.object(host, "validate_configuration"),
-        ):
+        execute = host.execute
+
+        def commands(arguments, **kwargs):
+            if arguments[1] == "inspect":
+                return json.dumps(existing())
+            if arguments[1] == "ps":
+                return ""
+            return execute(arguments, **kwargs)
+
+        with patch.object(host, "execute", side_effect=commands):
             host.prepare(self.root, self.value)
-        model = json.loads(
+        resolved = json.loads(
             host.execute(
                 host.compose(self.root, self.value) + ["config", "--format", "json"]
             )
         )
-        service = model["services"]["moomoo-mcp"]
-        self.assertEqual(service["image"], IMAGE)
-        self.assertNotIn("build", service)
+        self.assertEqual(resolved["services"]["moomoo-mcp"]["image"], IMAGE)
+        self.assertNotIn("build", resolved["services"]["moomoo-mcp"])
         self.assertEqual(
-            model["volumes"]["opend-state"]["name"], "original-project_opend-data"
+            resolved["volumes"]["opend-state"]["name"], "original-project_opend-data"
         )
-        self.assertTrue(model["volumes"]["opend-state"]["external"])
-        self.assertEqual(service["ports"][0]["host_ip"], "127.0.0.1")
         host.validate_configuration(self.root, self.value)
 
-    def test_refuses_writable_mode_and_unprotected_credentials_without_changing_file(
-        self,
-    ):
-        model = {
-            "services": {
-                "moomoo-mcp": {
-                    "environment": {
-                        "MCP_AUTH_TOKEN": "synthetic",
-                        "MOOMOO_TRADING_MODE": "REAL",
-                    }
-                }
-            }
-        }
-        with (
-            patch.object(host, "execute", return_value=json.dumps(model)),
-            self.assertRaises(ValueError),
-        ):
-            host.validate_configuration(self.root, self.value)
+    def test_mismatched_mode_and_unprotected_configuration_fail(self):
+        with self.assertRaises(ValueError):
+            host.validate_model(model("REAL"), self.value)
         self.env.chmod(0o644)
         with patch.object(host, "execute") as command, self.assertRaises(ValueError):
-            host.validate_configuration(self.root, self.value)
+            host.prepare(self.root, self.value)
         command.assert_not_called()
-        self.assertEqual(self.env.stat().st_mode & 0o777, 0o644)
 
     def test_command_failure_does_not_relay_secret_text(self):
         result = subprocess.CompletedProcess(
@@ -176,3 +350,95 @@ class HostTests(unittest.TestCase):
         ):
             host.execute(["synthetic-command"])
         self.assertNotIn("synthetic-secret", str(failure.exception))
+
+    def test_real_helper_processes_preserve_state_across_modes_and_tunnel_disable(self):
+        binaries = self.root / "bin"
+        binaries.mkdir()
+        shutil.copy(
+            ROOT / "deployments/moomoo/tests/docker-stub.py", binaries / "docker"
+        )
+        (binaries / "docker").chmod(0o755)
+        state = self.root / "runtime.json"
+        state.write_text(json.dumps({"image": IMAGE}))
+        log = self.root / "commands.jsonl"
+        environment = dict(os.environ)
+        environment.pop("MOOMOO_DEPLOY_LOCK_TOKEN", None)
+        environment.update(
+            {
+                "PATH": str(binaries) + os.pathsep + environment["PATH"],
+                "MOOMOO_DEPLOY_LOCK_ROOT": str(self.root / "deployment-state"),
+                "SYNTHETIC_DOCKER_STATE": str(state),
+                "SYNTHETIC_DOCKER_LOG": str(log),
+                "SYNTHETIC_LEGACY_RESTORED": str(self.root / "restored"),
+            }
+        )
+        previous_mounts = None
+        for index, mode in enumerate(["SIMULATE", "REAL", "READ_ONLY"]):
+            release = self.root / ("release-" + str(index))
+            (release / "scripts").mkdir(parents=True)
+            for filename in [
+                "ansible_deployment.py",
+                "deployment_lock.py",
+                "deployment_manifest.py",
+                "deployment_probe.py",
+            ]:
+                shutil.copy(ROOT / "scripts" / filename, release / "scripts" / filename)
+            for filename in [
+                "docker-compose.yml",
+                "docker-compose.paper.yml",
+                "docker-compose.real.yml",
+                "docker-compose.controls.yml",
+            ]:
+                shutil.copy(ROOT / filename, release / filename)
+            self.env.write_text(
+                "MCP_AUTH_TOKEN=synthetic-primary\nMOOMOO_TRADING_MODE=" + mode + "\n"
+                "MOOMOO_SIMULATED_ACC_IDS=123\nMOOMOO_CREATE_JOURNAL=1\n"
+                "MOOMOO_REAL_ACC_IDS=456\nMOOMOO_CREATE_REAL_JOURNAL=1\n"
+                "MOOMOO_MAX_DAILY_NOTIONAL_BY_CURRENCY=USD:100\n"
+                "MOOMOO_CREATE_TRADING_CONTROLS=1\n"
+                "MOOMOO_OPERATOR_AUTH_TOKEN=synthetic-operator-token\n"
+                "MOOMOO_OPERATOR_ID=synthetic-operator\n"
+                "MCP_RESTRICTED_AUTH_TOKEN=synthetic-restricted\n"
+                "CHATGPT_TUNNEL_API_KEY=synthetic-key\nCHATGPT_TUNNEL_ID=tunnel_synthetic\n"
+            )
+            value = selection(self.env, mode, tunnel=index == 0)
+            (release / "deployment.json").write_text(json.dumps(value))
+            for arguments in [
+                ["prepare"],
+                ["compose", "pull"],
+                ["compose", "up", "-d", "--no-build", "--remove-orphans"],
+                ["verify"],
+            ]:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(release / "scripts/ansible_deployment.py"),
+                        *arguments,
+                    ],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+                self.assertEqual(
+                    completed.returncode, 0, completed.stdout + completed.stderr
+                )
+                self.assertNotIn(
+                    "synthetic-primary", completed.stdout + completed.stderr
+                )
+            runtime = json.loads(state.read_text())
+            mounts = {
+                mount["Destination"]: mount["Name"] for mount in runtime["mounts"]
+            }
+            if previous_mounts is not None:
+                self.assertTrue(previous_mounts.items() <= mounts.items())
+            previous_mounts = mounts
+            self.assertEqual(runtime["tunnel"], index == 0)
+            self.assertIn("MOOMOO_TRADING_MODE=" + mode, runtime["environment"])
+            self.assertIn(
+                "MOOMOO_TRADING_CONTROLS_PATH="
+                "/var/lib/moomoo/trading-controls/controls.sqlite3",
+                runtime["environment"],
+            )
+            self.assertFalse((self.root / "deployment-state/.deployment-lock").exists())

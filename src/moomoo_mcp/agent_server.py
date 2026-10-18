@@ -1,13 +1,20 @@
 """Actionable tool failures at the MCP boundary, with success schemas intact."""
 
+import inspect
 import json
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
+from mcp.types import Tool as MCPTool
 from pydantic import ValidationError
 
+from moomoo_mcp.client_authorization import (
+    ClientAuthorizationError,
+    authorize_tool,
+    tool_visible,
+)
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.execution_store import ExecutionConflict, ExecutionStoreError
 from moomoo_mcp.services.health import sanitize_error
@@ -179,6 +186,14 @@ def tool_error_result(
             payload["mutation_outcome"] = "ACKNOWLEDGED" if acknowledged else "UNKNOWN"
             return error_result(payload)
 
+    if isinstance(problem, ClientAuthorizationError):
+        category(
+            "CLIENT_PERMISSION_DENIED",
+            "The authenticated client is not authorized for this operation or account.",
+            "Use a client credential with the required grant; "
+            "preserve the requested scope.",
+        )
+        return error_result(payload)
     if isinstance(problem, QuotePermissionDeniedError) and not consequential:
         return quote_permission_result(problem, name)
     if isinstance(problem, ValidationError):
@@ -332,6 +347,9 @@ class AgentFriendlyMCP(FastMCP):
         # Retain that input behavior and the SDK's success conversion.
         self._mcp_server.call_tool(validate_input=False)(self._call_tool_with_errors)
 
+    async def list_tools(self) -> list[MCPTool]:
+        return [tool for tool in await super().list_tools() if tool_visible(tool.name)]
+
     async def _call_tool_with_errors(self, name: str, arguments: dict[str, Any]) -> Any:
         tool = self._tool_manager.get_tool(name)
         if tool is None:
@@ -347,7 +365,33 @@ class AgentFriendlyMCP(FastMCP):
                 }
             )
         try:
+            environment_parameter = inspect.signature(tool.fn).parameters.get("trd_env")
+            default_environment = (
+                environment_parameter.default
+                if environment_parameter is not None
+                and isinstance(environment_parameter.default, str)
+                else None
+            )
+            authorize_tool(name, arguments, default_environment=default_environment)
             return await super().call_tool(name, arguments)
+        except ClientAuthorizationError:
+            return error_result(
+                {
+                    "error_code": "CLIENT_PERMISSION_DENIED",
+                    "tool": name,
+                    "operation": name,
+                    "checked_at": utc_now_iso(),
+                    "message": (
+                        "The authenticated client is not authorized "
+                        "for this operation or account."
+                    ),
+                    "retryable": False,
+                    "next_action": (
+                        "Use a client credential with the required grant; "
+                        "preserve the requested scope."
+                    ),
+                }
+            )
         except ToolError as error:
             return tool_error_result(
                 error,

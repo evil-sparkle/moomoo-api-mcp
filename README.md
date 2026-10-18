@@ -437,6 +437,11 @@ a successful `lock_trade` is the only way to clear it.
 
 #### Trading mode
 
+Trading modes are deployment permission presets. `REAL` also permits configured
+paper execution; each environment still needs its own account scope and journal.
+For restricted client access, persistent operator pauses, and observation after
+disabling writes, see [execution lifecycle and client permissions](docs/trading-contracts.md#execution-lifecycle-and-client-permissions).
+
 `MOOMOO_TRADING_MODE` decides what this deployment is allowed to do, which is a
 separate question from what your broker permits. It is enforced in the service
 layer, before any request reaches OpenD.
@@ -547,10 +552,10 @@ or a stdio-to-HTTP bridge for its private container endpoint. Do not assume a
 
 Use the [optional official tunnel](docs/deploy-vps.md#optional-chatgpt-access)
 through `deploy.sh --chatgpt`. It connects to this fork's existing container and
-permits READ_ONLY or SIMULATE. ChatGPT can read real accounts and, in SIMULATE,
-trade only explicitly allowlisted paper accounts through the execution journal.
-Real writes and unlocking are refused; disable the tunnel before switching to
-REAL. The tunnel uses the same stateless HTTP endpoint. Validate tool discovery
+permits READ_ONLY or SIMULATE, and REAL backends with a distinct restricted
+credential excluding live writes and gateway control. ChatGPT can read authorized
+accounts and trade configured allowlisted paper accounts through their journal.
+The tunnel uses the same stateless HTTP endpoint. Validate tool discovery
 and `check_health` in the actual client before relying on the integration.
 
 ## AI Agent Guidance

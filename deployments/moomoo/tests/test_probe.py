@@ -97,6 +97,14 @@ class ProbeTests(unittest.TestCase):
         self.server.health["trading_mode"] = "REAL"
         with self.assertRaises(ValueError):
             probe.check()
+
+    def test_explicit_mode_is_checked_in_every_deployment_profile(self):
+        for mode in ["READ_ONLY", "SIMULATE", "REAL"]:
+            self.server.health["trading_mode"] = mode
+            probe.check(expected_mode=mode)
+            probe.check(gateway=True, expected_mode=mode)
+        with self.assertRaises(ValueError):
+            probe.check(expected_mode="SIMULATE")
         self.server.health["trading_mode"] = "READ_ONLY"
         self.server.tools = ["check_health"]
         with self.assertRaises(ValueError):
