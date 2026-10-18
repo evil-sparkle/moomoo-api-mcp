@@ -10,7 +10,9 @@ import pandas as pd
 import pytest
 from moomoo import RET_OK
 
+from moomoo_mcp.client_authorization import ClientGrants, client_grants_context
 from moomoo_mcp.services.broker_dispatch import QuotaRequest
+from moomoo_mcp.services.execution_identity import canonicalize_request
 from moomoo_mcp.services.execution_store import ExecutionConflict, ExecutionStore
 from moomoo_mcp.services.order_errors import OrderNotSentError
 from moomoo_mcp.services.paper_execution import PaperExecution
@@ -47,6 +49,46 @@ def test_placement_uses_documented_session_without_deprecated_argument(rig):
     assert "fill_outside_rth" not in request
     row = store.lookup("place")
     assert row is not None and row["marker"] == 1
+
+
+def test_scoped_paper_result_and_retry_hide_other_accounts_recovery_updates(rig):
+    paper, _, broker, store = rig
+    place(paper)
+    row = store.lookup("place")
+    assert row is not None
+    private_operation = "other-account-private-operation"
+    private_request = {
+        "code": "US.PRIVATE",
+        "qty": 99,
+        "price": "1.10",
+        "trd_side": "BUY",
+        "order_type": "NORMAL",
+        "time_in_force": "DAY",
+    }
+    store.admit(
+        private_operation,
+        store.epoch,
+        456,
+        "PLACE",
+        canonicalize_request("SIMULATE", 456, "PLACE", private_request),
+        private_request,
+    )
+    store.block_late_order(private_operation)
+    assert paper.result(row)["recovery_updates"][0]["operation_id"] == private_operation
+    with client_grants_context(ClientGrants(simulate_acc_ids=frozenset({123}))):
+        observed = paper.result(row)
+        retried = place(paper)
+        with pytest.raises(OrderNotSentError) as refusal:
+            place(paper, token="blocked-own-operation")
+        assert private_operation not in str(refusal.value)
+        assert "check_health/get_execution" in str(refusal.value)
+    for result in (observed, retried):
+        assert result["recovery_updates"] == []
+        assert result["recovery"]["operation_id"] == "place"
+        assert result["acc_id"] == "123"
+        assert private_operation not in json.dumps(result)
+    assert len(broker.calls) == 1
+    assert private_operation in store.health()["pending_operation_ids"]
 
 
 @pytest.mark.parametrize("kind", ["MODIFY", "CANCEL"])

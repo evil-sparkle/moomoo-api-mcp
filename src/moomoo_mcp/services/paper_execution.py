@@ -15,6 +15,8 @@ from moomoo_mcp.client_authorization import (
     account_access_allowed,
     check_account_access,
     client_grants_context,
+    visible_journal_error,
+    visible_journal_health,
 )
 from moomoo_mcp.services.admission import AdmissionPlan, prepare_paper_call
 from moomoo_mcp.services.broker_dispatch import QuotaRequest
@@ -180,7 +182,9 @@ class PaperExecution:
                 c | {"details": json.loads(c["details"])}
                 for c in row["recovery_checks"]
             ],
-            "recovery_updates": self.health()["recovery_updates"],
+            "recovery_updates": visible_journal_health(self.health(), "SIMULATE").get(
+                "recovery_updates", []
+            ),
             "admission_epoch": row["admission_epoch"],
             "state": row["state"],
             "disposition": row["disposition"],
@@ -192,7 +196,7 @@ class PaperExecution:
             "receipt": receipt,
             "broker_order_id": row.get("broker_order_id"),
             "broker_status": row.get("broker_status"),
-            "error": row.get("error"),
+            "error": visible_journal_error(row.get("error"), "SIMULATE"),
             "submission_state": "durably_stored",
             "observations": json.loads(row["evidence"]) if row.get("evidence") else [],
             "modification_observed": bool(row.get("modification_observed"))

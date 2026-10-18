@@ -1255,6 +1255,28 @@ if name == "curl":
         )
         self.assertFalse(any(name == "curl" for name, _, _ in self.calls()))
 
+    def test_reexec_still_refuses_a_competing_deployment_lock(self):
+        deploy_script = self.repo / "scripts/deploy.sh"
+        deploy_script.write_text(
+            'echo "LOCK_HANDOFF_MARKER" >&2\n' + deploy_script.read_text()
+        )
+        self.git("add", "scripts/deploy.sh")
+        self.git("commit", "-m", "target script requiring shell handoff")
+        self.git("checkout", "--quiet", "--detach", self.commit)
+        lock = Path(self.env["MOOMOO_DEPLOY_LOCK_ROOT"]) / ".deployment-lock"
+        lock.mkdir(parents=True)
+        owner = lock / "owner.json"
+        ownership = json.dumps({"token": "synthetic-other-owner"})
+        owner.write_text(ownership)
+
+        result = self.deploy("--prepare")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("LOCK_HANDOFF_MARKER", result.stderr)
+        self.assertIn("Deployment lock is unavailable", result.stderr)
+        self.assertEqual(owner.read_text(), ownership)
+        self.assertFalse(self.calls())
+
     def commit_host_checkout(self, deploy_sh, helper):
         """Commit an older host checkout, then restore the current scripts on
         top of it as the target. Leaves the checkout on the older commit."""

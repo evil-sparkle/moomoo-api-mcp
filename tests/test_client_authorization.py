@@ -28,6 +28,7 @@ from moomoo_mcp.client_authorization import (
     filter_readable_accounts,
     visible_journal_health,
 )
+from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.query_contracts import QueryScope, order_view
 from moomoo_mcp.services.query_snapshots import QuerySnapshots
 from moomoo_mcp.services.trade_service import TradeService
@@ -155,6 +156,45 @@ def test_process_service_startup_does_not_inherit_request_grants(monkeypatch):
     with client_grants_context(ClientGrants()):
         assert server.get_services() is context
         assert current_client_grants() is not None
+
+
+@pytest.mark.parametrize("environment", ["REAL", "SIMULATE"])
+def test_scoped_result_redacts_pending_ids_from_persisted_legacy_error(
+    tmp_path, environment
+):
+    store = ExecutionStore(
+        tmp_path / environment / "journal.db", create=True, environment=environment
+    )
+    store.review()
+    legacy_error = (
+        f"{environment} execution JOURNAL_BLOCKED: "
+        "pending operations ['other-account-private-operation']; "
+        "automatic recovery or healthy storage restart is required; "
+        "see check_health/get_execution. No order was sent"
+    )
+    store.admit("own-operation", store.epoch, 123, "PLACE", "{}", {})
+    store.outcome("own-operation", "REFUSED", "NOT_SENT", error=legacy_error)
+    service = TradeService(
+        execution_store=store if environment == "SIMULATE" else None,
+        real_execution_store=store if environment == "REAL" else None,
+    )
+    try:
+        execution = service.real if environment == "REAL" else service.paper
+        row = store.lookup("own-operation")
+        assert execution is not None and row is not None
+        assert execution.result(row)["error"] == legacy_error
+        grants = ClientGrants(
+            real_acc_ids=frozenset({123}), simulate_acc_ids=frozenset({123})
+        )
+        with client_grants_context(grants):
+            error = execution.result(row)["error"]
+        assert "other-account-private-operation" not in error
+        assert f"{environment} execution JOURNAL_BLOCKED" in error
+        assert "check_health/get_execution. No order was sent" in error
+        stored = store.lookup("own-operation")
+        assert stored is not None and stored["error"] == legacy_error
+    finally:
+        service.close()
 
 
 def test_health_does_not_disclose_cross_account_journal_evidence():

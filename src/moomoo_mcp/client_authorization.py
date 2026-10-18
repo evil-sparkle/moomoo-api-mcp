@@ -251,3 +251,25 @@ def visible_journal_health(health: dict, trd_env: str) -> dict:
         for key, value in health.items()
         if key in {"state", "admission_epoch", "blocking_reasons"}
     } | {"details": "ACCOUNT_SCOPED_DETAILS_OMITTED"}
+
+
+def visible_journal_error(error: str | None, trd_env: str) -> str | None:
+    """Remove global pending IDs retained in older operation error records."""
+    grants = current_client_grants()
+    if grants is None or not error:
+        return error
+    environment = trd_env.strip().upper()
+    accounts = grants.real_acc_ids if environment == "REAL" else grants.simulate_acc_ids
+    if accounts is None and environment.lower() + "_read" in grants.permissions:
+        return error
+    prefix, marker, details = error.partition(": pending operations ")
+    if not marker or environment + " execution " not in prefix:
+        return error
+    guidance = "; automatic recovery or healthy storage restart is required;"
+    _, separator, following = details.rpartition(guidance)
+    if separator:
+        return prefix + ": " + guidance[2:] + following
+    return (
+        prefix + ": automatic recovery or healthy storage restart is required; "
+        "see check_health/get_execution. No order was sent"
+    )

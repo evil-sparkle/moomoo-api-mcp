@@ -10,6 +10,7 @@ from copy import deepcopy
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+from moomoo_mcp.client_authorization import visible_journal_error
 from moomoo_mcp.services.admission import AdmissionPlan
 from moomoo_mcp.services.broker_dispatch import QuotaRequest
 from moomoo_mcp.services.execution_identity import differing_fields, validate_token
@@ -218,7 +219,7 @@ class RealExecution:
             "receipt": receipt,
             "broker_order_id": row.get("broker_order_id"),
             "broker_status": row.get("broker_status"),
-            "error": row.get("error"),
+            "error": visible_journal_error(row.get("error"), "REAL"),
             "submission_state": "durably_stored",
             "broker_acknowledged": row["disposition"] == "ACKNOWLEDGED"
             or bool(

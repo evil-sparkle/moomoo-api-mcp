@@ -111,7 +111,9 @@ lock_helper="$(mktemp "${TMPDIR:-/tmp}/deployment-lock.XXXXXX")"
 trap 'rm -f "$lock_helper"' EXIT INT TERM
 git show "${commit}:scripts/deployment_lock.py" > "$lock_helper"
 if [ -z "${MOOMOO_DEPLOY_LOCK_TOKEN:-}" ]; then
-  python3 "$lock_helper" run -- "$0" "${ORIGINAL_ARGS[@]}"
+  # Preserve Bash's shell-script execution semantics when the outer deployment
+  # re-executed a temporary target script; Python does not implement ENOEXEC fallback.
+  python3 "$lock_helper" run -- bash "$0" "${ORIGINAL_ARGS[@]}"
   exit $?
 fi
 python3 "$lock_helper" run -- true
