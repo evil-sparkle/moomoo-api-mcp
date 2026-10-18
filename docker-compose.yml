@@ -37,10 +37,14 @@ services:
     stdin_open: true
     tty: true
     volumes:
-      # The only genuinely persistent state in the stack. Path and owning uid
+      # OpenD state keeps its existing path and owning uid. Execution and controls
+      # volumes stay provisioned across permission changes, including READ_ONLY.
       # are the ones OpenD already wrote as, so an existing volume is read
       # rather than re-authorized over SMS.
       - ${OPEND_DATA_DIR:-opend-data}:/home/opend/.com.moomoo.OpenD
+      - execution-data:/var/lib/moomoo-mcp/data
+      - real-execution-data:/app/real-execution-data
+      - trading-controls-data:/var/lib/moomoo/trading-controls
     environment:
       # Loopback inside this container. Nothing else can reach it, and the
       # supervisor pins the gateway's own listener to the same address.
@@ -67,6 +71,9 @@ services:
       - MOOMOO_REAL_ACC_IDS=${MOOMOO_REAL_ACC_IDS:-}
       # Allows production overlay selection to preserve configured paper trading.
       - MOOMOO_SIMULATED_ACC_IDS=${MOOMOO_SIMULATED_ACC_IDS:-}
+      - MOOMOO_OBSERVE_EXECUTION=${MOOMOO_OBSERVE_EXECUTION:-0}
+      - MOOMOO_JOURNAL_PATH=${MOOMOO_JOURNAL_PATH:-}
+      - MOOMOO_REAL_JOURNAL_PATH=${MOOMOO_REAL_JOURNAL_PATH:-}
       - MOOMOO_MAX_ORDER_QTY=${MOOMOO_MAX_ORDER_QTY:-}
       - MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY=${MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY:-USD:500}
       # Name-only entries preserve the distinction between omitted (disabled)
@@ -79,6 +86,11 @@ services:
       - MOOMOO_OPERATOR_AUTH_TOKEN=${MOOMOO_OPERATOR_AUTH_TOKEN:-}
       - MOOMOO_OPERATOR_ID=${MOOMOO_OPERATOR_ID:-}
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+      # Optional narrower credential for remote clients sharing this backend.
+      - MCP_RESTRICTED_AUTH_TOKEN=${MCP_RESTRICTED_AUTH_TOKEN:-}
+      - MCP_RESTRICTED_PERMISSIONS
+      - MCP_RESTRICTED_REAL_ACC_IDS
+      - MCP_RESTRICTED_SIMULATE_ACC_IDS
       # Only honoured in READ_ONLY mode, and only as "1".
       - MCP_ALLOW_UNAUTHENTICATED_HTTP=${MCP_ALLOW_UNAUTHENTICATED_HTTP:-}
       - FASTMCP_HOST=0.0.0.0
@@ -91,3 +103,6 @@ services:
 
 volumes:
   opend-data:
+  execution-data:
+  real-execution-data:
+  trading-controls-data:

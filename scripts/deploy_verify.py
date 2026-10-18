@@ -37,6 +37,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -136,7 +137,7 @@ def say(message: str) -> None:
     print(f"deploy_verify: {message}", file=sys.stderr, flush=True)
 
 
-def resolve_services(command: Sequence[str]) -> dict[str, Any]:
+def resolve_model(command: Sequence[str]) -> dict[str, Any]:
     """Resolve Compose internally without relaying configuration or raw errors."""
     try:
         completed = subprocess.run(list(command), capture_output=True, check=False)
@@ -157,7 +158,223 @@ def resolve_services(command: Sequence[str]) -> dict[str, Any]:
     services = model.get("services") if isinstance(model, dict) else None
     if not isinstance(services, dict) or not isinstance(services.get(SERVICE), dict):
         raise ConfigError(f"the Compose configuration has no {SERVICE} service.")
-    return services
+    return model
+
+
+def resolve_services(command: Sequence[str]) -> dict[str, Any]:
+    return resolve_model(command)["services"]
+
+
+def save_private_model(path: Path, model: dict[str, Any]) -> None:
+    """Persist effective configuration without exposing credentials or truncation."""
+    descriptor, temporary = tempfile.mkstemp(prefix=".deploy-config-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(model, stream)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def validate_application(model: dict[str, Any]) -> None:
+    """Run the selected image's settings validator with no network or broker."""
+    service = model["services"][SERVICE]
+    environment = service.get("environment", {})
+    image = service.get("image")
+    if not isinstance(environment, dict) or not isinstance(image, str) or not image:
+        raise ConfigError("The deployment needs a selected image and environment.")
+    values = {
+        name: decode_compose_dollars(value)
+        for name, value in environment.items()
+        if isinstance(value, str)
+    }
+    command = [
+        "docker",
+        "--context",
+        "rootless",
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,nodev,mode=1777,size=16m",
+        "--env",
+        "HOME=/tmp",
+        "--env",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--entrypoint",
+        "python",
+    ]
+    storage_targets = {
+        "/var/lib/moomoo-mcp/data",
+        "/app/real-execution-data",
+        "/var/lib/moomoo/trading-controls",
+    }
+    for mount in service.get("volumes", []):
+        if not isinstance(mount, dict) or mount.get("target") not in storage_targets:
+            continue
+        kind = mount.get("type")
+        source = mount.get("source")
+        if kind == "volume":
+            source = model.get("volumes", {}).get(source, {}).get("name", source)
+        if kind in {"volume", "bind"} and isinstance(source, str):
+            command.extend(
+                [
+                    "--mount",
+                    "type="
+                    + kind
+                    + ",source="
+                    + source
+                    + ",target="
+                    + mount["target"]
+                    + ",readonly",
+                ]
+            )
+    command.extend([image, "-m", "moomoo_mcp.settings", "--validate-storage"])
+    try:
+        completed = subprocess.run(
+            command, input=json.dumps(values).encode(), capture_output=True, check=False
+        )
+    except OSError:
+        raise ConfigError(
+            "Could not run the selected image's offline validator."
+        ) from None
+    if completed.returncode:
+        raise ConfigError(
+            "The selected image rejected its application settings; "
+            "the running deployment was not replaced."
+        )
+
+
+def capture_runtime(path: Path) -> None:
+    """Capture an older installation's actual configuration before first upgrade."""
+    command = ["docker", "--context", "rootless", "container", "inspect"]
+
+    def inspect(identifier: str) -> dict[str, Any]:
+        try:
+            result = subprocess.run(
+                [*command, "--format", "{{json .}}", identifier],
+                capture_output=True,
+                check=False,
+            )
+            value = json.loads(result.stdout)
+        except (OSError, ValueError):
+            raise ConfigError(
+                "Could not snapshot the current runtime configuration."
+            ) from None
+        if result.returncode or not isinstance(value, dict):
+            raise ConfigError("Could not snapshot the current runtime configuration.")
+        return value
+
+    container = inspect("moomoo-api-mcp")
+    project = (container.get("Config", {}).get("Labels") or {}).get(
+        "com.docker.compose.project"
+    )
+    if not isinstance(project, str) or not project:
+        raise ConfigError("The running container has no Compose project identity.")
+    model: dict[str, Any] = {"name": project, "services": {}, "volumes": {}}
+
+    def add_service(name: str, runtime: dict[str, Any]) -> None:
+        config = runtime["Config"]
+        host = runtime["HostConfig"]
+        service: dict[str, Any] = {
+            "image": runtime["Image"],
+            "container_name": runtime["Name"].removeprefix("/"),
+            "restart": (host.get("RestartPolicy") or {}).get("Name")
+            or "unless-stopped",
+            "environment": {
+                entry.split("=", 1)[0]: entry.split("=", 1)[1].replace("$", "$$")
+                for entry in config.get("Env", [])
+                if "=" in entry
+            },
+            "stdin_open": bool(config.get("OpenStdin")),
+            "tty": bool(config.get("Tty")),
+        }
+        if config.get("User"):
+            service["user"] = config["User"]
+        mounts = []
+        for mount in runtime.get("Mounts", []):
+            if mount["Type"] not in {"bind", "volume"}:
+                continue
+            source = mount.get("Name") if mount["Type"] == "volume" else mount["Source"]
+            if mount["Type"] == "volume":
+                alias = "state-" + str(len(model["volumes"]))
+                model["volumes"][alias] = {"external": True, "name": source}
+                source = alias
+            mounts.append(
+                {
+                    "type": mount["Type"],
+                    "source": source,
+                    "target": mount["Destination"],
+                    "read_only": not mount.get("RW", True),
+                }
+            )
+        if mounts:
+            service["volumes"] = mounts
+        ports = []
+        for target, bindings in (host.get("PortBindings") or {}).items():
+            for binding in bindings or []:
+                number, protocol = target.split("/", 1)
+                ports.append(
+                    {
+                        "target": int(number),
+                        "published": binding["HostPort"],
+                        "host_ip": binding["HostIp"],
+                        "protocol": protocol,
+                    }
+                )
+        if ports:
+            service["ports"] = ports
+        for source, target in (
+            ("ReadonlyRootfs", "read_only"),
+            ("CapDrop", "cap_drop"),
+            ("SecurityOpt", "security_opt"),
+        ):
+            if host.get(source):
+                service[target] = host[source]
+        if host.get("Tmpfs"):
+            service["tmpfs"] = [
+                target + ":" + options for target, options in host["Tmpfs"].items()
+            ]
+        model["services"][name] = service
+
+    add_service(SERVICE, container)
+    try:
+        tunnels = subprocess.run(
+            [
+                "docker",
+                "--context",
+                "rootless",
+                "ps",
+                "-aq",
+                "--filter",
+                "label=com.docker.compose.project=" + project,
+                "--filter",
+                "label=com.docker.compose.service=chatgpt-tunnel",
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if tunnels.returncode:
+            raise ConfigError("Could not snapshot the current tunnel selection.")
+        identifiers = tunnels.stdout.decode().split()
+        if len(identifiers) > 1:
+            raise ConfigError("The current tunnel selection is ambiguous.")
+        if identifiers:
+            add_service("chatgpt-tunnel", inspect(identifiers[0]))
+    except OSError:
+        raise ConfigError("Could not snapshot the current tunnel selection.") from None
+    save_private_model(path, model)
 
 
 def paper_overlay() -> str:
@@ -193,7 +410,9 @@ def execution_overlays() -> list[str]:
             overlays.append("docker-compose.paper.yml")
         overlays.append("docker-compose.real.yml")
     elif mode == "READ_ONLY":
-        return []
+        # The operator channel remains available after write permission is
+        # withdrawn; its durable pause/approval state retains the same store.
+        pass
     else:
         raise ConfigError(
             f"{SERVICE} has an invalid trading mode. "
@@ -235,10 +454,25 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
         raise ConfigError(f"{SERVICE} does not set {TOKEN_VARIABLE}.")
     if isinstance(services, dict) and "chatgpt-tunnel" in services:
         mode = (environment.get("MOOMOO_TRADING_MODE") or "READ_ONLY").strip().upper()
-        if mode not in {"READ_ONLY", "SIMULATE"}:
+        restricted = (environment.get("MCP_RESTRICTED_AUTH_TOKEN") or "").strip()
+        permissions = {
+            value.strip()
+            for value in (
+                environment.get("MCP_RESTRICTED_PERMISSIONS")
+                or "market_read,real_read,simulate_read,simulate_write"
+            ).split(",")
+        }
+        if restricted and permissions.intersection({"real_write", "gateway_control"}):
             raise ConfigError(
-                "The selected tunnel requires READ_ONLY or SIMULATE; stop it first."
+                "The selected tunnel credential must exclude REAL writes "
+                "and gateway control."
             )
+        if mode == "REAL" and not restricted:
+            raise ConfigError(
+                "A REAL backend requires a restricted ChatGPT credential."
+            )
+        if mode not in {"READ_ONLY", "SIMULATE", "REAL"}:
+            raise ConfigError("The selected tunnel has an invalid trading mode.")
     token = environment[TOKEN_VARIABLE]
     if not isinstance(token, str):
         raise ConfigError(
@@ -644,6 +878,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.add_parser(
         "execution-overlays", help="print the storage overlays needed without a tunnel"
     )
+    snapshot_parser = commands.add_parser(
+        "save-config", help="save effective private configuration for this deployment"
+    )
+    snapshot_parser.add_argument("path", type=Path)
+    capture_parser = commands.add_parser(
+        "capture-runtime", help="snapshot the existing runtime before its first upgrade"
+    )
+    capture_parser.add_argument("path", type=Path)
+    commands.add_parser(
+        "preflight", help="validate the selected image's application settings offline"
+    )
     verify_parser = commands.add_parser(
         "verify", help="send an authenticated MCP initialize and validate the result"
     )
@@ -676,7 +921,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             for overlay in execution_overlays():
                 print(overlay)
             return 0
+        if args.command == "capture-runtime":
+            capture_runtime(args.path)
+            return 0
         token = resolve_token()
+        if args.command == "save-config":
+            save_private_model(args.path, resolve_model(COMPOSE_CONFIG))
+            return 0
+        if args.command == "preflight":
+            validate_application(resolve_model(COMPOSE_CONFIG))
+            say("Selected image application settings validated without broker access.")
+            return 0
         if args.command == "check-config":
             if token:
                 say(f"{TOKEN_VARIABLE} resolves for {SERVICE}; verify will send it.")

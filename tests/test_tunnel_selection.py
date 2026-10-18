@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from scripts import tunnel_deployment as selection
+from tests.assertions import raises_message
 from tests.compose_helpers import production_wrapper
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,7 +153,7 @@ def test_wrapper_allows_explicit_authenticated_allowed_mode_start(
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "started").exists()
     args, _ = json.loads((tmp_path / "docker-call.json").read_text())
-    assert "docker-compose.paper.yml" in args
+    assert ("docker-compose.paper.yml" in args) is (mode.strip().upper() == "SIMULATE")
     assert "docker-compose.chatgpt.yml" in args
     assert args[args.index("-p") + 1] == "existing-project"
     assert "synthetic-only" not in result.stdout + result.stderr
@@ -161,8 +162,8 @@ def test_wrapper_allows_explicit_authenticated_allowed_mode_start(
 @pytest.mark.parametrize(
     "options,diagnostic",
     [
-        ({"mode": "REAL"}, "READ_ONLY"),
-        ({"mode": "UNKNOWN"}, "READ_ONLY"),
+        ({"mode": "REAL"}, "restricted ChatGPT credential"),
+        ({"mode": "UNKNOWN"}, "invalid trading mode"),
         ({"token": ""}, "MCP_AUTH_TOKEN"),
         ({"token": "   "}, "MCP_AUTH_TOKEN"),
         ({"key": ""}, "CHATGPT_TUNNEL_API_KEY"),
@@ -224,8 +225,11 @@ def test_disabled_tunnel_keeps_local_paper_configuration(tmp_path, mode):
     assert "synthetic" not in result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("mode", ["REAL", "UNKNOWN"])
-def test_resolved_selected_tunnel_refuses_unsafe_mode(monkeypatch, mode):
+@pytest.mark.parametrize(
+    "mode,diagnostic",
+    [("REAL", "restricted ChatGPT credential"), ("UNKNOWN", "invalid trading mode")],
+)
+def test_resolved_selected_tunnel_refuses_unsafe_mode(monkeypatch, mode, diagnostic):
     from unittest.mock import Mock
 
     from scripts import deploy_verify
@@ -250,7 +254,7 @@ def test_resolved_selected_tunnel_refuses_unsafe_mode(monkeypatch, mode):
             )
         ),
     )
-    with pytest.raises(deploy_verify.ConfigError, match="READ_ONLY"):
+    with raises_message(deploy_verify.ConfigError, diagnostic):
         deploy_verify.resolve_token(["fixture-only"])
 
 

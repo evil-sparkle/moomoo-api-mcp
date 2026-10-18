@@ -256,7 +256,7 @@ def test_disabled_operator_route_is_not_exposed_and_empty_bearer_is_not_valid():
             "/operator/approvals/fixture-request", headers=headers(MCP_TOKEN)
         )
         empty = client.get("/operator/approvals/fixture-request", headers=headers(""))
-    assert absent.status_code == 404
+    assert absent.status_code == 401
     assert empty.status_code == 401
     services.assert_not_called()
 

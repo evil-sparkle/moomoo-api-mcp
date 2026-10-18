@@ -2,4 +2,4 @@
 services:
   moomoo-mcp:
     build: !reset null
-    image: "${ECR_REGISTRY:?Run scripts/deploy.sh --prepare first}/moomoo-api-mcp:${IMAGE_TAG:?Run scripts/deploy.sh --prepare first}"
+    image: "${MOOMOO_APP_IMAGE:-${ECR_REGISTRY:?Run scripts/deploy.sh --prepare first}/moomoo-api-mcp:${IMAGE_TAG:?Run scripts/deploy.sh --prepare first}}"

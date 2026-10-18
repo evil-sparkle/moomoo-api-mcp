@@ -15,9 +15,68 @@ from moomoo_mcp.services.trading_policy import (
 )
 from moomoo_mcp.settings import load_settings
 from scripts import deploy_verify
-from tests.compose_helpers import PROD_ENV, SERVICE, production_wrapper, render_compose
+from tests.compose_helpers import (
+    PROD_ENV,
+    ROOT,
+    SERVICE,
+    production_wrapper,
+    render_compose,
+)
 
 CONTROLS_PATH = "/var/lib/moomoo/trading-controls/controls.sqlite3"
+
+
+def test_private_snapshots_and_interrupted_temporary_files_are_ignored():
+    names = [
+        ".deploy-config.json",
+        ".deploy-config.pending.json",
+        ".deploy-config-interrupted",
+    ]
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "check-ignore", "--no-index", "--stdin"],
+        input="\n".join(names) + "\n",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == names
+    assert ".deploy-config*" in (ROOT / ".dockerignore").read_text().splitlines()
+
+
+@pytest.mark.parametrize("token", ["one$$two", "$$${HOME}$$$$tail$", "$literal"])
+@pytest.mark.parametrize("captured", [False, True])
+def test_private_snapshot_roundtrip_preserves_dollar_tokens(tmp_path, token, captured):
+    snapshot = tmp_path / "private-compose.json"
+    if captured:
+        runtime = {
+            "Name": "/moomoo-api-mcp",
+            "Image": "sha256:" + "a" * 64,
+            "Config": {
+                "Env": ["MCP_AUTH_TOKEN=" + token],
+                "Labels": {"com.docker.compose.project": "snapshot-test"},
+            },
+            "HostConfig": {},
+            "Mounts": [],
+        }
+        with patch.object(
+            deploy_verify.subprocess,
+            "run",
+            side_effect=[
+                subprocess.CompletedProcess([], 0, stdout=json.dumps(runtime).encode()),
+                subprocess.CompletedProcess([], 0, stdout=b""),
+            ],
+        ):
+            deploy_verify.capture_runtime(snapshot)
+    else:
+        effective = render_compose("docker-compose.yml", env={"MCP_AUTH_TOKEN": token})
+        effective["services"][SERVICE]["image"] = "synthetic-image@sha256:" + "a" * 64
+        deploy_verify.save_private_model(snapshot, effective)
+    resolved = render_compose(str(snapshot))
+    with patch.object(deploy_verify.subprocess, "run") as run:
+        run.return_value = subprocess.CompletedProcess([], 0)
+        deploy_verify.validate_application(resolved)
+    assert json.loads(run.call_args.kwargs["input"])["MCP_AUTH_TOKEN"] == token
 
 
 def trading_environment(mode):
@@ -33,6 +92,27 @@ def journal_overlay(mode):
     return (
         "docker-compose.paper.yml" if mode == "SIMULATE" else "docker-compose.real.yml"
     )
+
+
+def test_operator_controls_storage_survives_real_to_read_only_downgrade():
+    configured = {
+        "MCP_AUTH_TOKEN": "synthetic-client-token",
+        "MOOMOO_OPERATOR_AUTH_TOKEN": "synthetic-operator-token",
+        "MOOMOO_OPERATOR_ID": "test-operator",
+        "MOOMOO_REAL_ACC_IDS": "456",
+    }
+    for mode in ("REAL", "READ_ONLY"):
+        values = configured | {"MOOMOO_TRADING_MODE": mode}
+        base = render_compose("docker-compose.yml", env=values)
+        with patch.object(
+            deploy_verify, "resolve_services", return_value=base["services"]
+        ):
+            overlays = deploy_verify.execution_overlays()
+        assert "docker-compose.controls.yml" in overlays
+        effective = render_compose("docker-compose.yml", *overlays, env=values)
+        settings = load_settings(effective["services"][SERVICE]["environment"])
+        assert settings.controls_path == CONTROLS_PATH
+        assert settings.operator_auth_token == configured["MOOMOO_OPERATOR_AUTH_TOKEN"]
 
 
 @pytest.mark.parametrize("mode", ["SIMULATE", "REAL"])
@@ -201,11 +281,51 @@ def test_production_wrapper_keeps_controls_and_permits_tunnel_removal(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     arguments, _ = json.loads((tmp_path / "docker-call.json").read_text())
-    assert arguments.count("docker-compose.paper.yml") == 1
+    assert arguments.count("docker-compose.paper.yml") == int(operation == "up")
     assert ("docker-compose.controls.yml" in arguments) is (operation == "up")
     assert ("docker-compose.chatgpt.yml" in arguments) is tunnel
     assert arguments[-2:] == command
     assert (tmp_path / "config-seen").exists() is (operation == "up")
+
+
+def test_real_restricted_tunnel_does_not_enable_paper_execution(tmp_path):
+    values = trading_environment("REAL") | {
+        "MCP_RESTRICTED_AUTH_TOKEN": "synthetic-restricted-token",
+        "CHATGPT_TUNNEL_IMAGE": "sha256:" + "a" * 64,
+        "CHATGPT_TUNNEL_API_KEY": "synthetic-tunnel-key",
+        "CHATGPT_TUNNEL_ID": "tunnel_synthetic",
+    }
+    effective = render_compose(
+        "docker-compose.yml",
+        "docker-compose.real.yml",
+        "docker-compose.chatgpt.yml",
+        env=values,
+    )
+    settings = load_settings(effective["services"][SERVICE]["environment"])
+    assert settings.journal_path is None
+    assert not settings.simulated_account_allowlist
+    (tmp_path / ".chatgpt-deploy.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "image": values["CHATGPT_TUNNEL_IMAGE"],
+                "project": "test",
+            }
+        )
+    )
+    scripts, environment = production_wrapper(tmp_path, effective["services"])
+    result = subprocess.run(
+        [str(scripts / "compose-prod.sh"), "up", "-d"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    arguments, _ = json.loads((tmp_path / "docker-call.json").read_text())
+    assert "docker-compose.real.yml" in arguments
+    assert "docker-compose.paper.yml" not in arguments
 
 
 def test_local_build_arguments_use_dotenv_overrides_and_preserve_dockerfile_defaults(

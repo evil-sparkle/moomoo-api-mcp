@@ -150,6 +150,12 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(value["moomoo_mcp_project"], "existing-moomoo")
         self.assertEqual(value["moomoo_mcp_expected_mode"], "READ_ONLY")
         self.assertTrue(value["moomoo_mcp_tunnel_enabled"])
+        for mode in ["READ_ONLY", "SIMULATE", "REAL"]:
+            _, configured = deployment_settings(
+                validate_manifest(manifest(), run_record()),
+                environment | {"MOOMOO_EXPECTED_MODE": mode},
+            )
+            self.assertEqual(configured["moomoo_mcp_expected_mode"], mode)
         self.assertFalse(
             any("key" in key or "token" in key or "password" in key for key in value)
         )
@@ -160,6 +166,7 @@ class ManifestTests(unittest.TestCase):
             "MOOMOO_COMPOSE_PROJECT": "../other",
             "MOOMOO_ENV_FILE": "relative/.env",
             "MOOMOO_TUNNEL_ENABLED": "yes",
+            "MOOMOO_EXPECTED_MODE": "unknown",
         }.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
                 deployment_settings(

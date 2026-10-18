@@ -6,6 +6,7 @@ ORIGINAL_ARGS=("$@")
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO_ROOT"
+unset MOOMOO_COMPOSE_CONFIG
 prepare=false
 tunnel_mode=retain
 while [ "$#" -gt 0 ]; do
@@ -104,19 +105,41 @@ if [ "${DEPLOY_REEXEC:-0}" != "1" ]; then
   fi
 fi
 
+# Share the native release lock with the complete legacy transaction, including
+# rollback. The helper comes from the selected commit on an older host checkout.
+lock_helper="$(mktemp "${TMPDIR:-/tmp}/deployment-lock.XXXXXX")"
+trap 'rm -f "$lock_helper"' EXIT INT TERM
+git show "${commit}:scripts/deployment_lock.py" > "$lock_helper"
+if [ -z "${MOOMOO_DEPLOY_LOCK_TOKEN:-}" ]; then
+  # Preserve Bash's shell-script execution semantics when the outer deployment
+  # re-executed a temporary target script; Python does not implement ENOEXEC fallback.
+  python3 "$lock_helper" run -- bash "$0" "${ORIGINAL_ARGS[@]}"
+  exit $?
+fi
+python3 "$lock_helper" run -- true
+rm -f "$lock_helper"
+trap - EXIT INT TERM
+
 # CI tags every main build with its short commit, so the image matches the source
 # about to be checked out; git v* tags are bookmarks and are deliberately ignored here.
-ecr_has_tag() {
+valid_digest() {
+  local digest="${1#sha256:}"
+  [ "$digest" != "$1" ] && [ "${#digest}" = 64 ] || return 1
+  case "$digest" in *[!0-9a-f]*) return 1 ;; esac
+}
+
+ecr_digest() {
   local image="$1" tag="$2"
   local got
   got="$(aws ecr batch-get-image --region "$region" --registry-id "$account" \
     --repository-name "$image" --image-ids "imageTag=$tag" \
     --query 'images[0].imageId.imageDigest' --output text)"
-  [ -n "$got" ] && [ "$got" != None ]
+  valid_digest "$got" || return 1
+  printf '%s\n' "$got"
 }
 
 # The application image contains both the gateway and the server.
-if ecr_has_tag moomoo-api-mcp "${short}"; then
+if image_digest="$(ecr_digest moomoo-api-mcp "${short}")"; then
   image_tag="${short}"
 else
   # Not necessarily "no such tag": a denied or failed probe lands here too, and
@@ -129,7 +152,7 @@ if [ "$tunnel_selected" = true ]; then
   if ! tunnel_digest="$(aws ecr batch-get-image --region "$region" --registry-id "$account" \
     --repository-name moomoo-api-mcp --image-ids "imageTag=tunnel-${short}" \
     --query 'images[0].imageId.imageDigest' --output text)" \
-    || [[ ! "$tunnel_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    || ! valid_digest "$tunnel_digest"; then
     echo "Aborting deploy of ${short}: could not confirm moomoo-api-mcp:tunnel-${short}. Check CI publication and any AWS error above." >&2
     exit 1
   fi
@@ -202,6 +225,8 @@ finish_deploy() {
       fi
       rm -f .chatgpt-deploy.json
     fi
+    unset MOOMOO_COMPOSE_CONFIG
+    rm -f .deploy-config.pending.json
     if [ "$has_previous_env" = true ]; then
       printf '%s\n' "$previous_env" > .deploy.env
       git checkout --quiet --detach "$previous_commit"
@@ -211,7 +236,13 @@ finish_deploy() {
         if [ -z "$previous_selection" ] && [ -n "$deployment_project" ]; then
           rollback_project=(-p "$deployment_project")
         fi
-        if ! ./scripts/compose-prod.sh "${rollback_project[@]}" up -d --remove-orphans; then
+        local rollback_command=(./scripts/compose-prod.sh "${rollback_project[@]}")
+        if [ -f .deploy-config.json ]; then
+          # The restored checkout can predate snapshot support. Invoke Compose
+          # directly so its old wrapper cannot reload the operator's edited .env.
+          rollback_command=(docker --context rootless compose -f "$REPO_ROOT/.deploy-config.json")
+        fi
+        if ! "${rollback_command[@]}" up -d --remove-orphans; then
           echo "Rolled back configuration and checkout to ${prev_short}, but restarting prior images failed. Stack needs manual attention: retry scripts/deploy.sh for that commit." >&2
           exit 1
         fi
@@ -233,6 +264,13 @@ finish_deploy() {
   if [ "$prepare" = false ]; then
     previous_image="$(docker --context rootless container inspect \
       --format '{{.Image}}' moomoo-api-mcp 2>/dev/null)" || previous_image=""
+    if [ "$has_previous_env" = true ] && [ ! -f .deploy-config.json ] \
+      && [ -n "$previous_image" ]; then
+      # The checked-out helper may predate snapshots; use the target helper even
+      # before replacing the checkout. This command reads only Docker metadata.
+      git show "${commit}:scripts/deploy_verify.py" \
+        | python3 - capture-runtime .deploy-config.json || rollback false
+    fi
   fi
 
   if [ -f .chatgpt-deploy.json ]; then
@@ -274,9 +312,10 @@ finish_deploy() {
     echo 'Target commit lacks production deployment files; choose a newer commit.' >&2
     rollback false
   fi
-  printf 'ECR_REGISTRY=%s\nIMAGE_TAG=%s\n' "$registry" "${image_tag}" > .deploy.env
+  printf 'ECR_REGISTRY=%s\nIMAGE_TAG=%s\nMOOMOO_APP_IMAGE=%s/moomoo-api-mcp@%s\n' \
+    "$registry" "${image_tag}" "$registry" "$image_digest" > .deploy.env
   if [ -n "$deployment_project" ]; then
-    if [[ ! "$deployment_project" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+    if ! python3 -c 'import sys; from scripts.deployment_manifest import validate_project; validate_project(sys.argv[1])' "$deployment_project"; then
       echo 'Invalid saved Compose project; deployment stopped.' >&2
       rollback false
     fi
@@ -297,10 +336,14 @@ finish_deploy() {
   # compose-prod.sh and the compose files all come from the target commit, with
   # the .deploy.env just written.
   local verify_helper="$REPO_ROOT/scripts/deploy_verify.py"
+  # Capture once, then use the same image, credentials, account grants and volumes
+  # for validation, startup and probes even if .env changes during deployment.
+  python3 "$verify_helper" save-config .deploy-config.pending.json || rollback false
+  export MOOMOO_COMPOSE_CONFIG="$REPO_ROOT/.deploy-config.pending.json"
+  ./scripts/compose-prod.sh pull || rollback false
+  python3 "$verify_helper" preflight || rollback false
   if [ "$prepare" = false ]; then
     # Nothing has been started yet, so there is nothing to restart either.
-    python3 "$verify_helper" check-config || rollback false
-    ./scripts/compose-prod.sh pull || rollback false
     # --remove-orphans clears containers left behind by manual troubleshooting,
     # which otherwise fail the start with "container name is already in use".
     ./scripts/compose-prod.sh up -d --remove-orphans || rollback true
@@ -311,6 +354,11 @@ finish_deploy() {
       --url "${DEPLOY_VERIFY_URL:-http://127.0.0.1:8000/mcp}" \
       --timeout "${DEPLOY_VERIFY_TIMEOUT:-90}"; then
       echo "MCP deployment verified: ${short} as ${image_tag}" >&2
+      if [ -f .deploy-config.json ]; then
+        cp -p .deploy-config.json .deploy-config.previous.json
+      fi
+      mv .deploy-config.pending.json .deploy-config.json
+      export MOOMOO_COMPOSE_CONFIG="$REPO_ROOT/.deploy-config.json"
       # Readiness is separate from deployment verification: missing login state,
       # broker outages and health diagnostics cannot be fixed by image rollback.
       if python3 "$verify_helper" gateway-readiness \
@@ -336,8 +384,8 @@ finish_deploy() {
       rollback true
     fi
   else
-    python3 "$verify_helper" check-config || rollback false
-    ./scripts/compose-prod.sh pull || rollback false
+    # Preparing never switches the configuration used by the running service.
+    unset MOOMOO_COMPOSE_CONFIG
   fi
 }
 finish_deploy

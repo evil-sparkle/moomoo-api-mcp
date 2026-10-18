@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from moomoo_mcp.client_authorization import account_access_allowed, permission_allowed
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.health import sanitize_error
 from moomoo_mcp.services.trading_policy import TradingMode
@@ -81,13 +82,30 @@ def inspect_trading_capabilities(
     evidence_errors: dict[str, str] = {}
     account: dict[str, Any] | None = None
     try:
-        candidates = service.get_accounts(trd_env=environment)
         if requested_id:
             candidates = [
                 row
-                for row in candidates
+                for row in service.get_accounts(trd_env=environment)
                 if service._exact_account_id(row.get("acc_id"), allow_zero=False)
                 == requested_id
+            ]
+        else:
+            candidates = service._eligible_accounts(environment, market)
+            if environment == "SIMULATE" and service.paper is not None:
+                candidates = [
+                    row
+                    for row in candidates
+                    if service._exact_account_id(row.get("acc_id"), allow_zero=False)
+                    in service.paper.allowlist
+                ]
+            if not candidates:
+                # Still explain an observed account's refusal when no write
+                # candidate exists; never replace an eligible account with it.
+                candidates = service.get_accounts(trd_env=environment)
+            candidates = [
+                row
+                for row in candidates
+                if account_access_allowed(environment, row.get("acc_id", ""))
             ]
         if len(candidates) == 1:
             account = candidates[0]
@@ -171,6 +189,13 @@ def inspect_trading_capabilities(
     if not executor_scope:
         policy_reasons.append("OUTSIDE_PAPER_EXECUTOR_SCOPE")
     writes_allowed = mode_allowed and account_allowlisted is True and executor_scope
+    client_writes_allowed = permission_allowed(environment.lower() + "_write") and (
+        resolved_id is None
+        or account_access_allowed(environment, resolved_id, write=True)
+    )
+    if not client_writes_allowed:
+        policy_reasons.append("CLIENT_WRITE_NOT_AUTHORIZED")
+        writes_allowed = False
     if "SYMBOL_NOT_ALLOWLISTED" in policy_reasons:
         writes_allowed = False
 
@@ -195,18 +220,23 @@ def inspect_trading_capabilities(
     daily_caps = dict(getattr(policy, "max_daily_notional", {}))
     controls_required = require_approval or bool(daily_caps)
     controls_state = "DISABLED"
+    operator_paused = False
     controls = getattr(service, "trading_controls", None)
-    if controls_required:
-        if controls is None:
+    if controls is None:
+        if controls_required:
             reasons.append("TRADING_CONTROLS_UNAVAILABLE")
-        else:
-            try:
-                controls_state = controls.health().get("state", "UNKNOWN")
-            except Exception as exc:  # noqa: BLE001 - unavailable controls block
-                controls_state = "UNKNOWN"
-                evidence_errors["controls"] = sanitize_error(exc)
-            if controls_state != "READY":
-                reasons.append("TRADING_CONTROLS_" + controls_state)
+    else:
+        try:
+            controls_state = controls.health().get("state", "UNKNOWN")
+            pause = controls.pause_state(environment, str(resolved_id or "0"))
+            operator_paused = pause.get("paused") is True
+        except Exception as exc:  # noqa: BLE001 - unavailable controls block
+            controls_state = "UNKNOWN"
+            evidence_errors["controls"] = sanitize_error(exc)
+        if controls_state != "READY":
+            reasons.append("TRADING_CONTROLS_" + controls_state)
+        if operator_paused:
+            reasons.append("OPERATOR_PAUSED")
 
     blocked = reasons + policy_reasons
     firm = account.get("security_firm") if account else None
@@ -241,6 +271,7 @@ def inspect_trading_capabilities(
         },
         "allowed": {
             "writes": writes_allowed,
+            "client_writes": client_writes_allowed,
             "trading_mode": policy.mode.value,
             "account_allowlisted": account_allowlisted,
             "order_types": ["NORMAL"] if environment == "SIMULATE" else order_types,
@@ -265,6 +296,7 @@ def inspect_trading_capabilities(
             ),
             "controls_required": controls_required,
             "controls_state": controls_state,
+            "operator_paused": operator_paused,
             "broker_acceptance_verified": False,
         },
         "evidence_errors": evidence_errors,

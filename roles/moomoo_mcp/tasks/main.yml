@@ -10,7 +10,7 @@
       - moomoo_mcp_tunnel_image.count('@sha256:') == 1
       - moomoo_mcp_project | length > 0
       - moomoo_mcp_env_file.startswith('/')
-      - moomoo_mcp_expected_mode == 'READ_ONLY'
+      - moomoo_mcp_expected_mode in ['READ_ONLY', 'SIMULATE', 'REAL']
       - moomoo_mcp_tunnel_enabled is boolean
     fail_msg: Select one non-root host, an exact source commit, ECR digests and the existing project.
 
@@ -60,20 +60,31 @@
 
 - name: Serialize native releases and runtime changes
   when: not ansible_check_mode
-  environment: "{{ moomoo_mcp_docker_env }}"
+  environment: "{{ moomoo_mcp_docker_env | combine({'MOOMOO_DEPLOY_LOCK_ROOT': moomoo_mcp_root}) }}"
   block:
-    - name: Acquire an exclusive lock without replacing another caller's lock
-      ansible.builtin.command:
-        argv: [mkdir, "{{ moomoo_mcp_root }}/.deployment-lock"]
+    - name: Acquire an exclusive deployment lock and private delegation token
+      ansible.builtin.script:
+        cmd: "{{ (moomoo_mcp_source_dir ~ '/scripts/deployment_lock.py') | quote }} acquire"
+        executable: python3
       register: moomoo_mcp_lock
       changed_when: true
+      no_log: true
+    - name: Select a fresh immutable configuration release
+      ansible.builtin.command:
+        argv: [python3, -c, "import uuid; print(uuid.uuid4().hex)"]
+      register: moomoo_mcp_release_nonce
+      changed_when: false
     - name: Install and validate the public release while holding the lock
       ansible.builtin.import_tasks: deploy.yml
+      environment: "{{ moomoo_mcp_docker_env | combine({'MOOMOO_DEPLOY_LOCK_ROOT': moomoo_mcp_root, 'MOOMOO_DEPLOY_LOCK_TOKEN': moomoo_mcp_lock.stdout | trim}) }}"
   always:
     - name: Release only the lock acquired by this caller
-      ansible.builtin.command:
-        argv: [rmdir, "{{ moomoo_mcp_root }}/.deployment-lock"]
+      ansible.builtin.script:
+        cmd: "{{ (moomoo_mcp_source_dir ~ '/scripts/deployment_lock.py') | quote }} release"
+        executable: python3
+      environment: "{{ moomoo_mcp_docker_env | combine({'MOOMOO_DEPLOY_LOCK_ROOT': moomoo_mcp_root, 'MOOMOO_DEPLOY_LOCK_TOKEN': moomoo_mcp_lock.stdout | default('') | trim}) }}"
       changed_when: true
+      no_log: true
       when:
         - moomoo_mcp_lock is defined
         - moomoo_mcp_lock is succeeded

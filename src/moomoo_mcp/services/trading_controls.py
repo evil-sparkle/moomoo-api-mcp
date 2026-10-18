@@ -163,6 +163,14 @@ CREATE INDEX daily_charge ON charges(day, environment, account, currency);
                     "SELECT environment, account, operation_id, canonical, day, "
                     "currency, amount, approval_id, created_at FROM charges LIMIT 0"
                 )
+                # Additive migration: old approval/budget stores retain their data.
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS execution_pauses ("
+                    "environment TEXT NOT NULL, account TEXT NOT NULL, "
+                    "paused INTEGER NOT NULL CHECK (paused IN (0, 1)), "
+                    "operator_id TEXT NOT NULL, reason TEXT NOT NULL, "
+                    "updated_at REAL NOT NULL, PRIMARY KEY(environment, account))"
+                )
         except sqlite3.Error as exc:
             raise TradingControlError(
                 "Trading controls storage is unavailable"
@@ -196,6 +204,66 @@ CREATE INDEX daily_charge ON charges(day, environment, account, currency);
 
     def health(self) -> dict:
         return {"state": "BLOCKED" if self._closed or self._failed else "READY"}
+
+    def pause_state(self, environment: str, account: str = "0") -> dict:
+        """Observe persistent new-risk gates, including the environment gate."""
+        environment, account = self._pause_scope(environment, account)
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM execution_pauses WHERE environment=? "
+                "AND account IN ('0', ?) ORDER BY account",
+                (environment, account),
+            ).fetchall()
+        return {
+            "trd_env": environment,
+            "acc_id": account,
+            "paused": any(bool(row["paused"]) for row in rows),
+            "decisions": [dict(row) for row in rows],
+        }
+
+    @staticmethod
+    def _pause_scope(environment: str, account: str) -> tuple[str, str]:
+        environment = environment.strip().upper()
+        account = str(account)
+        if environment not in {"REAL", "SIMULATE"}:
+            raise ValueError("trd_env must be REAL or SIMULATE")
+        if not account.isascii() or not account.isdecimal():
+            raise ValueError("acc_id must be an exact decimal identifier")
+        return environment, str(int(account))
+
+    def set_paused(
+        self,
+        environment: str,
+        paused: bool,
+        *,
+        operator_id: str,
+        reason: str,
+        account: str = "0",
+    ) -> dict:
+        """Pause new risk without revoking cancellation or recovery access."""
+        environment, account = self._pause_scope(environment, account)
+        if type(paused) is not bool:
+            raise ValueError("paused must be a boolean")
+        if not operator_id or len(operator_id) > 128 or not operator_id.isprintable():
+            raise ValueError("Operator identity is required and bounded")
+        if not reason.strip() or len(reason) > 2000 or not reason.isprintable():
+            raise ValueError("A bounded printable reason is required")
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT INTO execution_pauses VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(environment, account) DO UPDATE SET "
+                "paused=excluded.paused, operator_id=excluded.operator_id, "
+                "reason=excluded.reason, updated_at=excluded.updated_at",
+                (environment, account, int(paused), operator_id, reason, self.clock()),
+            )
+        return self.pause_state(environment, account)
+
+    def check_new_risk(self, environment: str, account: str | int) -> None:
+        if self.pause_state(environment, str(account))["paused"]:
+            raise TradingControlError(
+                f"New {environment} exposure is paused by the operator; "
+                "cancellation and recovery remain available"
+            )
 
     @staticmethod
     def _view(row: sqlite3.Row) -> dict:

@@ -44,9 +44,7 @@ def authorization_header() -> str:
     if not token.strip() or any(
         character < " " or character > "~" for character in token
     ):
-        raise PreflightError(
-            "MCP_AUTH_TOKEN must contain a valid ordinary bearer token."
-        )
+        raise PreflightError("MCP_AUTH_TOKEN must contain a valid client bearer token.")
     # Match the MCP settings parser's normalization of the shared token.
     return "Bearer " + token.strip()
 

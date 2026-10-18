@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from moomoo_mcp.client_authorization import ClientGrants, client_grants_context
 from moomoo_mcp.services.base_service import HealthCheck, MoomooService
 from moomoo_mcp.services.trade_service import TradeService
 
@@ -55,12 +56,45 @@ class TestCheckHealthTool:
 
         result = await call_tool("check_health")
 
-        assert result.structured == HEALTHY
+        assert result.structured == {
+            **HEALTHY,
+            "client_authorization": {
+                "restricted": False,
+                "permissions": [
+                    "gateway_control",
+                    "market_read",
+                    "real_read",
+                    "real_write",
+                    "simulate_read",
+                    "simulate_write",
+                ],
+            },
+        }
         assert result.json["status"] == "connected"
         assert result.json["gateway_version"] == "9.2.5208"
         mock_moomoo_service.start_health_check.assert_called_once_with(
             trade_service=mock_trade_service
         )
+
+    @pytest.mark.parametrize(
+        "grants",
+        [
+            ClientGrants(permissions=frozenset({"market_read"})),
+            ClientGrants(real_acc_ids=frozenset({123})),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_restricted_health_omits_the_global_account_count(
+        self, call_tool, mock_moomoo_service, grants
+    ):
+        stub_health(mock_moomoo_service, HEALTHY)
+
+        with client_grants_context(grants):
+            result = await call_tool("check_health")
+
+        assert result.structured["trade"] == {"status": "ok"}
+        assert result.structured["client_authorization"]["restricted"] is True
+        assert HEALTHY["trade"]["account_count"] == 2
 
     @pytest.mark.asyncio
     async def test_the_execution_halt_crosses_the_mcp_boundary(

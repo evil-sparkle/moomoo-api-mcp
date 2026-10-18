@@ -11,8 +11,18 @@ from moomoo_mcp.services.base_service import HealthCheck
 
 
 def execution_fixture(environment):
-    row = {"operation_id": "shared-token", "state": "ACKNOWLEDGED"}
-    result = {**row, "trd_env": environment, "admission_epoch": environment + "-epoch"}
+    row = {
+        "operation_id": "shared-token",
+        "state": "ACKNOWLEDGED",
+        "account": "123",
+    }
+    result = {
+        "operation_id": row["operation_id"],
+        "state": row["state"],
+        "acc_id": row["account"],
+        "trd_env": environment,
+        "admission_epoch": environment + "-epoch",
+    }
     return SimpleNamespace(
         store=SimpleNamespace(lookup=MagicMock(return_value=row)),
         result=MagicMock(return_value=result),

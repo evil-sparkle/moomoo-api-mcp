@@ -444,7 +444,6 @@ CREATE TABLE recovery_checks (
         if health["state"] != "READY":
             raise ExecutionConflict(
                 f"{self.environment} execution {health['state']}: "
-                f"pending operations {health['pending_operation_ids']}; "
                 "automatic recovery or healthy storage restart is required; "
                 "see check_health/get_execution. No order was sent"
             )

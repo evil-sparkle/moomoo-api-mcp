@@ -5,6 +5,11 @@ from typing import Any
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
 
+from moomoo_mcp.client_authorization import (
+    client_authorization_status,
+    current_client_grants,
+    visible_journal_health,
+)
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.tools.annotations import READ_ONLY_TOOL
 from moomoo_mcp.tools.offload import await_futures
@@ -30,7 +35,8 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
         - checked_at: UTC observation time (ISO-8601, 'Z' suffix).
         - quote / trade: Per-service results, each with a status of 'ok',
           'error', 'timeout', or 'unavailable', plus a 'reason' and a sanitized
-          'error' when the probe failed.
+          'error' when the probe failed. Restricted clients omit the global
+          trading account count.
         - trading_mode: This server's configured MOOMOO_TRADING_MODE
           ('READ_ONLY', 'SIMULATE', or 'REAL'). It says which writes the server
           will issue at all, which is separate from whether the gateway would
@@ -62,10 +68,25 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
         (*check.futures, journal_future, real_journal_future), check.remaining()
     )
     status = check.result()
+    if current_client_grants() is not None and isinstance(status.get("trade"), dict):
+        # The probe counts every broker account, without environment or account
+        # identities. Retain connectivity without exposing that global count.
+        status["trade"] = {
+            key: value
+            for key, value in status["trade"].items()
+            if key != "account_count"
+        }
     status["execution_journal"] = trade_service.collect_journal_health(journal_future)
     status["real_execution_journal"] = trade_service.collect_real_journal_health(
         real_journal_future
     )
+    status["execution_journal"] = visible_journal_health(
+        status["execution_journal"], "SIMULATE"
+    )
+    status["real_execution_journal"] = visible_journal_health(
+        status["real_execution_journal"], "REAL"
+    )
+    status["client_authorization"] = client_authorization_status()
 
     await ctx.info(f"Health check status: {status.get('status')}")
 

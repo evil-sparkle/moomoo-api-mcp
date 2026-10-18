@@ -11,6 +11,13 @@ from typing import TYPE_CHECKING, Any
 
 from moomoo import RET_OK, Session
 
+from moomoo_mcp.client_authorization import (
+    account_access_allowed,
+    check_account_access,
+    client_grants_context,
+    visible_journal_error,
+    visible_journal_health,
+)
 from moomoo_mcp.services.admission import AdmissionPlan, prepare_paper_call
 from moomoo_mcp.services.broker_dispatch import QuotaRequest
 from moomoo_mcp.services.execution_identity import (
@@ -127,13 +134,17 @@ class PaperExecution:
         requested = self.service._exact_account_id(acc_id, allow_zero=True)
         if requested and requested not in self.allowlist:
             raise ValueError("Account is not on the simulated-account allowlist")
-        accounts = self.service.get_accounts()
+        if requested:
+            check_account_access("SIMULATE", requested, write=True)
+        with client_grants_context(None):
+            accounts = self.service.get_accounts()
         eligible = {
             int(a["acc_id"])
             for a in accounts
             if a.get("trd_env") == "SIMULATE"
             and int(a["acc_id"]) in self.allowlist
             and ("US" in (a.get("trdmarket_auth") or []))
+            and account_access_allowed("SIMULATE", a["acc_id"], write=True)
         }
         if requested:
             if requested not in eligible:
@@ -152,6 +163,7 @@ class PaperExecution:
     def _retry(self, row: dict, kind: str, params: dict, acc_id: int | str) -> dict:
         requested = self.service._exact_account_id(acc_id, allow_zero=True)
         bound = int(row["account"])
+        check_account_access("SIMULATE", bound, write=True)
         proposed = canonicalize_request("SIMULATE", requested or bound, kind, params)
         fields = differing_fields(row["canonical"], proposed)
         if fields:
@@ -170,7 +182,9 @@ class PaperExecution:
                 c | {"details": json.loads(c["details"])}
                 for c in row["recovery_checks"]
             ],
-            "recovery_updates": self.health()["recovery_updates"],
+            "recovery_updates": visible_journal_health(self.health(), "SIMULATE").get(
+                "recovery_updates", []
+            ),
             "admission_epoch": row["admission_epoch"],
             "state": row["state"],
             "disposition": row["disposition"],
@@ -182,7 +196,7 @@ class PaperExecution:
             "receipt": receipt,
             "broker_order_id": row.get("broker_order_id"),
             "broker_status": row.get("broker_status"),
-            "error": row.get("error"),
+            "error": visible_journal_error(row.get("error"), "SIMULATE"),
             "submission_state": "durably_stored",
             "observations": json.loads(row["evidence"]) if row.get("evidence") else [],
             "modification_observed": bool(row.get("modification_observed"))
@@ -285,6 +299,8 @@ class PaperExecution:
                         ]
                     )
                 )
+                if kind != "CANCEL" and self.service.trading_controls is not None:
+                    self.service.trading_controls.check_new_risk("SIMULATE", account)
                 self.service._check_dispatch_controls(account, "SIMULATE")
                 self.service._confirm_dispatch_controls()
                 self.store.mark_dispatch(operation_id, merged)
@@ -463,6 +479,15 @@ class PaperExecution:
         code = str(order.get("code", ""))
         if not code.startswith("US.") or order.get("trd_side") not in {"BUY", "SELL"}:
             raise ValueError("Target is outside US equity paper scope")
+        if kind == "CANCEL":
+            return {
+                "modify_order_op": "CANCEL",
+                "order_id": params["order_id"],
+                "qty": 0,
+                "price": 0,
+                "trd_env": "SIMULATE",
+                "acc_id": account,
+            }
         lookup = self.service.instrument_lookup
         if lookup is None:
             raise ValueError("Instrument classification cannot be verified")
@@ -473,15 +498,6 @@ class PaperExecution:
             or instruments[0].classification not in {"STOCK", "ETF"}
         ):
             raise ValueError("Paper execution requires a verified US stock or ETF")
-        if kind == "CANCEL":
-            return {
-                "modify_order_op": "CANCEL",
-                "order_id": params["order_id"],
-                "qty": 0,
-                "price": 0,
-                "trd_env": "SIMULATE",
-                "acc_id": account,
-            }
         qty = params.get("qty", order.get("qty"))
         # SDK reports whole quantities as floats; validate rather than truncate.
         if (

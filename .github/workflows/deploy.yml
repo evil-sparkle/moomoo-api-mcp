@@ -95,6 +95,7 @@ jobs:
       MOOMOO_COMPOSE_PROJECT: ${{ vars.MOOMOO_COMPOSE_PROJECT }}
       MOOMOO_ENV_FILE: ${{ vars.MOOMOO_ENV_FILE }}
       MOOMOO_TUNNEL_ENABLED: ${{ vars.MOOMOO_TUNNEL_ENABLED || 'false' }}
+      MOOMOO_EXPECTED_MODE: ${{ vars.MOOMOO_EXPECTED_MODE || 'READ_ONLY' }}
     steps:
       - name: Require deployment access configuration
         env:

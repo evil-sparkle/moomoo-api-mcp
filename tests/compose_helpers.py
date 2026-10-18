@@ -102,6 +102,7 @@ def production_wrapper(tmp_path: Path, services: dict):
         "deploy_verify.py",
         "tunnel_deployment.py",
         "deployment_manifest.py",
+        "deployment_lock.py",
     ):
         shutil.copy2(ROOT / "scripts" / name, scripts / name)
     fake_bin = tmp_path / "bin"
@@ -124,4 +125,7 @@ else:
     pathlib.Path('started').touch()
 """)
     docker.chmod(0o755)
-    return scripts, {"PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]}
+    return scripts, {
+        "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+        "MOOMOO_DEPLOY_LOCK_ROOT": str(tmp_path / "deployment-state"),
+    }

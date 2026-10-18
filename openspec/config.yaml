@@ -17,7 +17,8 @@ context: |
   - Enforce READ_ONLY/SIMULATE/REAL before gateway writes or unlocks; no startup unlock.
   - Never replay a trading command after an unknown outcome; reconcile by querying.
   - Preserve the durable SIMULATE journal across SIMULATE/REAL mode changes;
-    READ_ONLY never opens it. Recovery review gates new admissions.
+    ordinary READ_ONLY needs no journal; explicit observation opens existing
+    configured journals without granting broker writes. Recovery gates admissions.
   - Never read or commit secrets; use .env.example and operator-run auth steps.
   - Do not use regex in code; use explicit string methods or conditionals.
 

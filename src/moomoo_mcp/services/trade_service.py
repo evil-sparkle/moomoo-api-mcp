@@ -27,6 +27,12 @@ from moomoo import (
     TrdMarket,
 )
 
+from moomoo_mcp.client_authorization import (
+    check_account_access,
+    client_grants_context,
+    current_client_grants,
+    filter_readable_accounts,
+)
 from moomoo_mcp.services.admission import (
     AdmissionPlan,
     prepare_trade_call,
@@ -315,12 +321,11 @@ class TradeService:
         self.paper = (
             PaperExecution(self, execution_store, simulated_account_allowlist)
             if execution_store is not None
-            and self.policy.mode is not TradingMode.READ_ONLY
             else None
         )
         self.real = (
             RealExecution(self, real_execution_store)
-            if real_execution_store is not None and self.policy.mode is TradingMode.REAL
+            if real_execution_store is not None
             else None
         )
 
@@ -345,7 +350,33 @@ class TradeService:
     def get_prepared_trade(self, request_id: str) -> dict:
         if self.trading_controls is None:
             raise ValueError("Durable trading controls are not configured")
-        return self.trading_controls.get(request_id)
+        result = self.trading_controls.get(request_id)
+        parameters = result["parameters"]
+        check_account_access(parameters["trd_env"], parameters["acc_id"])
+        return result
+
+    def set_execution_paused(
+        self,
+        environment: str,
+        paused: bool,
+        *,
+        operator_id: str,
+        reason: str,
+        account: str = "0",
+    ) -> dict:
+        """Serialize the operator decision against both broker dispatch paths."""
+        if self.trading_controls is None:
+            raise ValueError("Durable trading controls are not configured")
+        with self._jit_lock, ExitStack() as locks:
+            if self.paper is not None:
+                locks.enter_context(self.paper.lock)
+            return self.trading_controls.set_paused(
+                environment,
+                paused,
+                operator_id=operator_id,
+                reason=reason,
+                account=account,
+            )
 
     def preview_order(
         self,
@@ -506,7 +537,12 @@ class TradeService:
         return f"...{text[-4:]}" if len(text) > 4 else text
 
     def _resolve_account(
-        self, trd_env: str, market: str | None, acc_id: int | str
+        self,
+        trd_env: str,
+        market: str | None,
+        acc_id: int | str,
+        *,
+        write: bool = True,
     ) -> int:
         """Decide which account a mutation targets, or refuse to guess.
 
@@ -539,11 +575,14 @@ class TradeService:
             # refused whether or not that account exists.
             if self._allowlist_applies(requested_env):
                 self._check_real_allowlist(resolved)
+            check_account_access(requested_env, resolved, write=write)
             return resolved
 
         accounts = self._eligible_accounts(requested_env, market)
         if len(accounts) == 1:
-            return int(accounts[0]["acc_id"])
+            selected = int(accounts[0]["acc_id"])
+            check_account_access(requested_env, selected, write=write)
+            return selected
 
         where = f" authorized for {market}" if market else ""
         if not accounts:
@@ -602,7 +641,8 @@ class TradeService:
         they name an order, and the order already knows its instrument.
         """
         try:
-            accounts = self.get_accounts()
+            with client_grants_context(None):
+                accounts = self.get_accounts()
         except Exception as exc:
             raise ValueError(
                 f"Could not retrieve the account list to resolve an account: {exc}"
@@ -626,6 +666,15 @@ class TradeService:
                 for account in eligible
                 if int(account.get("acc_id", 0)) in allowed
             ]
+        grants = current_client_grants()
+        if grants is not None:
+            client_accounts = (
+                grants.real_acc_ids if trd_env == "REAL" else grants.simulate_acc_ids
+            )
+            if client_accounts is not None:
+                eligible = [
+                    row for row in eligible if int(row["acc_id"]) in client_accounts
+                ]
         return eligible
 
     def _open_trade_context(self) -> None:
@@ -920,7 +969,7 @@ class TradeService:
                 for account in accounts
                 if account.get("trd_env") == normalized_environment
             ]
-        return accounts
+        return filter_readable_accounts(accounts)
 
     @staticmethod
     def _exact_account_id(value: Any, *, allow_zero: bool) -> int:
@@ -958,6 +1007,9 @@ class TradeService:
             "trd_env", trd_env, ("REAL", "SIMULATE")
         )
         requested_id = self._exact_account_id(acc_id, allow_zero=True)
+
+        if requested_id:
+            check_account_access(normalized_environment, requested_id)
 
         accounts = self.get_accounts()
         eligible_ids = [
@@ -1494,6 +1546,10 @@ class TradeService:
                 # queued behind a REAL one is not what the halt guards against.
                 with not_sent(operation):
                     self._check_execution_halt(operation, trd_env)
+                    if self.trading_controls is not None:
+                        self.trading_controls.check_new_risk(
+                            str(trd_env).strip().upper(), account_id
+                        )
 
             admission.enter_context(
                 self._admit_write(operation, sdk_operation, account_id, uses_jit)
@@ -2264,7 +2320,7 @@ class TradeService:
         # order would actually reach — including refusing where the placement
         # would refuse, rather than previewing an account it could not use.
         resolved_acc_id = self._resolve_account(
-            trd_env, self._get_market_from_code(legs[0].code), acc_id
+            trd_env, self._get_market_from_code(legs[0].code), acc_id, write=False
         )
 
         ret, data = self.dispatcher.call(

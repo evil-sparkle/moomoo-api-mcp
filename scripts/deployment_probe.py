@@ -57,7 +57,7 @@ def request(
     return message["result"]
 
 
-def health() -> dict:
+def health(expected_mode: str = "READ_ONLY") -> dict:
     result = request(
         "tools/call", {"name": "check_health", "arguments": {}}, "deploy-health"
     )
@@ -65,15 +65,16 @@ def health() -> dict:
     if (
         result.get("isError")
         or not isinstance(structured, dict)
-        or structured.get("trading_mode") != "READ_ONLY"
+        or expected_mode not in {"READ_ONLY", "SIMULATE", "REAL"}
+        or structured.get("trading_mode") != expected_mode
     ):
-        raise ValueError("MCP did not prove READ_ONLY mode.")
+        raise ValueError("MCP did not prove the selected trading mode.")
     return structured
 
 
-def check(gateway: bool = False) -> None:
+def check(gateway: bool = False, expected_mode: str = "READ_ONLY") -> None:
     if gateway:
-        value = health()
+        value = health(expected_mode)
         quote = value.get("quote") or {}
         trade = value.get("trade") or {}
         if (
@@ -110,19 +111,24 @@ def check(gateway: bool = False) -> None:
     names = {tool.get("name") for tool in tools if isinstance(tool, dict)}
     if not {"check_health", "get_accounts", "get_positions"}.issubset(names):
         raise ValueError("Required read-only tools are missing.")
-    health()
+    health(expected_mode)
 
 
 def main() -> int:
     gateway = len(sys.argv) > 1 and sys.argv[1] == "gateway"
+    expected_mode = (
+        sys.argv[2]
+        if len(sys.argv) > 2 and sys.argv[1] in {"application", "gateway"}
+        else "READ_ONLY"
+    )
     deadline = time.monotonic() + (60 if gateway else 90)
     while True:
         try:
-            check(gateway)
+            check(gateway, expected_mode)
             print(
                 "OpenD ready: quote login and quote/trade probes verified."
                 if gateway
-                else "Authenticated MCP and READ_ONLY mode verified."
+                else "Authenticated MCP and " + expected_mode + " mode verified."
             )
             return 0
         except HTTPError as error:

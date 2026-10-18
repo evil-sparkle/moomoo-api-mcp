@@ -187,7 +187,7 @@ jobs:
           uv run ruff check .
       - name: Run Ruff Format Check
         run: |
-          uv run ruff format --check .
+          uv run ruff format --check --diff .
       - name: Run basedpyright
         run: |
           uv run basedpyright

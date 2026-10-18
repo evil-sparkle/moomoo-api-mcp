@@ -108,6 +108,35 @@ def test_invalid_health_fails_closed(health):
         preflight.validate_trading_mode(health)
 
 
+def test_real_backend_accepts_only_proven_restricted_client():
+    health = {
+        "trading_mode": "REAL",
+        "client_authorization": {
+            "restricted": True,
+            "permissions": [
+                "market_read",
+                "real_read",
+                "simulate_read",
+                "simulate_write",
+            ],
+        },
+    }
+    assert preflight.validate_trading_mode(health) == "REAL"
+    for permissions in (
+        ["real_write"],
+        ["gateway_control"],
+        ["unknown"],
+        [None],
+        "real_read",
+    ):
+        health["client_authorization"]["permissions"] = permissions
+        with pytest.raises(preflight.PreflightError):
+            preflight.validate_trading_mode(health)
+    health["client_authorization"] = {"restricted": False, "permissions": []}
+    with pytest.raises(preflight.PreflightError):
+        preflight.validate_trading_mode(health)
+
+
 def test_missing_and_wrong_credentials_fail_before_any_protocol_result(
     tmp_path: Path,
 ) -> None:

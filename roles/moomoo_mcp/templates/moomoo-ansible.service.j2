@@ -9,6 +9,7 @@ RemainAfterExit=yes
 Environment=DOCKER_HOST=unix:///run/user/{{ moomoo_mcp_uid.stdout }}/docker.sock
 Environment=DOCKER_CONTEXT=
 Environment=XDG_RUNTIME_DIR=/run/user/{{ moomoo_mcp_uid.stdout }}
+Environment=MOOMOO_DEPLOY_LOCK_ROOT={{ moomoo_mcp_root }}
 WorkingDirectory={{ moomoo_mcp_root }}/current
 ExecStart=/usr/bin/python3 {{ moomoo_mcp_root }}/current/scripts/ansible_deployment.py compose up -d --no-build
 ExecStop=/usr/bin/python3 {{ moomoo_mcp_root }}/current/scripts/ansible_deployment.py compose stop

@@ -163,6 +163,20 @@ def prepare_trade_call(
         environment = request_params["trd_env"]
         if method == "prepare_trade_request":
             validate_preparation(service, prepared_method, request_params)
+            market = None
+            if prepared_method == "place_order":
+                market = service._get_market_from_code(request_params["code"])
+            elif prepared_method == "place_combo_order":
+                legs = service._build_combo_legs(request_params["combo_legs"])
+                market = service._get_market_from_code(legs[0].code)
+            if environment == "SIMULATE":
+                assert service.paper is not None
+                account = service.paper._account(request_params["acc_id"])
+            else:
+                account = service._resolve_account(
+                    environment, market, request_params["acc_id"]
+                )
+            request_params["acc_id"] = str(account)
             params["parameters"] = request_params
         _, account = service.resolve_read_account(environment, request_params["acc_id"])
         requests = []
@@ -292,7 +306,8 @@ def prepare_trade_call(
                     )
                 paper.ready()
                 account = paper._account(params["acc_id"])
-                plan.requests.append(QuotaRequest("get_market_snapshot"))
+                if kind != "CANCEL":
+                    plan.requests.append(QuotaRequest("get_market_snapshot"))
                 if kind != "PLACE":
                     plan.requests.append(QuotaRequest("order_list_query", account))
             else:
@@ -337,6 +352,7 @@ def prepare_trade_call(
                     params["trd_env"],
                     service._get_market_from_code(legs[0].code),
                     params["acc_id"],
+                    write=False,
                 )
                 params["acc_id"] = account
             elif "trd_env" in params:

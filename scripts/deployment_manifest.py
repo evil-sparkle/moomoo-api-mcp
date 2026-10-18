@@ -195,6 +195,9 @@ def deployment_settings(selected, environment):
     tunnel = environment.get("MOOMOO_TUNNEL_ENABLED", "false")
     if tunnel not in ["true", "false"]:
         raise ValueError("MOOMOO_TUNNEL_ENABLED must be true or false.")
+    expected_mode = environment.get("MOOMOO_EXPECTED_MODE", "READ_ONLY")
+    if expected_mode not in {"READ_ONLY", "SIMULATE", "REAL"}:
+        raise ValueError("MOOMOO_EXPECTED_MODE must be READ_ONLY, SIMULATE or REAL.")
     inventory = {
         "vps": {
             "hosts": {
@@ -215,7 +218,7 @@ def deployment_settings(selected, environment):
         "moomoo_mcp_project": project,
         "moomoo_mcp_env_file": credentials,
         "moomoo_mcp_tunnel_enabled": tunnel == "true",
-        "moomoo_mcp_expected_mode": "READ_ONLY",
+        "moomoo_mcp_expected_mode": expected_mode,
     }
     return inventory, settings
 
