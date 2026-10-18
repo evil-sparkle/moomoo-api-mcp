@@ -55,7 +55,7 @@ VALID_HEALTH_RESULT = {
 }
 
 
-def model(token: object = TOKEN, *, extra=None):
+def model(token: object = TOKEN, *, extra=None) -> dict[str, Any]:
     environment: dict[str, object] = {
         "MCP_AUTH_TOKEN": token,
         "MOOMOO_TRADE_PASSWORD": OTHER_SECRET,
