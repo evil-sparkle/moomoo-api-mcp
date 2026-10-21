@@ -299,10 +299,21 @@ def inspect_trading_capabilities(
             "operator_paused": operator_paused,
             "broker_acceptance_verified": False,
         },
+        "submission_policy": {
+            "local_rth_submission_time_gate": False,
+            "session_controls": "EXECUTION_ELIGIBILITY",
+            "broker_acceptance": "UNKNOWN",
+            "day_validity": "BROKER_DEPENDENT",
+            "fills": "UNKNOWN",
+            "local_scheduling": False,
+        },
         "evidence_errors": evidence_errors,
         "limitations": [
             "Support is documented and conditional on account/product entitlement.",
             "Readiness is advisory; order details and approval are checked again.",
+            "RTH controls execution eligibility; authorized outside-RTH submission "
+            "has no local market-open gate. Broker acceptance, DAY validity and "
+            "fills remain unknown. No future submission is scheduled.",
             "Market authority does not establish short selling or option permissions.",
             "Callbacks are ephemeral observations, never a recovery ledger.",
         ],

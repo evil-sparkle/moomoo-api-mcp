@@ -3,6 +3,15 @@
 Paper recovery is owned by the MCP process. It runs after startup and after an
 uncertain response; it never sends placement, modification or cancellation requests.
 
+Clients submit once and keep the original exact request, account, SIMULATE
+environment, operation ID and admission epoch durably before calling. After a
+timeout, crash or uncertain reply, reload that identity and inspect the execution
+and scoped broker evidence. A later input rejection establishes no absence of
+an earlier attempt. Do not refresh an epoch, allocate a replacement ID, delete
+caller attempt records or resend automatically. The
+[tested client recipe](trading-contracts.md#tested-python-caller-recipe) illustrates
+this boundary without creating a second execution journal.
+
 The journal uses schema 3. Startup atomically upgrades schemas 1 and 2, preserving
 requests, broker IDs, review reasons and historical recovery audits. New placements
 receive a unique ASCII UUID `order_tag` (36 UTF-8 bytes) before dispatch. The broker
@@ -27,8 +36,9 @@ correlation, one initial check
 plus four successful negative rounds records `ASSUMED_NOT_PLACED_AFTER_RETRIES`.
 The original state remains `UNKNOWN_OUTCOME` / `POSSIBLY_SENT`. The decision, audit
 and removal of its review reasons commit together. The original operation never
-replays. A separate new trading decision can use a new operation ID once all other
-blocks are clear.
+replays. A separately authorized new trading decision can use a new operation ID
+once all other blocks are clear; continuity accounting does not itself authorize
+another order.
 
 Minimum gaps after the first four clean negatives are 5, 5, 10 and 20 seconds,
 giving nominal offsets 0/5/10/20/40. Gaps start at actual query completion; queued

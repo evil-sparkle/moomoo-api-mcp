@@ -13,6 +13,7 @@ from moomoo_mcp.client_authorization import (
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.tools.annotations import READ_ONLY_TOOL
 from moomoo_mcp.tools.offload import await_futures
+from moomoo_mcp.tools.trading_contract import server_contract_identity
 
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
@@ -51,6 +52,10 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
           pending IDs and broker recovery evidence. REAL recovery never assumes
           absence or automatically resubmits an operation.
         - gateway_version: OpenD version when the gateway reports one, else null.
+        - mcp_server: Package and contract versions, source_revision (unknown when
+          unavailable), and SHA-256 of the currently authorized tools/list contract.
+          Compare with the served tools/list using the same credential; this does
+          not attest to an external host cache or refresh it.
     """
     lifespan_context = ctx.request_context.lifespan_context
     moomoo_service = lifespan_context.moomoo_service
@@ -87,6 +92,7 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
         status["real_execution_journal"], "REAL"
     )
     status["client_authorization"] = client_authorization_status()
+    status["mcp_server"] = server_contract_identity(await mcp.list_tools())
 
     await ctx.info(f"Health check status: {status.get('status')}")
 

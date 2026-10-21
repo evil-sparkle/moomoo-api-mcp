@@ -109,7 +109,10 @@ See [contributor guidance](#contributing) for checks, hooks and OpenSpec workflo
 - [Production runbook](docs/deploy-vps.md): deployment, login, diagnostics,
   restarts, ChatGPT access and persistent-state recovery.
 - [Trading contracts](docs/trading-contracts.md): capabilities, validation,
-  sessions, previews, bounded query/event reads and the operator approval flow.
+  submission authorization, durable client identity, execution sessions versus
+  submission timing, served-schema drift and the operator approval flow.
+- [Python client recipe](examples/trading_client.py): tested local intent
+  persistence and one submission attempt using an injected transport.
 - [Contributing](#contributing): development checks and OpenSpec regeneration.
 - [OpenSpec requirements](openspec/specs/): current architecture and behavioral
   contracts. Active changes track proposed work; archived changes record history.
@@ -137,6 +140,13 @@ See [contributor guidance](#contributing) for checks, hooks and OpenSpec workflo
   ```
 
   A `connected` result means OpenD answered. It does **not** mean trading is unlocked, that an order would be accepted, or that a given market is authorized for the account. The server also starts even when OpenD is unreachable, so `check_health` stays callable while you diagnose the gateway.
+
+  `mcp_server` separately reports `package_version`, `contract_version`,
+  `source_revision` (`unknown` when unavailable), and `tools_schema_sha256` for
+  this credential's visible `tools/list`. `gateway_version` is OpenD's version.
+  Inspect the actual served schema and the host's imported declaration when
+  diagnosing drift; external hosts own reconnecting and refreshing their caches.
+  See [contract verification](docs/trading-contracts.md#verify-the-contract-actually-served).
 
 ### Account
 
@@ -249,7 +259,9 @@ access.
 ### Trading
 
 - `get_trading_capabilities`: Inspect documented support, deployment permissions
-  and advisory account/journal readiness separately; unknown support remains explicit.
+  and advisory account/journal readiness separately; unknown support remains
+  explicit. `submission_policy` distinguishes execution-session eligibility
+  from submission timing, with no local RTH gate or future scheduling.
 - `preview_order`: Compose instrument rules, conservative value and broker-reported
   maximum quantities without placing, unlocking or admitting an order.
 - `prepare_trade_request` / `get_prepared_trade`: Persist exact mutation intent
@@ -391,11 +403,29 @@ They cannot change OpenD inside prebuilt production images.
 
 REAL placements, combo placements, modifications and cancellations require a
 caller-generated `operation_id` and the current `admission_epoch` from
-`check_health.real_execution_journal`. Preserve both fields and the exact request
-on every retry. Identical retries return the recorded outcome without another
-broker mutation. Each process restart issues a new epoch for new decisions;
-existing operations retain their original epoch and account. REAL prices remain
-numeric, while paper prices remain decimal strings.
+`check_health.real_execution_journal`; paper uses `check_health.execution_journal`.
+Both tokens are nonblank printable strings of 1–64 characters. After explicit
+authorization, generate `uuid.uuid4().hex` once and durably persist the complete
+request, exact account, environment, ID and epoch before preparation or submission.
+Submit once; recover the original record after uncertainty. Server deduplication
+of identical admitted calls does not authorize automatic retries. Each process
+restart issues a new epoch for new decisions; existing operations retain their
+original identity. REAL prices remain numeric, while paper prices remain decimal
+strings. See the [tested caller recipe](docs/trading-contracts.md#tested-python-caller-recipe).
+
+`session="RTH"` controls execution eligibility, with no local market-open
+submission gate. If authorization says to submit only during regular hours,
+verify fresh instrument market state and the market-local calendar immediately
+before calling, including holidays and half days; defer if closed or uncertain.
+There is no automatic future submission. Broker acceptance, pending status,
+DAY validity and fills remain unverified until observed.
+
+Input rejection describes this invocation and does not establish that an earlier
+attempt was absent. A technical correction needs existing authorization and
+evidence that the invalid request was never admitted or sent; respect literal
+limits on tool invocations. An exact-ID approval does not transfer to a corrected
+ID. Never replace an ID, refresh an epoch or change account/environment to bypass
+an uncertain outcome. See [error evidence and correction](docs/trading-contracts.md#input-rejection-and-permitted-technical-correction).
 
 REAL recovery runs inside the server and queries broker orders, history and
 positions. Exact identity and consistent evidence can account for a request.

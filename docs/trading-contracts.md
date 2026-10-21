@@ -23,11 +23,69 @@ The response separates:
 - `ready`: account evidence, the appropriate environment's journal state,
   execution halt, unlock strategy and controls health. `READY` is advisory;
   broker acceptance remains unverified.
+- `submission_policy`: `local_rth_submission_time_gate=false`,
+  `session_controls="EXECUTION_ELIGIBILITY"`, `broker_acceptance="UNKNOWN"`,
+  `day_validity="BROKER_DEPENDENT"`, `fills="UNKNOWN"` and
+  `local_scheduling=false`. These describe local behavior, not broker promises.
 
 Market authorization does not prove short-selling or option permissions. See
 the official [account fields](https://openapi.moomoo.com/moomoo-api-doc/en/trade/get-acc-list.html)
 and [product and environment restrictions](https://openapi.moomoo.com/moomoo-api-doc/en/qa/trade.html).
 Discovery neither unlocks trading nor sends an order.
+
+## Verify the contract actually served
+
+Inspect `tools/list` from the connected MCP endpoint with the same credential
+that will make the request. A repository checkout, a plugin's cached tool
+declaration and an endpoint's served schema can differ. In particular, check
+that placement exposes `session`, mutation `approval_id`, and both
+`operation_id` and `admission_epoch`, including for `place_combo_order`.
+Tokens are required for journaled mutations: each is a strict string of 1–64
+characters, nonblank and printable. A stale declaration that omits these inputs
+must be refreshed before constructing a mutation; inventing undeclared arguments
+does not establish which server is running.
+
+`tools/list` is an MCP protocol method, not a tool passed to `tools/call`.
+After normal initialization, use the established authenticated client to obtain
+the actual catalog. For example, its JSON-RPC request to `/mcp` is:
+
+```json
+{"jsonrpc":"2.0","id":"fixture-catalog-1","method":"tools/list","params":{}}
+```
+
+Inspect `result.tools[].inputSchema` and `description` in that response, rather
+than relying on a host's displayed import. Listing tools performs no broker call.
+
+`check_health.mcp_server` reports:
+
+| Field | Meaning |
+| --- | --- |
+| `package_version` | Installed MCP package version, or `unknown` when unavailable. Different source builds can share a package version. |
+| `contract_version` | Explicit version of this server's published trading contract. |
+| `source_revision` | Embedded source revision when available; currently `unknown`. Never infer a commit from OpenD or a local checkout. |
+| `tools_schema_sha256` | SHA-256 of the tools visible to this authenticated caller, including descriptions, input/output schemas and annotations. |
+
+The digest is over every visible tool's JSON serialization with aliases and
+without null fields, sorted by tool name. Serialize that array with Python
+`json.dumps(definitions, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`
+and hash its UTF-8 bytes. Compare only within the same credential scope:
+restricted clients can have a different catalog and digest. Compare the actual
+`tools/list` response as well as the digest; metadata cannot prove what an
+external host has cached.
+
+`gateway_version` identifies OpenD. It does not identify this MCP package,
+contract, source build or a host's cached tools. The repository serves stateless
+Streamable HTTP at `/mcp` with JSON responses. Its process owns execution state;
+an HTTP request ID or connection/session identifier is not an operation ID.
+Deployment image identity belongs to the image/release metadata; this package
+does not currently embed a source commit. Checking source, lockfile, Docker and
+transport configuration requires no production credentials or broker mutation.
+
+External hosts own reconnecting and refreshing their imported tools and
+initialization instructions. After an authorized server update, refresh or
+reconnect the host, inspect its declarations again, and compare them with the
+served catalog. An unchanged or missing field is unresolved drift, not evidence
+that the host is using the new contract. This server cannot refresh that cache.
 
 ## Instrument validation and sessions
 
@@ -69,6 +127,97 @@ default and explicit RTH have the same retry identity; ETH, OVERNIGHT and ALL
 are refused. This executor scope is narrower than the broker's paper API.
 Explicit REAL session changes are part of durable operation identity, so the
 same operation ID cannot be reused to change a session.
+
+### Execution session versus submission time
+
+`session="RTH"` selects execution eligibility. There is no local market-open
+submission gate: a request submitted outside regular hours can still reach the
+broker, which can accept, reject or retain it under its own rules. `DAY` does not
+promise that an outside-hours submission will survive until the next opening.
+An acknowledgement does not promise a pending order or a fill.
+
+Treat an explicit instruction to "submit only during regular market hours" as
+an additional condition on the agent's call. Immediately before submission,
+check the exact instrument's fresh `get_market_state` observation and
+`get_trading_days` for the relevant market-local date, holidays and half days.
+A calendar date alone provides no session opening/closing times, and a market
+state observation can become stale. If these facts do not establish the
+authorized submission window, defer without sending. Never turn missing timing
+evidence into an assumption that RTH is open.
+
+"Submit this RTH order once now" can authorize immediate submission even when
+the market is closed, if the user explicitly accepts that timing. This differs
+from "submit once when RTH opens." The server has no future submission scheduler;
+do not promise an automatic opening-time call, overnight pending status, next-day
+validity or a fill. A later call needs its timing condition checked then.
+
+## Authorize, persist and submit once
+
+Obtain explicit trading authorization for the account, environment and complete
+economic intent: instrument, side, quantity, price, order type, validity, session
+and submission timing. Read-only inspection or a preview is not authorization.
+Never infer permission to switch REAL/SIMULATE or choose another account from
+an error. Account and broker order identifiers remain exact decimal strings.
+
+Generate `uuid.uuid4().hex` once for each newly authorized intent. Before any
+preparation or mutation call, durably persist the exact method and arguments,
+including the explicit account, environment, operation ID and current admission
+epoch. Paper obtains the epoch from `check_health.execution_journal`; REAL uses
+`check_health.real_execution_journal`. Each token must be nonblank, printable
+and 1–64 characters. A UUID hex token has 32 characters; JSON-RPC request IDs
+and broker order IDs serve different purposes.
+
+Reload that record after a crash or reconnect. Never regenerate an ID, refresh
+its epoch or construct a replacement order because a result was lost. Existing
+operations retain their original epoch even after a server restart. A current
+epoch is for newly authorized decisions, not recovery of an earlier request.
+
+Submit the exact authorized mutation once. A transport timeout, cancellation,
+disconnect, unreadable receipt or uncertain outcome leads to read-only
+inspection: `get_execution(operation_id, trd_env=original_environment)` and
+current/history broker orders scoped to the same account and environment.
+`reconcile_execution` advances the server's query-only recovery when due.
+Do not promise the absence of an order from an empty scoped query.
+
+Identical journaled calls are defensively deduplicated by the server and return
+stored state or `IN_FLIGHT`. This does not authorize a client's automatic
+resend. Preserve acknowledgements, requested and executed quantities, raw broker
+status, and uncertainty separately; admission and acknowledgement are not fills.
+
+### Input rejection and permitted technical correction
+
+Mutation errors carry dispatch evidence. Interpret the scope, not just a label:
+
+| Evidence | What it establishes |
+| --- | --- |
+| `validation_phase="INPUT_VALIDATION"`, `journal_record_created=false`, `journal_record_scope="THIS_INVOCATION"`, `mutation_outcome="NOT_SENT"` | This invocation failed input validation before creating a journal row or dispatching. `identity_status="UNKNOWN"` and `prior_attempt_outcome="UNKNOWN"` leave earlier attempts unresolved. |
+| `validation_phase="PRE_DISPATCH"`, `journal_record_created=null` | This call was refused before dispatch; global journal absence is unknown. |
+| `validation_phase="ADMITTED"`, `journal_record_created=true` | This invocation has authoritative durable admission evidence; a later refusal does not erase it. |
+| `validation_phase="DISPATCHED"` or `"ACKNOWLEDGED"` | Preserve the dispatch outcome even if nested validation also failed. Inspect the original operation and broker evidence. |
+
+`validation_issues` names the input path, type, field and constraint, with token
+bounds (`min_length=1`, `max_length=64`) and `actual_length` for strings. It
+does not echo the supplied token. A missing runtime token has `constraint="required"`.
+For example, a 66-character operation token is invalid. These errors have
+`retryable=false`: repeating the failed request unchanged is not a repair.
+
+A permitted technical correction requires both existing authorization for the
+same economic intent and evidence that the invalid request was never admitted
+or sent in any attempt. Respect a literal user limit of one tool invocation:
+even an unsent input failure does not authorize a second call under that limit.
+For a known first invocation rejected solely for token
+length, correcting the token format can remain within that authorization. A
+durable caller record should retain the rejection and the explicit correction;
+do not silently overwrite it. Changing account, environment, price, size,
+instrument or timing requires authorization for that change.
+
+An approval for an exact operation ID does not transfer to a corrected ID.
+Prepare the corrected exact request and obtain a fresh operator decision when
+approval is required. If the user authorized only a specific ID, changing that
+ID also needs their authorization. A later invocation's input rejection never
+clears an earlier uncertain attempt: recover the original persisted identity
+and inspect it. There is no implicit correction or replacement path in the
+reference recipe below.
 
 ## Preview an order
 
@@ -215,15 +364,20 @@ your own durable controls path and export the settings into the process.
 ## Prepare, review and approve
 
 1. Read `get_accounts`, `check_health` and `get_trading_capabilities` for the
-   intended account and environment. Choose a caller-owned `operation_id` and
+   intended account and environment. Persist a caller-owned `operation_id` and
    the current environment's admission epoch: paper uses `execution_journal`,
-   REAL uses `real_execution_journal`. Preserve both across retries.
+   REAL uses `real_execution_journal`, together with the complete authorized
+   request before calling preparation. Preserve them for later inspection.
 2. Call `prepare_trade_request(method, parameters, ttl_seconds=300)`. Supported
    methods are `place_order`, `place_combo_order`, `modify_order` and
    `cancel_order`. Supply that method's arguments and durable identity. The
    server expands defaults, resolves an explicit account and stores the exact
    intent and review facts. Preparation changes only controls storage and
-   performs no broker mutation or unlock. TTL must be 1–900 seconds; canonical
+   performs broker reads for review, with no broker mutation or unlock. Persist
+   the returned `request_id`, complete parameters and review immediately.
+   Preparation is not idempotent: calling again creates another request ID.
+   A lost preparation reply is unresolved preparation, not permission to create
+   another approval request automatically. TTL must be 1–900 seconds; canonical
    request and review data are individually bounded to 64 KiB.
 3. Show the complete returned review and parameters to the operator. The
    operator independently reads the same request through the private HTTP
@@ -237,11 +391,16 @@ your own durable controls path and export the settings into the process.
    approval, use the response's top-level `method` to select the original
    mutation and pass its `parameters` plus `approval_id=request_id`.
    Preserve the exact order, account, environment, operation ID and admission
-   epoch. A changed request cannot reuse the decision.
-6. Inspect the journal result. Identical admitted retries return stored state
-   or IN_FLIGHT without another SDK mutation or duplicate daily charge. An
-   uncertain outcome remains a recovery task; a new operation ID represents a
-   new trading decision rather than a retry shortcut.
+   epoch. A changed request cannot reuse the decision, including an operation
+   ID format correction. `get_prepared_trade` reads the stored request and
+   decision; it does not refresh preview facts, journal readiness or the epoch.
+   `APPROVED` can therefore be stale for current admission after a restart.
+6. Submit once and inspect the journal result. Defensive identical admitted
+   calls return stored state or `IN_FLIGHT` without another SDK mutation or
+   duplicate daily charge; clients must not turn this into automatic retries.
+   `CONSUMED` approval does not prove dispatch, because consumption precedes
+   unlocking and dispatch. An uncertain outcome remains a recovery task; a new
+   operation ID represents a separately authorized new decision.
 
 The operator route is on the existing authenticated server, under
 `/operator/approvals/{request_id}`. Keep access on the deployment's existing
@@ -268,6 +427,89 @@ Content-Type: application/json
 POST accepts exactly the string fields `decision` and `reason`, at most 8 KiB
 of body data, and a nonblank reason of at most 2,000 characters. For rejection,
 use `"decision":"REJECTED"`. The same host/origin protections as MCP apply.
+
+### Tested Python caller recipe
+
+[`examples/trading_client.py`](../examples/trading_client.py) provides a small
+local persistence example, tested in
+[`tests/test_trading_client_recipe.py`](../tests/test_trading_client_recipe.py).
+It has no transport setup, credentials, broker connection, approval polling,
+automatic correction or retry loop. Inject the host's existing async
+`call_tool(method, parameters)` adapter; it must return one call result or raise
+without retrying a mutation internally. SDK adapters must still inspect MCP
+`isError` and preserve text/structured error evidence.
+
+After obtaining authorization and observing the current epoch, create the
+record once. The values below are synthetic; this snippet does not connect to
+a server:
+
+```python
+from pathlib import Path
+
+from examples.trading_client import load_intent, persist_authorized_intent, submit_once
+
+# Existing private directory on durable local POSIX storage, outside the repo.
+intent_path = Path("/private/client-state/authorized-intent.json")
+intent = persist_authorized_intent(
+    intent_path,
+    "place_order",
+    {
+        "code": "US.FIXTURE",
+        "price": "1.00",
+        "qty": 1,
+        "trd_side": "BUY",
+        "trd_env": "SIMULATE",
+        "acc_id": "900000000000000001",
+        "order_type": "NORMAL",
+        "time_in_force": "DAY",
+        "session": "N/A",
+        "adjust_limit": 0,
+        "aux_price": None,
+        "trail_type": None,
+        "trail_value": None,
+        "trail_spread": None,
+        "remark": "",
+        "admission_epoch": "fixture-epoch-0001",
+    },
+)
+# After restart, use load_intent(intent_path); never recreate the intent.
+```
+
+Use `intent["method"]` and `intent["parameters"]` for the explicit preparation
+flow above when controls are configured. Keep the returned preparation ID and
+review durably in your existing caller state. After the operator decision,
+read `get_prepared_trade` for that exact request ID. Show the expanded parameters
+and review, check any submission-time condition, then pass that response as
+`prepared_trade=approved` to `await submit_once(intent_path, call_tool, ...)`.
+Without required operator approval, call `await submit_once(intent_path, call_tool)`
+only after the same authorization and timing checks.
+
+The recipe refuses a prepared response unless it is `APPROVED`, unconsumed and
+matches the stored method and complete persisted parameter object, including
+JSON value types. Before authorization and persistence, inspect the selected
+mutation's served schema and explicitly include its authorized defaults as in
+the example. Added prepared fields fail closed even when they equal a default;
+operator approval cannot supply economic terms omitted from the persisted user
+intent. It also refuses semantically equivalent changes. Resolve a mismatch
+through explicit review; never overwrite an attempted intent or transfer its
+approval. The server remains authoritative for approval authentication, expiry,
+admission and fresh controls.
+
+Persistence writes a private complete temporary file, flushes and `fsync`s it,
+atomically publishes it without overwriting an existing file, then `fsync`s the
+directory. Before transport, the same primitive records the exact outgoing
+request and approved snapshot in `<intent-name>.attempt.json`. Re-entry refuses
+once that file exists, even after an error, timeout, cancellation, process
+restart or a crash between recording the attempt and invoking transport.
+Persistence failure prevents the call. This conservative gap can leave a
+recorded attempt that was never sent; inspect rather than deleting the marker.
+
+The files are caller bookkeeping, not a second execution journal. Preserve them
+on durable storage, do not put them in a public repository, and do not use a new
+path to bypass an uncertain operation. Multi-host coordination, approval
+creation/recovery, scheduling, and broker recovery remain with the existing
+host and server workflows. The tests use temporary directories and injected
+fake transports; they make no broker calls in either environment.
 
 ## Daily submission budgets and recovery
 

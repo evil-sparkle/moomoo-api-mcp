@@ -10,14 +10,15 @@ from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.tools.annotations import READ_ONLY_TOOL
 from moomoo_mcp.tools.offload import run_blocking
 from moomoo_mcp.tools.serialization import serialize_identifiers
+from moomoo_mcp.tools.trading_contract import ExactAccountId, TradingEnvironment
 
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_trading_capabilities(
     ctx: Context[ServerSession, AppContext],
     code: str,
-    trd_env: str,
-    acc_id: str = "0",
+    trd_env: TradingEnvironment,
+    acc_id: ExactAccountId = "0",
 ) -> dict[str, Any]:
     """Inspect documented support, server permission and advisory readiness.
 
@@ -28,7 +29,10 @@ async def get_trading_capabilities(
     Deal callbacks/queries and order fees are unavailable in paper. Approval,
     limits, price and quantity validation are enforced again during mutations.
     Use exact string account IDs returned by get_accounts; '0' resolves only
-    when one discovered account matches the environment.
+    when one discovered account matches the environment. submission_policy reports
+    no local RTH submission-time gate: execution eligibility is distinct from
+    authorized submission timing, broker acceptance, DAY validity and fills.
+    This read grants no trading authority and schedules no future submission.
     """
     service = ctx.request_context.lifespan_context.trade_service
     return serialize_identifiers(
@@ -41,8 +45,8 @@ async def get_trading_capabilities(
 @mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_trade_events(
     ctx: Context[ServerSession, AppContext],
-    trd_env: str,
-    acc_id: str = "0",
+    trd_env: TradingEnvironment,
+    acc_id: ExactAccountId = "0",
     after_sequence: StrictInt = 0,
     event_epoch: str | None = None,
     limit: StrictInt = 100,
