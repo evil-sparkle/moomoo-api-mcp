@@ -5,7 +5,103 @@ from __future__ import annotations
 import hashlib
 import json
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import AfterValidator, Field
+
+IDENTITY_TOKEN_MIN_LENGTH = 1
+IDENTITY_TOKEN_MAX_LENGTH = 64
+
+
+class IdentityTokenValidationError(ValueError):
+    """A local token rejection with diagnostics that never contain its value."""
+
+    def __init__(self, field: str, constraint: str, actual_length: int | None):
+        self.field = field
+        self.constraint = constraint
+        self.min_length = IDENTITY_TOKEN_MIN_LENGTH
+        self.max_length = IDENTITY_TOKEN_MAX_LENGTH
+        self.actual_length = actual_length
+        super().__init__(
+            f"{field} must be a nonblank printable string of "
+            f"{IDENTITY_TOKEN_MIN_LENGTH}–{IDENTITY_TOKEN_MAX_LENGTH} characters "
+            f"(violated constraint: {constraint})"
+        )
+
+    def metadata(self) -> dict[str, Any]:
+        facts: dict[str, Any] = {
+            "field": self.field,
+            "constraint": self.constraint,
+            "min_length": IDENTITY_TOKEN_MIN_LENGTH,
+            "max_length": IDENTITY_TOKEN_MAX_LENGTH,
+        }
+        if self.actual_length is not None:
+            facts["actual_length"] = self.actual_length
+        return facts
+
+
+def validate_identity_token(field: str, value: Any) -> str:
+    """Validate an opaque exact token without normalizing printable Unicode."""
+    constraint = None
+    actual_length = len(value) if isinstance(value, str) else None
+    if value is None:
+        constraint = "required"
+    elif not isinstance(value, str):
+        constraint = "strict_string"
+    elif len(value) < IDENTITY_TOKEN_MIN_LENGTH:
+        constraint = "min_length"
+    elif len(value) > IDENTITY_TOKEN_MAX_LENGTH:
+        constraint = "max_length"
+    elif not value.strip():
+        constraint = "nonblank"
+    elif not value.isprintable():
+        constraint = "printable"
+    if constraint is not None:
+        raise IdentityTokenValidationError(field, constraint, actual_length)
+    assert isinstance(value, str)
+    return value
+
+
+def _operation_id(value: str) -> str:
+    return validate_identity_token("operation_id", value)
+
+
+def _admission_epoch(value: str) -> str:
+    return validate_identity_token("admission_epoch", value)
+
+
+OperationId = Annotated[
+    str,
+    Field(
+        strict=True,
+        min_length=IDENTITY_TOKEN_MIN_LENGTH,
+        max_length=IDENTITY_TOKEN_MAX_LENGTH,
+        description=(
+            "Caller-owned opaque operation token: 1–64 printable characters, "
+            "nonblank, preserved exactly; UUID format is not required. Generate "
+            "once for a NEW authorized intent, for example uuid.uuid4().hex, "
+            "never per invocation. Retain unchanged after admission and for "
+            "every retry and recovery of that intent."
+        ),
+    ),
+    AfterValidator(_operation_id),
+]
+AdmissionEpoch = Annotated[
+    str,
+    Field(
+        strict=True,
+        min_length=IDENTITY_TOKEN_MIN_LENGTH,
+        max_length=IDENTITY_TOKEN_MAX_LENGTH,
+        description=(
+            "Opaque journal epoch: use check_health.execution_journal for "
+            "SIMULATE or check_health.real_execution_journal for REAL. "
+            "1–64 printable nonblank characters, preserved exactly. Never "
+            "invent or refresh an epoch to bypass refusal; retain the original "
+            "for every previously attempted operation and its recovery."
+        ),
+    ),
+    AfterValidator(_admission_epoch),
+]
 
 
 def validate_token(operation_id: Any, admission_epoch: Any) -> None:
@@ -13,15 +109,7 @@ def validate_token(operation_id: Any, admission_epoch: Any) -> None:
         ("operation_id", operation_id),
         ("admission_epoch", admission_epoch),
     ):
-        if (
-            not isinstance(value, str)
-            or not value.strip()
-            or not value.isprintable()
-            or len(value) > 64
-        ):
-            raise ValueError(
-                f"{name} must be a nonblank printable string of 1–64 characters"
-            )
+        validate_identity_token(name, value)
 
 
 def decimal_price(value: Any) -> Decimal:

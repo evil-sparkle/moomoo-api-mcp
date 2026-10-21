@@ -7,8 +7,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from moomoo_mcp.client_authorization import ClientGrants, client_grants_context
+from moomoo_mcp.server import mcp
 from moomoo_mcp.services.base_service import HealthCheck, MoomooService
 from moomoo_mcp.services.trade_service import TradeService
+from moomoo_mcp.tools.trading_contract import server_contract_identity
 
 HEALTHY = {
     "status": "connected",
@@ -58,6 +60,7 @@ class TestCheckHealthTool:
 
         assert result.structured == {
             **HEALTHY,
+            "mcp_server": server_contract_identity(await mcp.list_tools()),
             "client_authorization": {
                 "restricted": False,
                 "permissions": [

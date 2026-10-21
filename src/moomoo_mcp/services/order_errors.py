@@ -9,7 +9,8 @@ was the easy one.
 
 These three types answer it:
 
-- :class:`OrderNotSentError` — nothing was sent. Safe to fix and retry.
+- :class:`OrderNotSentError` — this invocation did not send a mutation. Prior
+  attempts and durable admission still require inspection before another write.
 - :class:`OrderOutcomeUnknownError` — the call started and nothing came back.
   An order may exist. Check `get_orders` before any retry.
 - :class:`OrderReceiptUnreadableError` — the gateway acknowledged it. An order
@@ -30,6 +31,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from moomoo_mcp.services.execution_store import ExecutionStoreError
 from moomoo_mcp.services.trading_policy import TradingPolicyError
 
 
@@ -40,6 +42,12 @@ class OrderNotSentError(RuntimeError):
     missing connection, a failed just-in-time unlock: every pre-dispatch failure
     arrives here, with the original exception kept as ``__cause__``.
     """
+
+    def __init__(self, message: str, *, admitted: bool = False):
+        super().__init__(message)
+        # Only an authoritative post-admission boundary may establish this.
+        # False leaves journal status unknown; it never proves global absence.
+        self.admitted = admitted
 
 
 class OrderOutcomeUnknownError(RuntimeError):
@@ -65,7 +73,8 @@ class OrderReceiptUnreadableError(RuntimeError):
 def not_sent_message(operation: str, reason: str) -> str:
     return (
         f"{operation} was refused before any request was sent to the gateway, "
-        f"so no order was sent. {reason}"
+        f"so no order was sent by this invocation. This does not establish "
+        f"the outcome of any earlier attempt. {reason}"
     )
 
 
@@ -87,7 +96,9 @@ def receipt_unreadable_message(operation: str, reason: str) -> str:
 
 
 @contextmanager
-def not_sent(operation: str) -> Iterator[None]:
+def not_sent(
+    operation: str, *, admitted: bool = False, identity_lookup: bool = False
+) -> Iterator[None]:
     """Convert every pre-dispatch failure into :class:`OrderNotSentError`.
 
     Wrapping the phase rather than each check is deliberate. Individual checks
@@ -100,17 +111,24 @@ def not_sent(operation: str) -> Iterator[None]:
 
     Args:
         operation: Name of the operation, used in the message.
+        admitted: This invocation has already created its durable journal row.
+        identity_lookup: This scope may read earlier admissions. Preserve typed
+            storage failures because an unreadable identity has unknown outcome.
 
     Raises:
         OrderNotSentError: For any pre-dispatch failure, chained to its cause.
     """
     try:
         yield
-    except (
-        OrderNotSentError,
-        OrderOutcomeUnknownError,
-        OrderReceiptUnreadableError,
-    ):
+    except OrderNotSentError as exc:
+        if admitted:
+            exc.admitted = True
+        raise
+    except (OrderOutcomeUnknownError, OrderReceiptUnreadableError):
         raise
     except (TradingPolicyError, ValueError, TypeError, RuntimeError) as exc:
-        raise OrderNotSentError(not_sent_message(operation, str(exc))) from exc
+        if identity_lookup and isinstance(exc, ExecutionStoreError):
+            raise
+        raise OrderNotSentError(
+            not_sent_message(operation, str(exc)), admitted=admitted
+        ) from exc

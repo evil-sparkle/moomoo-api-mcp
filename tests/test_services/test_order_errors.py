@@ -8,6 +8,7 @@ retry into a duplicate order, so the phrases are pinned.
 
 import pytest
 
+from moomoo_mcp.services.execution_store import ExecutionStoreError
 from moomoo_mcp.services.order_errors import (
     OrderNotSentError,
     OrderOutcomeUnknownError,
@@ -112,3 +113,35 @@ class TestNotSentBoundary:
     def test_nothing_raised_means_nothing_happens(self):
         with not_sent("place_order"):
             pass
+
+    def test_admitted_refusal_keeps_authoritative_journal_evidence(self):
+        with (
+            pytest.raises(OrderNotSentError) as excinfo,
+            not_sent("place_order", admitted=True),
+        ):
+            raise ValueError("controls refused")
+        assert excinfo.value.admitted is True
+        assert "earlier attempt" in str(excinfo.value)
+
+    def test_outer_admitted_boundary_marks_existing_refusal_without_rewrapping(self):
+        original = OrderNotSentError("controls refused")
+        with (
+            pytest.raises(OrderNotSentError) as excinfo,
+            not_sent("place_order", admitted=True),
+        ):
+            raise original
+        assert excinfo.value is original
+        assert original.admitted is True
+
+    def test_generic_refusal_does_not_establish_journal_absence(self):
+        error = OrderNotSentError("refused")
+        assert error.admitted is False
+
+    def test_failed_identity_lookup_retains_typed_storage_uncertainty(self):
+        original = ExecutionStoreError("fixture unreadable journal")
+        with (
+            pytest.raises(ExecutionStoreError) as excinfo,
+            not_sent("place_order", identity_lookup=True),
+        ):
+            raise original
+        assert excinfo.value is original

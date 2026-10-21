@@ -6,6 +6,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata
 from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as MCPTool
 from pydantic import ValidationError
@@ -16,6 +17,7 @@ from moomoo_mcp.client_authorization import (
     tool_visible,
 )
 from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.services.execution_identity import IdentityTokenValidationError
 from moomoo_mcp.services.execution_store import ExecutionConflict, ExecutionStoreError
 from moomoo_mcp.services.health import sanitize_error
 from moomoo_mcp.services.order_errors import (
@@ -31,16 +33,44 @@ from moomoo_mcp.services.trading_controls import TradingControlError
 from moomoo_mcp.services.trading_policy import TradingPolicyError
 from moomoo_mcp.tools.kline_cursor import CursorError
 from moomoo_mcp.tools.serialization import IdentifierSerializationError
+from moomoo_mcp.tools.trading_contract import published_input_schema
 
 AGENT_INSTRUCTIONS = (
     "Tool errors provide error_code, retryable and next_action. Follow that "
     "guidance and continue independent work rather than repeating unchanged "
-    "failed requests. Respect reported rate-limit retry_after_seconds. Correct "
-    "invalid arguments using the tool schema. Preserve the user's account and "
-    "REAL/SIMULATE environment; never switch them to bypass a failure. Failed "
-    "order lookups do not prove an order is absent. For uncertain or unreadable "
-    "order outcomes, inspect the original execution and broker orders before "
-    "any further mutation; never resend blindly or invent a new operation ID. "
+    "failed requests. Respect reported rate-limit retry_after_seconds; a wait "
+    "does not authorize another mutation. Obtain explicit trading authorization "
+    "for the exact account, REAL/SIMULATE environment, instrument, side, size, "
+    "price, order type, validity, session and submission timing. Inspect actual "
+    "served tools/list; descriptions cached by a client may be stale. Before "
+    "preparation or submission, generate uuid.uuid4().hex once per authorized "
+    "intent and durably persist the exact request, account, environment, "
+    "operation_id and admission_epoch. Both tokens must be nonblank printable "
+    "strings of 1–64 characters. Do not retry writes automatically. An input "
+    "rejection with no record "
+    "created in this invocation does not prove no earlier attempt exists. A "
+    "technical correction is permitted only within existing user authorization "
+    "and with evidence that the invalid request was never admitted or sent in "
+    "any attempt. Respect literal limits on tool invocations, including "
+    "after an unsent validation failure. Do not change economic terms, account, "
+    "environment or timing; an approval for an exact operation ID does not "
+    "transfer to a "
+    "corrected ID. Prepare and obtain approval again for changed approved "
+    "parameters. If prior identity or dispatch is uncertain, recover the "
+    "original persisted ID and epoch and inspect get_execution with the exact "
+    "trd_env and scoped broker orders. Never allocate a replacement "
+    "ID, refresh an epoch, or resend to bypass uncertainty. Preserve the user's "
+    "account and REAL/SIMULATE environment; never switch them to bypass a "
+    "failure. session=RTH controls execution eligibility; it does not enforce "
+    "submission during regular market hours. For an explicit submit-only-in-RTH "
+    "condition, verify current instrument market state and the market-local "
+    "calendar immediately before submission, including holidays and half days; "
+    "if timing is closed or uncertain, defer without submitting. The server "
+    "does not schedule a future submission. Report acknowledgement and observed "
+    "broker status separately; never promise a fill, pending status, DAY "
+    "rollover or automatic future submission. Failed order lookups do not prove "
+    "an order is absent. For uncertain or unreadable order outcomes, inspect "
+    "the original execution and broker orders before any further mutation. "
     "Preserve structured execution states and recovery evidence. Empty results "
     "mean no matches within the reported query scope; preserve unavailable "
     "fields rather than inventing values. Connected health confirms gateway "
@@ -126,6 +156,92 @@ QUOTE_TOOLS = frozenset(
 )
 
 
+def _execution_evidence(
+    payload: dict[str, Any], phase: str, journal_record_created: bool | None = None
+) -> None:
+    payload.update(
+        validation_phase=phase,
+        journal_record_created=journal_record_created,
+        journal_record_scope="THIS_INVOCATION",
+        identity_status="UNKNOWN",
+        prior_attempt_outcome="UNKNOWN",
+    )
+
+
+def _validation_issues(error: ValidationError) -> list[dict[str, Any]]:
+    """Read typed Pydantic facts internally; return no supplied values or messages."""
+    issues = []
+    constraints = {
+        "missing": "required",
+        "string_type": "strict_string",
+        "string_too_short": "min_length",
+        "string_too_long": "max_length",
+    }
+    for issue in error.errors(
+        include_input=True, include_context=True, include_url=False
+    ):
+        path = list(issue["loc"])
+        diagnostic: dict[str, Any] = {"path": path, "type": issue["type"]}
+        typed_error = issue.get("ctx", {}).get("error")
+        if isinstance(typed_error, IdentityTokenValidationError):
+            diagnostic.update(typed_error.metadata())
+        elif path and path[-1] in {"operation_id", "admission_epoch"}:
+            constraint = constraints.get(issue["type"])
+            if constraint is not None:
+                value = issue.get("input")
+                diagnostic.update(
+                    IdentityTokenValidationError(
+                        str(path[-1]),
+                        constraint,
+                        len(value) if isinstance(value, str) else None,
+                    ).metadata()
+                )
+        issues.append(diagnostic)
+    return issues
+
+
+def _input_validation_evidence(
+    payload: dict[str, Any],
+    issues: list[dict[str, Any]],
+    *,
+    consequential: bool = False,
+) -> None:
+    _execution_evidence(payload, "INPUT_VALIDATION", False)
+    payload.update(mutation_outcome="NOT_SENT", validation_issues=issues)
+    fields = list(dict.fromkeys(issue["field"] for issue in issues if "field" in issue))
+    if fields:
+        payload["next_action"] = (
+            "For a confirmed first attempt, correct "
+            + ", ".join(fields)
+            + " to 1–64 printable nonblank characters, preserving exact intent, "
+            "account and environment; prepare and approve the corrected request "
+            "where required. Invoke again only if valid authorization permits "
+            "another invocation: literal submit-once authorization is not "
+            "reusable, and approval bound to an exact operation ID cannot "
+            "transfer to a replacement. If any prior attempt or delivery "
+            "uncertainty exists, "
+            "recover its original operation ID and epoch and inspect get_execution "
+            "and broker orders; do not replace or refresh that identity. "
+            "This invocation created no journal record; prior identity status "
+            "remains unknown. No request was resent automatically."
+        )
+    elif consequential:
+        payload["next_action"] = (
+            "For a confirmed first attempt, correct the schema inputs while "
+            "preserving intent, account and environment. Invoke again only if "
+            "valid authorization permits another invocation; literal submit-once "
+            "authorization is not reusable and approval bound to an exact "
+            "operation ID cannot transfer. For any prior attempt or delivery "
+            "uncertainty, inspect the original execution and state first; retain "
+            "its original identity. No request was resent automatically."
+        )
+    payload["retry_condition"] = (
+        "Do not repeat the unchanged request. Correct the identified input only "
+        "after establishing whether this was a first attempt; preserve any "
+        "previously attempted operation's identity and resolve its outcome first."
+    )
+
+
 def tool_error_result(
     error: ToolError,
     name: str,
@@ -133,6 +249,7 @@ def tool_error_result(
     input_model: str,
     consequential: bool,
     read_only: bool,
+    input_validation: bool = False,
 ) -> CallToolResult:
     """Use existing typed facts, giving order outcomes precedence over causes."""
     causes: list[BaseException] = []
@@ -155,6 +272,7 @@ def tool_error_result(
         payload.update(error_code=code, message=message, next_action=action)
 
     def uncertain_mutation() -> None:
+        _execution_evidence(payload, "UNKNOWN")
         payload["mutation_outcome"] = "UNKNOWN"
         payload["next_action"] = (
             "Unlock state is uncertain. Do not repeat unlock blindly. Use "
@@ -166,15 +284,6 @@ def tool_error_result(
     # Nested validation/permission failures cannot override what the order
     # boundary established about dispatch or acknowledgement.
     for item in causes:
-        if isinstance(item, OrderNotSentError):
-            category(
-                "ORDER_NOT_SENT",
-                sanitize_error(item),
-                "Resolve the refusal while preserving approval, policy, account, "
-                "environment and existing operation identity before retrying.",
-            )
-            payload["mutation_outcome"] = "NOT_SENT"
-            return error_result(payload)
         if isinstance(item, (OrderOutcomeUnknownError, OrderReceiptUnreadableError)):
             acknowledged = isinstance(item, OrderReceiptUnreadableError)
             category(
@@ -183,7 +292,53 @@ def tool_error_result(
                 "Do not resend. Inspect get_execution for the original operation "
                 "and get_orders/get_order in the original account and environment.",
             )
+            _execution_evidence(
+                payload, "ACKNOWLEDGED" if acknowledged else "DISPATCHED"
+            )
             payload["mutation_outcome"] = "ACKNOWLEDGED" if acknowledged else "UNKNOWN"
+            return error_result(payload)
+
+    for item in causes:
+        if isinstance(item, OrderNotSentError):
+            category(
+                "ORDER_NOT_SENT",
+                sanitize_error(item),
+                "This invocation sent no mutation. Inspect get_execution for any "
+                "original operation and resolve its recorded state before further "
+                "mutation. An admitted refusal retains immutable identity; do not "
+                "replace its operation ID or refresh its epoch. Preserve approval, "
+                "policy, account and environment. No request was resent automatically.",
+            )
+            _execution_evidence(
+                payload,
+                "ADMITTED" if item.admitted else "PRE_DISPATCH",
+                True if item.admitted else None,
+            )
+            payload["mutation_outcome"] = "NOT_SENT"
+            payload["retry_condition"] = (
+                "Do not repeat the unchanged refusal or infer that a replacement "
+                "operation is allowed. Resolve the original execution and refusal "
+                "under the same policy and approval requirements."
+            )
+            token_error = next(
+                (
+                    cause
+                    for cause in causes
+                    if isinstance(cause, IdentityTokenValidationError)
+                ),
+                None,
+            )
+            if token_error is not None and not item.admitted:
+                _input_validation_evidence(
+                    payload,
+                    [
+                        {
+                            "path": [token_error.field],
+                            "type": "identity_token",
+                            **token_error.metadata(),
+                        }
+                    ],
+                )
             return error_result(payload)
 
     if isinstance(problem, ClientAuthorizationError):
@@ -197,7 +352,7 @@ def tool_error_result(
     if isinstance(problem, QuotePermissionDeniedError) and not consequential:
         return quote_permission_result(problem, name)
     if isinstance(problem, ValidationError):
-        is_input = problem.title == input_model
+        is_input = input_validation and problem.title == input_model
         category(
             "INVALID_ARGUMENT" if is_input else "INVALID_RESPONSE",
             "Tool arguments do not match the schema."
@@ -207,14 +362,23 @@ def tool_error_result(
             if is_input
             else "Treat the response as unavailable; do not fabricate values.",
         )
-        payload["validation_issues"] = [
-            {"path": list(issue["loc"]), "type": issue["type"]}
-            for issue in problem.errors(
-                include_input=False, include_context=False, include_url=False
+        payload["validation_issues"] = _validation_issues(problem)
+        if is_input:
+            _input_validation_evidence(
+                payload, payload["validation_issues"], consequential=consequential
             )
-        ]
         if consequential and not is_input:
             uncertain_mutation()
+    elif isinstance(problem, IdentityTokenValidationError) and not consequential:
+        category(
+            "INVALID_ARGUMENT",
+            "An execution identity token violates its input contract.",
+            "Correct the identified input while preserving account and environment.",
+        )
+        _input_validation_evidence(
+            payload,
+            [{"path": [problem.field], "type": "identity_token", **problem.metadata()}],
+        )
     elif isinstance(problem, (IdentifierSerializationError, SDKResponseError)):
         category(
             "INVALID_RESPONSE",
@@ -240,12 +404,18 @@ def tool_error_result(
             "The operation conflicts with its recorded identity.",
             "Use get_execution; preserve original ID, epoch and request.",
         )
+        _execution_evidence(payload, "UNKNOWN")
+        if consequential:
+            payload["mutation_outcome"] = "UNKNOWN"
     elif isinstance(problem, ExecutionStoreError):
         category(
             "EXECUTION_JOURNAL_BLOCKED",
             "Execution journal access is blocked.",
             "Use check_health and recovery; do not create a new operation.",
         )
+        _execution_evidence(payload, "UNKNOWN")
+        if consequential:
+            payload["mutation_outcome"] = "UNKNOWN"
     elif isinstance(problem, TradingControlError):
         category(
             "TRADING_CONTROLS_BLOCKED",
@@ -338,6 +508,19 @@ def tool_error_result(
     return error_result(payload)
 
 
+class _OpaqueIdentityMetadata(FuncMetadata):
+    """Keep optional identity strings opaque through the SDK's JSON convenience."""
+
+    def pre_parse_json(self, data: dict[str, Any]) -> dict[str, Any]:
+        parsed = super().pre_parse_json(data)
+        for field in ("operation_id", "admission_epoch"):
+            if field in self.arg_model.model_fields and isinstance(
+                data.get(field), str
+            ):
+                parsed[field] = data[field]
+        return parsed
+
+
 class AgentFriendlyMCP(FastMCP):
     """Normalize HTTP/stdio errors while retaining Python call semantics."""
 
@@ -347,8 +530,32 @@ class AgentFriendlyMCP(FastMCP):
         # Retain that input behavior and the SDK's success conversion.
         self._mcp_server.call_tool(validate_input=False)(self._call_tool_with_errors)
 
+    def add_tool(self, fn: Any, *args: Any, **kwargs: Any) -> None:
+        super().add_tool(fn, *args, **kwargs)
+        name = kwargs.get("name") or (args[0] if args else None) or fn.__name__
+        tool = self._tool_manager.get_tool(name)
+        if tool is not None and any(
+            field in tool.fn_metadata.arg_model.model_fields
+            for field in ("operation_id", "admission_epoch")
+        ):
+            metadata = tool.fn_metadata
+            tool.fn_metadata = _OpaqueIdentityMetadata(
+                arg_model=metadata.arg_model,
+                output_schema=metadata.output_schema,
+                output_model=metadata.output_model,
+                wrap_output=metadata.wrap_output,
+            )
+
     async def list_tools(self) -> list[MCPTool]:
-        return [tool for tool in await super().list_tools() if tool_visible(tool.name)]
+        return [
+            tool.model_copy(
+                update={
+                    "inputSchema": published_input_schema(tool.name, tool.inputSchema)
+                }
+            )
+            for tool in await super().list_tools()
+            if tool_visible(tool.name)
+        ]
 
     async def _call_tool_with_errors(self, name: str, arguments: dict[str, Any]) -> Any:
         tool = self._tool_manager.get_tool(name)
@@ -373,6 +580,25 @@ class AgentFriendlyMCP(FastMCP):
                 else None
             )
             authorize_tool(name, arguments, default_environment=default_environment)
+            # Establish input phase here, before any tool/service code runs.
+            # A later ValidationError can use this same model/title after a
+            # mutation; its class or title alone cannot prove non-dispatch.
+            try:
+                parsed = tool.fn_metadata.pre_parse_json(arguments)
+                tool.fn_metadata.arg_model.model_validate(parsed)
+            except ValidationError as cause:
+                error = ToolError("Tool arguments do not match the schema.")
+                error.__cause__ = cause
+                return tool_error_result(
+                    error,
+                    name,
+                    input_model=tool.fn_metadata.arg_model.__name__,
+                    consequential=bool(
+                        tool.annotations and tool.annotations.destructiveHint
+                    ),
+                    read_only=bool(tool.annotations and tool.annotations.readOnlyHint),
+                    input_validation=True,
+                )
             return await super().call_tool(name, arguments)
         except ClientAuthorizationError:
             return error_result(

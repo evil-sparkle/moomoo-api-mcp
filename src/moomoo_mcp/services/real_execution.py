@@ -278,14 +278,15 @@ class RealExecution:
             if kind in {"PLACE", "PLACE_COMBO"}:
                 fixed["remark"] = row["order_tag"]
             try:
-                with not_sent(method):
+                with not_sent(method, admitted=True):
                     self.ready()
                 receipt = call(fixed)
                 if not self._active.operation["marked"]:
                     raise OrderNotSentError(
                         not_sent_message(
                             method, "Durable dispatch boundary was not entered"
-                        )
+                        ),
+                        admitted=True,
                     )
                 try:
                     receipt = serialize_identifiers(receipt)
@@ -310,8 +311,11 @@ class RealExecution:
                 if not active["marked"]:
                     self._finish(row, "REFUSED", "NOT_SENT", error=str(exc))
                     if isinstance(exc, OrderNotSentError):
+                        exc.admitted = True
                         raise
-                    raise OrderNotSentError(not_sent_message(method, str(exc))) from exc
+                    raise OrderNotSentError(
+                        not_sent_message(method, str(exc)), admitted=True
+                    ) from exc
                 acknowledged = isinstance(exc, OrderReceiptUnreadableError)
                 return self._finish(
                     row,
@@ -330,7 +334,7 @@ class RealExecution:
         active = getattr(self._active, "operation", None)
         if active is None:
             raise OrderNotSentError("REAL mutation has no active durable admission")
-        with not_sent("REAL journal dispatch"):
+        with not_sent("REAL journal dispatch", admitted=True):
             if active["marked"]:
                 raise ExecutionConflict("REAL operation cannot dispatch more than once")
             self.ready()

@@ -4,10 +4,10 @@ from typing import Any
 
 from mcp.server.fastmcp import Context
 from mcp.server.session import ServerSession
-from pydantic import StrictInt
 
 from moomoo_mcp.client_authorization import check_account_access
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.services.execution_identity import AdmissionEpoch, OperationId
 from moomoo_mcp.tools.annotations import (
     CONSEQUENTIAL_TOOL,
     MUTATING_TOOL,
@@ -15,29 +15,42 @@ from moomoo_mcp.tools.annotations import (
 )
 from moomoo_mcp.tools.offload import run_blocking
 from moomoo_mcp.tools.serialization import serialize_identifiers
+from moomoo_mcp.tools.trading_contract import (
+    ComboLegs,
+    ComboQuantity,
+    ExactAccountId,
+    ExactApprovalId,
+    ExactBrokerId,
+    ExecutionSession,
+    OrderPrice,
+    OrderQuantity,
+    OrderRemark,
+    TimeInForce,
+    TradingEnvironment,
+)
 
 
 @mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def place_order(
     ctx: Context[ServerSession, AppContext],
     code: str,
-    price: str | float,
-    qty: StrictInt,
+    price: OrderPrice,
+    qty: OrderQuantity,
     trd_side: str,
-    trd_env: str,
+    trd_env: TradingEnvironment,
     order_type: str = "NORMAL",
-    time_in_force: str = "DAY",
+    time_in_force: TimeInForce = "DAY",
     adjust_limit: float = 0,
     aux_price: float | None = None,
     trail_type: str | None = None,
     trail_value: float | None = None,
     trail_spread: float | None = None,
-    acc_id: str = "0",
-    remark: str = "",
-    operation_id: str | None = None,
-    admission_epoch: str | None = None,
-    approval_id: str | None = None,
-    session: str = "N/A",
+    acc_id: ExactAccountId = "0",
+    remark: OrderRemark = "",
+    operation_id: OperationId | None = None,
+    admission_epoch: AdmissionEpoch | None = None,
+    approval_id: ExactApprovalId | None = None,
+    session: ExecutionSession = "N/A",
 ) -> dict:
     """Place a new trading order.
 
@@ -46,21 +59,32 @@ async def place_order(
     retries; never refresh a retired epoch or generate a replacement token for an
     uncertain operation. Identical retries return stored state or IN_FLIGHT.
     Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
-    regular hours. Journal or recovery blocking also refuses cancellations.
+    RTH execution eligibility. There is no local market-open submission gate.
+    Journal or recovery blocking also refuses cancellations.
     REAL-mode servers use the same configured paper journal for SIMULATE writes.
     REAL mutations require the same caller-owned tokens using the epoch from
     check_health.real_execution_journal, with numeric prices and a separate REAL
     journal. Preserve both tokens and the exact request on every retry. Recovery
     only queries broker evidence; it never resubmits or assumes a REAL order absent.
 
-    CRITICAL: You MUST ask the user for explicit confirmation before calling this
-    tool, especially if `trd_env` is 'REAL'. Display the full order details to the
-    user for verification including: code, side (BUY/SELL), quantity, price, order
-    type, and time in force. Orders placed in REAL environment will use real money.
+    Require valid explicit user authorization for the exact trade, including
+    account, environment, symbol, side, price, quantity, order type, time in force,
+    execution session and submission timing. REAL orders use real money. An existing
+    authorization can cover a permitted technical correction only when the attempt
+    is authoritatively pre-admission/NOT_SENT, no earlier attempt is unresolved,
+    and the authorization permits another invocation. A literal submit-once limit,
+    session-open condition, expired or consumed authority must be respected. Separate
+    server-side exact-request approval is still required and never transfers to a
+    replacement ID. Changes to economic terms or timing require appropriate authority.
+
+    RTH selects execution eligibility, not local submission time. An authorized RTH
+    order may be submitted outside RTH; broker acceptance, pending status, DAY
+    validity and eventual execution remain broker-dependent. Acknowledged is not
+    filled. This tool performs no locally scheduled future submission.
 
     IMPORTANT FOR AI AGENTS:
     - trd_env is REQUIRED and has no default. State the environment every time.
-    - ALWAYS confirm with user before placing orders.
+    - Use valid explicit authorization; follow its exact scope and invocation limits.
 
     TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
     permits them — READ_ONLY blocks every write, SIMULATE allows only
@@ -88,8 +112,10 @@ async def place_order(
     cancellations. lock_trade is the only way to clear a halt.
 
     THREE OUTCOMES: an error says which one happened.
-    - "no order was sent": refused before anything was dispatched. Safe to fix
-      and retry.
+    - "no order was sent": THIS invocation did not dispatch. It does not prove
+      that earlier invocations did not dispatch or that this identity is unadmitted.
+      Inspect structured phase evidence; retryable=false forbids unchanged retries.
+      Repair only demonstrably pre-admission input under still-valid authorization.
     - "may have been sent ... outcome is unknown": the request went out and
       nothing acknowledged it. An order MAY exist. Check get_orders BEFORE any
       retry. Never resend blindly.
@@ -122,8 +148,8 @@ async def place_order(
             - 'TRAILING_STOP': Trailing stop market order.
             - 'TRAILING_STOP_LIMIT': Trailing stop limit order.
         time_in_force: Time in force for the order. Default 'DAY'.
-            - 'DAY': Order valid for current trading day only.
-            - 'GTC': Good-Til-Cancelled, order remains active until filled or cancelled.
+            - 'DAY': Broker-defined trading-day validity; no next-session promise.
+            - 'GTC': Good-Til-Cancelled under broker validity rules; not paper scope.
         adjust_limit: Signed price-adjustment ratio. For example, 0.015 allows
             adjustment upward by at most 1.5%; -0.01 allows 1% downward. Default 0.
         aux_price: Trigger price for stop/if-touched order types (required for STOP,
@@ -174,17 +200,17 @@ async def place_order(
 @mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def place_combo_order(
     ctx: Context[ServerSession, AppContext],
-    combo_legs: list[dict],
+    combo_legs: ComboLegs,
     price: float,
-    qty: int,
-    trd_env: str,
+    qty: ComboQuantity,
+    trd_env: TradingEnvironment,
     order_type: str = "NORMAL",
-    time_in_force: str = "DAY",
-    acc_id: str = "0",
-    remark: str = "",
-    operation_id: str | None = None,
-    admission_epoch: str | None = None,
-    approval_id: str | None = None,
+    time_in_force: TimeInForce = "DAY",
+    acc_id: ExactAccountId = "0",
+    remark: OrderRemark = "",
+    operation_id: OperationId | None = None,
+    admission_epoch: AdmissionEpoch | None = None,
+    approval_id: ExactApprovalId | None = None,
 ) -> dict:
     """Place a multi-leg option strategy (vertical spread, straddle, etc.) as a
     single atomic order.
@@ -195,10 +221,12 @@ async def place_combo_order(
     another broker mutation. Recovery never resubmits or assumes a REAL order absent.
     Paper combo execution remains unsupported.
 
-    CRITICAL: You MUST ask the user for explicit confirmation before calling this
-    tool, especially if `trd_env` is 'REAL'. Display EVERY leg (code, side, ratio)
-    plus the net price and quantity for verification. Orders placed in REAL
-    environment will use real money.
+    Require valid explicit authorization for every leg (code, side, ratio), net
+    price, quantity, account, REAL environment, time in force and submission timing.
+    REAL orders use real money. Respect submit-once limits and expired or consumed
+    authority. A permitted technical correction needs authoritative pre-admission
+    NOT_SENT evidence, no unresolved earlier attempt and authority for another call.
+    Separate exact-request operator approval cannot transfer to a replacement ID.
 
     Call preview_combo_order first with the same legs, price, quantity, and
     account to show the user the margin and buying-power impact before asking
@@ -212,7 +240,7 @@ async def place_combo_order(
 
     IMPORTANT FOR AI AGENTS:
     - trd_env is REQUIRED and has no default. State the environment every time.
-    - ALWAYS confirm with user before placing orders.
+    - Use valid explicit authorization; follow its exact scope and invocation limits.
 
     TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
     permits them — READ_ONLY blocks every write, SIMULATE allows only
@@ -245,8 +273,10 @@ async def place_combo_order(
     cancellations. lock_trade is the only way to clear a halt.
 
     THREE OUTCOMES: an error says which one happened.
-    - "no order was sent": refused before anything was dispatched. Safe to fix
-      and retry.
+    - "no order was sent": THIS invocation did not dispatch. It does not prove
+      that earlier invocations did not dispatch or that this identity is unadmitted.
+      Inspect structured phase evidence; retryable=false forbids unchanged retries.
+      Repair only demonstrably pre-admission input under still-valid authorization.
     - "may have been sent ... outcome is unknown": the request went out and
       nothing acknowledged it. An order MAY exist. Check get_orders BEFORE any
       retry. Never resend blindly.
@@ -257,7 +287,7 @@ async def place_combo_order(
         combo_legs: The strategy's legs, at least two, all in the same market.
             Each leg is a dict:
                 {"code": "US.AAPL260320C200000", "trd_side": "SELL",
-                 "qty_ratio": 1, "position_id": 123456789}
+                 "qty_ratio": 1, "position_id": "123456789"}
             - code: Option or stock code for the leg.
             - trd_side: 'BUY' or 'SELL' for that leg.
             - qty_ratio: Required positive integer. It MULTIPLIES the order
@@ -307,12 +337,12 @@ async def place_combo_order(
 @mcp.tool(annotations=READ_ONLY_TOOL)
 async def preview_combo_order(
     ctx: Context[ServerSession, AppContext],
-    combo_legs: list[dict],
+    combo_legs: ComboLegs,
     price: float,
-    qty: int,
+    qty: ComboQuantity,
     order_type: str = "NORMAL",
     trd_env: str = "REAL",
-    acc_id: str = "0",
+    acc_id: ExactAccountId = "0",
 ) -> dict[str, Any]:
     """Preview what a multi-leg option package would do to an account.
 
@@ -385,16 +415,16 @@ async def preview_combo_order(
 @mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def modify_order(
     ctx: Context[ServerSession, AppContext],
-    order_id: str,
+    order_id: ExactBrokerId,
     modify_order_op: str,
-    trd_env: str,
-    qty: StrictInt | None = None,
-    price: str | float | None = None,
+    trd_env: TradingEnvironment,
+    qty: OrderQuantity | None = None,
+    price: OrderPrice | None = None,
     adjust_limit: float = 0,
-    acc_id: str = "0",
-    operation_id: str | None = None,
-    admission_epoch: str | None = None,
-    approval_id: str | None = None,
+    acc_id: ExactAccountId = "0",
+    operation_id: OperationId | None = None,
+    admission_epoch: AdmissionEpoch | None = None,
+    approval_id: ExactApprovalId | None = None,
 ) -> dict:
     """Modify an existing order.
 
@@ -403,20 +433,24 @@ async def modify_order(
     retries; never refresh a retired epoch or generate a replacement token for an
     uncertain operation. Identical retries return stored state or IN_FLIGHT.
     Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
-    regular hours. Journal or recovery blocking also refuses cancellations.
+    RTH execution eligibility. There is no local market-open submission gate.
+    Journal or recovery blocking also refuses cancellations.
     REAL-mode servers use the same configured paper journal for SIMULATE writes.
     REAL mutations require the same caller-owned tokens using the epoch from
     check_health.real_execution_journal, with numeric prices and a separate REAL
     journal. Preserve both tokens and the exact request on every retry. Recovery
     only queries broker evidence; it never resubmits or assumes a REAL order absent.
 
-    CRITICAL: You MUST ask the user for explicit confirmation before calling this
-    tool, especially if `trd_env` is 'REAL'. Display the order_id and the new
-    parameters (price, qty) to the user for verification.
+    Require valid explicit user authorization for this exact order, account,
+    environment, changes and submission timing. Respect literal one-invocation,
+    session-open and expiration conditions. A permitted technical correction requires
+    authoritative pre-admission NOT_SENT evidence, no unresolved earlier attempt and
+    authority for another call. Server-side exact-request approval remains required;
+    it cannot transfer to a replacement ID or changed request.
 
     IMPORTANT FOR AI AGENTS:
     - trd_env is REQUIRED and has no default. State the environment every time.
-    - ALWAYS confirm with user before modifying orders.
+    - Use valid explicit authorization; follow its exact scope and invocation limits.
 
     TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
     permits them — READ_ONLY blocks every write, SIMULATE allows only
@@ -445,8 +479,10 @@ async def modify_order(
     to clear a halt.
 
     THREE OUTCOMES: an error says which one happened.
-    - "no order was sent": refused before anything was dispatched. Safe to fix
-      and retry.
+    - "no order was sent": THIS invocation did not dispatch. It does not prove
+      that earlier invocations did not dispatch or that this identity is unadmitted.
+      Inspect structured phase evidence; retryable=false forbids unchanged retries.
+      Repair only demonstrably pre-admission input under still-valid authorization.
     - "may have been sent ... outcome is unknown": the request went out and
       nothing acknowledged it. The change MAY have taken effect. Check
       get_orders BEFORE any retry. Never resend blindly.
@@ -493,12 +529,12 @@ async def modify_order(
 @mcp.tool(annotations=CONSEQUENTIAL_TOOL)
 async def cancel_order(
     ctx: Context[ServerSession, AppContext],
-    order_id: str,
-    trd_env: str,
-    acc_id: str = "0",
-    operation_id: str | None = None,
-    admission_epoch: str | None = None,
-    approval_id: str | None = None,
+    order_id: ExactBrokerId,
+    trd_env: TradingEnvironment,
+    acc_id: ExactAccountId = "0",
+    operation_id: OperationId | None = None,
+    admission_epoch: AdmissionEpoch | None = None,
+    approval_id: ExactApprovalId | None = None,
 ) -> dict:
     """Cancel an existing order.
 
@@ -507,20 +543,24 @@ async def cancel_order(
     retries; never refresh a retired epoch or generate a replacement token for an
     uncertain operation. Identical retries return stored state or IN_FLIGHT.
     Paper execution is limited to US stocks/ETFs, whole shares, NORMAL/DAY and
-    regular hours. Journal or recovery blocking also refuses cancellations.
+    RTH execution eligibility. There is no local market-open submission gate.
+    Journal or recovery blocking also refuses cancellations.
     REAL-mode servers use the same configured paper journal for SIMULATE writes.
     REAL mutations require the same caller-owned tokens using the epoch from
     check_health.real_execution_journal, with numeric prices and a separate REAL
     journal. Preserve both tokens and the exact request on every retry. Recovery
     only queries broker evidence; it never resubmits or assumes a REAL order absent.
 
-    CRITICAL: You MUST ask the user for explicit confirmation before calling this
-    tool, especially if `trd_env` is 'REAL'. Display the order_id to the user
-    for verification before cancellation.
+    Require valid explicit user authorization to cancel this exact order in its
+    account and environment at this time. Respect literal one-invocation, timing,
+    expiration and consumed-authority limits. A permitted technical correction needs
+    authoritative pre-admission NOT_SENT evidence, no unresolved earlier attempt and
+    authority for another call. Separate exact-request operator approval never
+    transfers to a replacement ID or changed request.
 
     IMPORTANT FOR AI AGENTS:
     - trd_env is REQUIRED and has no default. State the environment every time.
-    - ALWAYS confirm with user before cancelling orders.
+    - Use valid explicit authorization; follow its exact scope and invocation limits.
 
     TRADING MODE: this server refuses order writes unless MOOMOO_TRADING_MODE
     permits them — READ_ONLY blocks every write, SIMULATE allows only
@@ -541,8 +581,10 @@ async def cancel_order(
     what clears the halt, once the gateway accepts a lock again.
 
     THREE OUTCOMES: an error says which one happened.
-    - "no order was sent": refused before anything was dispatched. Safe to fix
-      and retry.
+    - "no order was sent": THIS invocation did not dispatch. It does not prove
+      that earlier invocations did not dispatch or that this identity is unadmitted.
+      Inspect structured phase evidence; retryable=false forbids unchanged retries.
+      Repair only demonstrably pre-admission input under still-valid authorization.
     - "may have been sent ... outcome is unknown": the request went out and
       nothing acknowledged it. The order MAY have been cancelled. Check
       get_orders BEFORE any retry. Never resend blindly.
@@ -579,7 +621,7 @@ async def get_orders(
     code: str = "",
     status_filter_list: list[str] | None = None,
     trd_env: str = "REAL",
-    acc_id: str = "0",
+    acc_id: ExactAccountId = "0",
     refresh_cache: bool = False,
 ) -> list[dict]:
     """Get list of today's orders.
@@ -627,7 +669,7 @@ async def get_deals(
     ctx: Context[ServerSession, AppContext],
     code: str = "",
     trd_env: str = "REAL",
-    acc_id: str = "0",
+    acc_id: ExactAccountId = "0",
     refresh_cache: bool = False,
 ) -> list[dict]:
     """Get list of today's deals (executed trades).
@@ -676,7 +718,7 @@ async def get_history_orders(
     start: str = "",
     end: str = "",
     trd_env: str = "REAL",
-    acc_id: str = "0",
+    acc_id: ExactAccountId = "0",
 ) -> list[dict]:
     """Get historical orders.
 
@@ -750,7 +792,7 @@ async def get_history_deals(
     start: str = "",
     end: str = "",
     trd_env: str = "REAL",
-    acc_id: str = "0",
+    acc_id: ExactAccountId = "0",
 ) -> list[dict]:
     """Get historical deals (executed trades).
 
@@ -831,13 +873,16 @@ def _execution_for_environment(ctx: Context[ServerSession, AppContext], trd_env:
 @mcp.tool(annotations=READ_ONLY_TOOL)
 async def get_execution(
     ctx: Context[ServerSession, AppContext],
-    operation_id: str,
+    operation_id: OperationId,
     trd_env: str = "SIMULATE",
 ) -> dict:
     """Read durable status, correlation and recovery evidence in the selected journal.
 
     Select REAL explicitly for live operations; SIMULATE remains the default.
     Operation IDs are owned independently by each environment's journal.
+    A failed lookup, unreadable journal or not-owned response does not prove
+    global absence or authorize a replacement ID. Preserve the original identity
+    and use access-controlled inspection and the existing recovery workflow.
     """
     execution = _execution_for_environment(ctx, trd_env)
     row = await run_blocking(execution.store.lookup, operation_id)
@@ -850,7 +895,7 @@ async def get_execution(
 @mcp.tool(annotations=MUTATING_TOOL)
 async def reconcile_execution(
     ctx: Context[ServerSession, AppContext],
-    operation_id: str,
+    operation_id: OperationId,
     trd_env: str = "SIMULATE",
 ) -> dict:
     """Query broker evidence for a journal operation; never mutate broker orders.

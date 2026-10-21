@@ -47,7 +47,7 @@ def recover_paper_admission(
     paper = service.paper
     if paper is None or str(params.get("trd_env", "")).strip().upper() != "SIMULATE":
         return None
-    with not_sent(method):
+    with not_sent(method, identity_lookup=True):
         service.policy.check_write(method, "SIMULATE")
         kind, request_params = _paper_parameters(method, params)
         validate_token(params["operation_id"], params["admission_epoch"])
@@ -250,7 +250,11 @@ def prepare_trade_call(
     if method not in reads and method not in writes:
         return AdmissionPlan()
     plan = AdmissionPlan(write_operation=method if method in writes else None)
-    boundary = not_sent(method) if plan.write_operation else nullcontext()
+    boundary = (
+        not_sent(method, identity_lookup=True)
+        if plan.write_operation
+        else nullcontext()
+    )
     with boundary:
         if method in writes:
             service.policy.check_write(method, params["trd_env"])

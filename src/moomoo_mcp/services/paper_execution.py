@@ -252,7 +252,7 @@ class PaperExecution:
         row = self.store.lookup(operation_id)
         if row:
             return self._retry(row, kind, params, acc_id)
-        with not_sent("paper " + kind), self._admission_lock:
+        with not_sent("paper " + kind, identity_lookup=True), self._admission_lock:
             # Fail storage/recovery and stale tokens before any broker discovery.
             # Another caller may have admitted this token after our first lookup.
             row = self.store.lookup(operation_id)
@@ -305,7 +305,7 @@ class PaperExecution:
                 self.service._confirm_dispatch_controls()
                 self.store.mark_dispatch(operation_id, merged)
             except Exception as exc:
-                with not_sent("paper " + kind):
+                with not_sent("paper " + kind, admitted=True):
                     self.store.outcome(
                         operation_id,
                         "REFUSED",
