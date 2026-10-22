@@ -168,7 +168,7 @@ def read_authorization(path: Path) -> str:
         raise PreflightError("Authorization credential could not be read.") from None
     if not value.startswith("Bearer ") or not value[7:].strip():
         raise PreflightError("Authorization credential is not a Bearer header.")
-    if any(character < " " or character > "~" for character in value):
+    if not value.isascii() or not value.isprintable():
         raise PreflightError("Authorization credential is not a safe HTTP header.")
     return value
 

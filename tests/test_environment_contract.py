@@ -26,6 +26,19 @@ from tests.compose_helpers import (
 CONTROLS_PATH = "/var/lib/moomoo/trading-controls/controls.sqlite3"
 
 
+def test_dotenv_additional_allowed_hosts_reach_container(tmp_path):
+    settings_file = tmp_path / "synthetic.env"
+    settings_file.write_text(
+        "MCP_ADDITIONAL_ALLOWED_HOSTS=100.64.0.10:8000,mcp.example.ts.net:*\n"
+    )
+    service = render_compose("docker-compose.yml", env_file=settings_file)["services"][
+        SERVICE
+    ]
+    assert service["environment"]["MCP_ADDITIONAL_ALLOWED_HOSTS"] == (
+        "100.64.0.10:8000,mcp.example.ts.net:*"
+    )
+
+
 def test_private_snapshots_and_interrupted_temporary_files_are_ignored():
     names = [
         ".deploy-config.json",

@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 SERVICE = "moomoo-mcp"
 TOKEN_VARIABLE = "MCP_AUTH_TOKEN"
@@ -495,7 +495,7 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
             value = tunnel_environment.get(variable)
             if not isinstance(value, str) or not value.strip():
                 raise ConfigError(f"The selected tunnel requires {variable}.")
-            if any(character < " " or character > "~" for character in value):
+            if not value.isascii() or not value.isprintable():
                 raise ConfigError(f"The selected tunnel has invalid {variable}.")
         identifier = tunnel_environment["CHATGPT_TUNNEL_ID"].strip()
         suffix = identifier.removeprefix("tunnel_")
@@ -512,27 +512,8 @@ def resolve_token(command: Sequence[str] = COMPOSE_CONFIG) -> str:
 
 
 def decode_compose_dollars(value: str) -> str:
-    """Decode the dollar escaping Compose applies to the values it prints.
-
-    `config` output is itself a compose file, so a resolved value containing
-    a literal `$` is printed as `$$` — every dollar is doubled, including a
-    `$` followed by `{` or a word. The container receives the unescaped
-    value, so the pairs are decoded back to single dollars to match it. This
-    is the escaping of Compose's output format, not dotenv grammar: nothing
-    else about the value is interpreted.
-
-    A lone `$` (which Compose's escaper never prints) passes through.
-    """
-    pieces: list[str] = []
-    index = 0
-    while index < len(value):
-        if value[index] == "$" and value[index + 1 : index + 2] == "$":
-            pieces.append("$")
-            index += 2
-        else:
-            pieces.append(value[index])
-            index += 1
-    return "".join(pieces)
+    """Undo Compose's doubled dollar signs without interpreting interpolation."""
+    return value.replace("$$", "$")
 
 
 def check_header_safe(token: str) -> None:
@@ -556,10 +537,7 @@ def display_url(url: str) -> str:
     parts = urlsplit(url)
     if parts.username is None and parts.password is None:
         return url
-    host = parts.hostname or ""
-    if parts.port is not None:
-        host = f"{host}:{parts.port}"
-    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+    return parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl()
 
 
 def printable(text: str, limit: int = 60) -> str:

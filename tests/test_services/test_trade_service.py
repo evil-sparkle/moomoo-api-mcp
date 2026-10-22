@@ -2445,7 +2445,7 @@ class TestStatusFilterConversion:
         mock_trade_ctx.order_list_query.return_value = (0, df)
 
         trade_service_with_mock.get_orders(
-            status_filter_list=["SUBMITTED", "FILLED_ALL"],
+            status_filter_list=["submitted", "FiLlEd_AlL"],
         )
 
         call_kwargs = mock_trade_ctx.order_list_query.call_args.kwargs
@@ -2484,12 +2484,33 @@ class TestStatusFilterConversion:
         result = trade_service_with_mock.get_history_orders()
         assert result == []
 
-    def test_get_orders_invalid_status_raises_error(self, trade_service_with_mock):
+    def test_status_filter_accepts_sdk_values_and_none_alias(
+        self, trade_service_with_mock
+    ):
+        from moomoo import OrderStatus
+
+        sdk_statuses = OrderStatus.get_all_key_list()
+
+        assert trade_service_with_mock._convert_status_filter(
+            [status.lower() for status in sdk_statuses] + ["NONE", "none"]
+        ) == [*sdk_statuses, OrderStatus.NONE, OrderStatus.NONE]
+
+    @pytest.mark.parametrize("status", ["INVALID_STATUS", "REJECTED"])
+    def test_get_orders_invalid_status_raises_error(
+        self, trade_service_with_mock, status
+    ):
         """Test that invalid status string raises ValueError with helpful message."""
-        with pytest.raises(ValueError, match="Invalid order status: 'INVALID_STATUS'"):
+        from moomoo import OrderStatus
+
+        with pytest.raises(ValueError) as exc_info:
             trade_service_with_mock.get_orders(
-                status_filter_list=["INVALID_STATUS"],
+                status_filter_list=[status],
             )
+
+        assert str(exc_info.value) == (
+            f"Invalid order status: '{status}'. "
+            f"Valid options: {[*OrderStatus.get_all_key_list(), 'NONE']}"
+        )
 
     def test_status_filter_none_passes_empty_list(
         self, trade_service_with_mock, mock_trade_ctx

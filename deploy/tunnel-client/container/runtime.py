@@ -41,9 +41,7 @@ def verify_config() -> None:
 
 def authorization_header() -> str:
     token = os.environ.get("MCP_AUTH_TOKEN", "")
-    if not token.strip() or any(
-        character < " " or character > "~" for character in token
-    ):
+    if not token.strip() or not token.isascii() or not token.isprintable():
         raise PreflightError("MCP_AUTH_TOKEN must contain a valid client bearer token.")
     # Match the MCP settings parser's normalization of the shared token.
     return "Bearer " + token.strip()
@@ -62,7 +60,7 @@ def child_environment() -> dict[str, str]:
     ):
         raise ValueError("invalid tunnel identifier")
     key = os.environ.get("CHATGPT_TUNNEL_API_KEY", "")
-    if not key.strip() or any(character < " " or character > "~" for character in key):
+    if not key.strip() or not key.isascii() or not key.isprintable():
         raise ValueError("invalid tunnel runtime key")
     return {
         "HOME": str(RUNTIME),
