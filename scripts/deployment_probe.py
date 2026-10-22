@@ -22,7 +22,7 @@ def request(
     method: str, params: dict, identifier: str, *, authenticated: bool = True
 ) -> dict:
     token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
-    if not token or any(character < " " or character > "~" for character in token):
+    if not token.isascii() or not token.isprintable():
         raise ValueError("Authentication configuration is invalid.")
     body = json.dumps(
         {"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}

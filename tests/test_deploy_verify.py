@@ -224,6 +224,7 @@ class ResolveTokenTest(unittest.TestCase):
             "a$$b": "a$b",
             "$$": "$",
             "$$$$$$": "$$$",
+            "$$$": "$$",
             "$${x}": "${x}",
             "$$word": "$word",
             "plain": "plain",
@@ -520,6 +521,16 @@ class ProbeTest(unittest.TestCase):
         self.assertFalse(verified)
         self.assertNotIn("hunter2", output)
         self.assertIn("http://127.0.0.1:", output)
+
+    def test_url_redaction_preserves_authority(self):
+        for authority in ("[::1]:8000", "EXAMPLE.test:08000"):
+            with self.subTest(authority=authority):
+                self.assertEqual(
+                    deploy_verify.display_url(
+                        f"http://user:synthetic-password@{authority}/mcp?x=1#fragment"
+                    ),
+                    f"http://{authority}/mcp?x=1#fragment",
+                )
 
 
 @unittest.skipIf(REAL_CURL is None, "curl is not installed")

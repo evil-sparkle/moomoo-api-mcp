@@ -343,6 +343,11 @@ mcp = AgentFriendlyMCP(
             "0.0.0.0:*",
             "0.0.0.0",
             "testserver",
+        ]
+        + [
+            host.strip()
+            for host in os.environ.get("MCP_ADDITIONAL_ALLOWED_HOSTS", "").split(",")
+            if host.strip()
         ],
     ),
 )

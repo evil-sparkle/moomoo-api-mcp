@@ -373,6 +373,7 @@ password alone never enables REAL writes. Container operators should use the
 | `MOOMOO_REAL_JOURNAL_PATH` | **Required in `REAL` mode.** Dedicated initialized REAL SQLite journal in a separate directory from paper storage | `/app/real-execution-data/execution.db` |
 | `MOOMOO_CREATE_REAL_JOURNAL` | `1` only for deliberate first initialization; default `0` refuses missing storage | `0` |
 | `MCP_AUTH_TOKEN`            | **Required** for the HTTP endpoint           | `secret-token`|
+| `MCP_ADDITIONAL_ALLOWED_HOSTS` | Optional comma-separated HTTP hosts with optional `:port` or `:*`, appended to the built-in allowlist. | `192.0.2.10:8000,mcp.example.com:*` |
 | `MCP_ALLOW_UNAUTHENTICATED_HTTP` | Optional: `1` serves HTTP without a token, honoured only in `READ_ONLY` | `1`     |
 | `MOOMOO_MAX_ORDER_QTY`      | Optional: cap on quantity per order; for a combo, on the largest leg   | `500`         |
 | `MOOMOO_MAX_ORDER_NOTIONAL_BY_CURRENCY` | Notional caps, one per currency. Compose defaults to `USD:500` when unset or empty | `USD:500` |
@@ -558,6 +559,9 @@ The container deployment and source launches serve authenticated Streamable HTTP
 in stateless mode with JSON responses at `http://127.0.0.1:8000/mcp`. That address refers to the Docker host; a client on
 another machine needs an authorized private route or port forward to it. Do not
 publish OpenD's port 11111. The token must match the deployed `MCP_AUTH_TOKEN`.
+
+Set `MCP_ADDITIONAL_ALLOWED_HOSTS` in the server environment or Compose `.env`
+to allow additional HTTP hosts.
 
 For Claude Code, the [official MCP configuration guide](https://code.claude.com/docs/en/mcp)
 documents HTTP transport and bearer headers:

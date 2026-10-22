@@ -464,19 +464,14 @@ class TradeService:
         """The execution halt, as health reports it."""
         return self._execution.snapshot()
 
-    def _convert_status_filter(
-        self, status_filter_list: list[str] | None
-    ) -> list[OrderStatus]:
-        """Convert string status values to OrderStatus enum values.
-
-        The Moomoo SDK expects OrderStatus enum values, not strings.
-        This method converts user-provided string values to the proper enum format.
+    def _convert_status_filter(self, status_filter_list: list[str] | None) -> list[str]:
+        """Normalize case-insensitive status names to SDK status strings.
 
         Args:
             status_filter_list: List of status strings like ['SUBMITTED', 'FILLED_ALL'].
 
         Returns:
-            List of OrderStatus enum values. Returns an empty list if input is None.
+            List of SDK status strings. Returns an empty list if input is None.
 
         Raises:
             ValueError: If an invalid status string is provided.
@@ -486,32 +481,16 @@ class TradeService:
 
         converted = []
         for status_str in status_filter_list:
-            # OrderStatus has attribute matching string (e.g. OrderStatus.SUBMITTED)
-            status_enum = getattr(OrderStatus, status_str.upper(), None)
-            if status_enum is None:
-                valid_statuses = [
-                    "UNSUBMITTED",
-                    "WAITING_SUBMIT",
-                    "SUBMITTING",
-                    "SUBMIT_FAILED",
-                    "SUBMITTED",
-                    "FILLED_PART",
-                    "FILLED_ALL",
-                    "CANCELLING_PART",
-                    "CANCELLING_ALL",
-                    "CANCELLED_PART",
-                    "CANCELLED_ALL",
-                    "REJECTED",
-                    "DISABLED",
-                    "DELETED",
-                    "FAILED",
-                    "NONE",
-                ]
+            status = status_str.upper()
+            if status == "NONE":
+                status = OrderStatus.NONE
+            if not OrderStatus.if_has_key(status):
+                valid_statuses = [*OrderStatus.get_all_key_list(), "NONE"]
                 raise ValueError(
                     f"Invalid order status: '{status_str}'. "
                     f"Valid options: {valid_statuses}"
                 )
-            converted.append(status_enum)
+            converted.append(status)
         return converted
 
     def _get_market_from_code(self, code: str | None) -> str | None:
