@@ -87,7 +87,8 @@ RUN uv sync --frozen --no-dev --no-install-project \
 
 # Copy source tree and install project cleanly (non-editable in production image)
 COPY src/ ./src/
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable \
+    && /app/.venv/bin/python /opt/security/harden_ca.py
 
 # Put the venv first on PATH
 ENV PATH="/app/.venv/bin:$PATH"
