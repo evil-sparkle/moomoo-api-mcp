@@ -100,7 +100,7 @@ jobs:
               *) tests=true ;;
             esac
             case "${path}" in
-              src/*|deploy/trust/*|Dockerfile|.dockerignore|pyproject.toml|uv.lock|docker-compose.yml|docker-compose.prod.yml|docker-compose.paper.yml|docker-compose.controls.yml|docker-compose.smoke.yml|scripts/smoke-test.sh|scripts/test-paper-container.sh|tests/fixtures/opend_stub.py|tests/fixtures/paper_container_checks.py|tests/test_compose_topology.py|tests/test_paper_compose.py|tests/test_environment_contract.py|.github/workflows/ci.yml)
+              src/*|Dockerfile|.dockerignore|pyproject.toml|uv.lock|docker-compose.yml|docker-compose.prod.yml|docker-compose.paper.yml|docker-compose.controls.yml|docker-compose.smoke.yml|scripts/smoke-test.sh|scripts/test-paper-container.sh|tests/fixtures/opend_stub.py|tests/fixtures/paper_container_checks.py|tests/test_compose_topology.py|tests/test_paper_compose.py|tests/test_environment_contract.py|.github/workflows/ci.yml)
                 smoke=true ;;
             esac
           done
@@ -111,7 +111,6 @@ jobs:
           # network-fetched release assets pinned in the Dockerfile.
           needed_mcp=(
             "Dockerfile"
-            "deploy/trust/"
             "pyproject.toml"
             "uv.lock"
             "README.md"
@@ -123,7 +122,7 @@ jobs:
           tunnel=false
           for path in "${changed[@]}"; do
             case "${path}" in
-              deploy/trust/*|deploy/tunnel-client/container/*|deploy/tunnel-client/install.py|deploy/tunnel-client/release.json|deploy/tunnel-client/source.json|deploy/tunnel-client/rebuild.py|scripts/private_chatgpt_preflight.py|scripts/build-tunnel-image.sh|scripts/prepare-tunnel-build-context.sh|.github/workflows/ci.yml|.github/workflows/tunnel-compatibility.yml)
+              deploy/tunnel-client/container/*|deploy/tunnel-client/install.py|deploy/tunnel-client/release.json|scripts/private_chatgpt_preflight.py|scripts/build-tunnel-image.sh|scripts/prepare-tunnel-build-context.sh|.github/workflows/ci.yml|.github/workflows/tunnel-compatibility.yml)
                 tunnel=true ;;
             esac
             # Shared build orchestration and context exclusions affect the image.

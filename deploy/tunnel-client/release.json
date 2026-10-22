@@ -1,8 +1,8 @@
 {
-  "version": "v0.0.14",
-  "published_at": "2026-09-01T21:04:04Z",
-  "tag_commit": "0f870e50a973fa820d4c409000059e181e8d242b",
-  "archive": "tunnel-client-v0.0.14-linux-amd64.zip",
-  "url": "https://github.com/openai/tunnel-client/releases/download/v0.0.14/tunnel-client-v0.0.14-linux-amd64.zip",
-  "sha256": "15bd17e805cad39d412199115bb9e10a978dd35258a114cdf25dd2ae6681c7d3"
+  "version": "v0.0.17",
+  "published_at": "2026-10-21T16:47:31Z",
+  "tag_commit": "a248b7f725fc989c1eb26680cf4351ee33421f61",
+  "archive": "tunnel-client-v0.0.17-linux-amd64.zip",
+  "url": "https://github.com/openai/tunnel-client/releases/download/v0.0.17/tunnel-client-v0.0.17-linux-amd64.zip",
+  "sha256": "bd6a57c6c0511644267cafadd13ffdb53ece0d753e0b88857f957e78a8fbc793"
 }
