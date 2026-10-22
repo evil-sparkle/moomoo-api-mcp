@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     gzip \
     libssl-dev \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1 \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -57,7 +58,9 @@ RUN echo "Fetching OpenD from ${OPEND_URL}..." \
 # ---------------------------------------------------------------------------
 # The MCP server.
 # ---------------------------------------------------------------------------
-COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
+
+COPY deploy/trust/harden_ca.py /opt/security/harden_ca.py
 
 WORKDIR /app
 
@@ -79,7 +82,8 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
 # Install dependencies first for optimal Docker layer caching
 COPY pyproject.toml uv.lock README.md LICENSE ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project \
+    && /app/.venv/bin/python /opt/security/harden_ca.py
 
 # Copy source tree and install project cleanly (non-editable in production image)
 COPY src/ ./src/

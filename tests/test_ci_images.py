@@ -101,6 +101,7 @@ if 'put-image' not in args:
     "path,mcp,tunnel,tests",
     [
         ("README.md", True, False, False),
+        ("deploy/trust/harden_ca.py", True, True, True),
         ("docs/deploy-vps.md", False, False, False),
         ("src/moomoo_mcp/server.py", True, False, True),
         (".github/workflows/ci.yml", True, True, True),
@@ -113,6 +114,8 @@ if 'put-image' not in args:
                 "deploy/tunnel-client/container/tunnel-client.yaml",
                 "deploy/tunnel-client/install.py",
                 "deploy/tunnel-client/release.json",
+                "deploy/tunnel-client/source.json",
+                "deploy/tunnel-client/rebuild.py",
                 "scripts/private_chatgpt_preflight.py",
                 "scripts/build-tunnel-image.sh",
                 "scripts/prepare-tunnel-build-context.sh",
