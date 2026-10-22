@@ -6,7 +6,10 @@ official PyPI wheel and sdist hashes. Ubuntu jammy builds require ca-certificate
 >=20250419~deb12u2. Both images run `deploy/trust/harden_ca.py` at build time to
 exclude the exact emSign ECC G3 and Comodo AAA parent-root certificates, refresh
 the hashed system CA directory, and replace pip's separate vendored certifi
-bundle with the system bundle. Certificate verification remains enabled.
+bundle with the system bundle, including managed Python under `/opt/uv-python`
+and dormant ensurepip seed wheels. Seed-wheel RECORD hashes are updated for the
+CA resource; pip code and package versions remain unchanged. The API repeats
+hardening after the final frozen uv sync. Certificate verification remains enabled.
 
 The tunnel Dockerfile rebuilds the same official v0.0.14 source commit
 0f870e50a973fa820d4c409000059e181e8d242b using Go >=1.27.3. `source.json` pins the
