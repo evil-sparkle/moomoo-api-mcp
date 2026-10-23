@@ -30,6 +30,7 @@ def run_step(
     ref="refs/heads/main",
     invalid_base=False,
     diff_failure=False,
+    publish=True,
 ):
     binaries = tmp_path / "bin"
     binaries.mkdir()
@@ -74,7 +75,7 @@ if 'put-image' not in args:
         "DIFF_FAILURE": "1" if diff_failure else "0",
         "TAG_PREFIX": prefix,
         "ECR_REPOSITORY": "moomoo-api-mcp",
-        "PUSH": "true",
+        "PUSH": str(publish).lower(),
     }
     for expression, value in {
         "github.event.before": BASELINE,
@@ -166,7 +167,12 @@ def test_unchanged_image_retag_uses_its_own_namespace_or_builds(
     assert tags == (
         []
         if missing
-        else [prefix + COMMIT[:7], prefix + "commit-" + COMMIT, prefix + "v0.1.0"]
+        else [
+            prefix + COMMIT,
+            prefix + COMMIT[:7],
+            prefix + "commit-" + COMMIT,
+            prefix + "v0.1.0",
+        ]
     )
 
 
@@ -253,16 +259,12 @@ def test_unreliable_comparison_runs_all_checks_and_builds(tmp_path, event, failu
     assert outputs["baseline"] == ""
 
 
-def test_jobs_use_independent_check_outputs_and_keep_main_retagging():
+def test_jobs_use_independent_check_outputs_and_keep_publishing_retagging():
     jobs = WORKFLOW["jobs"]
     assert jobs["test"]["if"] == "needs.changes.outputs.tests == 'true'"
     assert jobs["smoke"]["needs"] == ["test", "changes"]
     assert jobs["smoke"]["if"] == "needs.changes.outputs.smoke == 'true'"
     assert "needs.test.result == 'skipped'" in jobs["docker-build"]["if"]
-    assert (
-        "github.event_name == 'push' && github.ref == 'refs/heads/main'"
-        in jobs["docker-build"]["if"]
-    )
     assert step("docker-build", "retag")["if"] == (
         "env.PUSH == 'true' && needs.changes.outputs[matrix.image] != 'true'"
     )
@@ -328,3 +330,66 @@ def tunnel_workflow_matches(path):
 )
 def test_tunnel_workflow_only_runs_for_relevant_inputs(path, expected):
     assert tunnel_workflow_matches(path) is expected
+
+
+def github_expression(expression, context):
+    """Evaluate the workflow's boolean subset with supplied Actions context."""
+    expression = expression.strip().removeprefix("${{").removesuffix("}}")
+    for name in sorted(context, key=len, reverse=True):
+        expression = expression.replace(name, repr(context[name]))
+    expression = (
+        expression.replace("!=", " __NE__ ")
+        .replace("!", " not ")
+        .replace("__NE__", "!=")
+        .replace("&&", " and ")
+        .replace("||", " or ")
+    )
+    return eval(
+        "(" + expression.strip() + ")",
+        {"__builtins__": {}},
+        {
+            "cancelled": lambda: context.get("cancelled", False),
+            "format": lambda template, *args: template.format(*args),
+        },
+    )
+
+
+@pytest.mark.parametrize("branch", ["", "hotfix/security-emudhra-20261023"])
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch", "pull_request"])
+@pytest.mark.parametrize(
+    "source", ["main", "hotfix/security-emudhra-20261023", "hotfix/other"]
+)
+def test_only_active_source_publishes_without_cancellation(branch, event, source):
+    context = {
+        "vars.DEPLOY_BRANCH": branch,
+        "github.ref": "refs/heads/" + source,
+        "github.event_name": event,
+    }
+    publishes = source == (branch or "main") and event != "pull_request"
+    assert (
+        github_expression(WORKFLOW["jobs"]["changes"]["outputs"]["publish"], context)
+        is publishes
+    )
+    assert github_expression(
+        WORKFLOW["concurrency"]["cancel-in-progress"], context
+    ) is (not publishes)
+
+
+def test_publishing_output_controls_aws_build_and_manifest():
+    jobs = WORKFLOW["jobs"]
+    assert jobs["docker-build"]["env"]["PUSH"] == "${{ needs.changes.outputs.publish }}"
+    assert (
+        "needs.changes.outputs.publish == 'true'" in jobs["deployment-manifest"]["if"]
+    )
+    assert "changes" in jobs["deployment-manifest"]["needs"]
+    assert WORKFLOW[True]["push"]["branches"] == ["main", "feature/**", "hotfix/**"]
+    assert "workflow_dispatch" in WORKFLOW[True]
+
+
+@pytest.mark.parametrize("prefix", ["", "tunnel-"])
+def test_nonpublishing_builds_use_local_tags(tmp_path, prefix):
+    outputs = run_step(
+        tmp_path, step("docker-build", "tags")["run"], prefix=prefix, publish=False
+    )
+    image = "moomoo-chatgpt-tunnel" if prefix else "moomoo-api-mcp"
+    assert outputs["tags"] == image + ":test"

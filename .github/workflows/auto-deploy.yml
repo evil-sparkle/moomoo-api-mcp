@@ -1,13 +1,16 @@
-name: Deploy after main CI
+name: Deploy after active branch CI
 
 on:
   workflow_run:
     workflows: [CI & Docker Build]
-    branches: [main]
+    branches: [main, "hotfix/**"]
     types: [completed]
 
 permissions:
   contents: read
+
+env:
+  DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH || 'main' }}
 
 jobs:
   dispatch:
@@ -16,7 +19,7 @@ jobs:
       github.repository == 'evil-sparkle/moomoo-api-mcp' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_branch == (vars.DEPLOY_BRANCH || 'main') &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -26,8 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: main
           persist-credentials: false
-      - name: Validate the completed CI attempt and current main
+      - name: Validate the completed CI attempt and current deployment branch
         id: request
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,10 +46,11 @@ jobs:
                   raise SystemExit(name + ' must be a positive ASCII integer.')
           PY
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID/attempts/$CI_RUN_ATTEMPT" > "$RUNNER_TEMP/ci-run.json"
-          main_revision=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          deploy_branch=$(python3 scripts/deployment_manifest.py branch)
+          branch_revision=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$deploy_branch" --jq .object.sha)
           python3 scripts/deployment_manifest.py automatic \
             --run "$RUNNER_TEMP/ci-run.json" --event "$GITHUB_EVENT_PATH" \
-            --main-revision "$main_revision" --output "$GITHUB_OUTPUT"
+            --branch-revision "$branch_revision" --output "$GITHUB_OUTPUT"
       - name: Start the shared deployment workflow
         if: steps.request.outputs.deploy == 'true'
         env:
@@ -58,4 +63,4 @@ jobs:
           printf 'Requested deployment of CI run `%s`, attempt `%s`. See the Vultr deployment workflow for rollout results.\n' "$CI_RUN_ID" "$CI_RUN_ATTEMPT" >> "$GITHUB_STEP_SUMMARY"
       - name: Report an obsolete release
         if: steps.request.outputs.deploy == 'false'
-        run: echo 'Skipped automatic deployment because this CI revision is no longer current main.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'Skipped automatic deployment because this CI revision is no longer current on the active deployment branch.' >> "$GITHUB_STEP_SUMMARY"

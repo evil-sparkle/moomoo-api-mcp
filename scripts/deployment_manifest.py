@@ -57,6 +57,24 @@ def validate_project(value):
     return value
 
 
+def deployment_branch():
+    """Read the one trusted publishing branch from repository configuration."""
+    branch = os.environ.get("DEPLOY_BRANCH") or "main"
+    if branch == "main":
+        return branch
+    parts = branch.split("/")
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+    if (
+        parts[0] != "hotfix"
+        or len(parts) < 2
+        or any(
+            not part or any(char not in allowed for char in part) for part in parts[1:]
+        )
+    ):
+        raise ValueError("DEPLOY_BRANCH must be main or an explicit hotfix/ branch.")
+    return branch
+
+
 def validate_run(run):
     if not isinstance(run, dict):
         raise ValueError("Invalid CI run record.")
@@ -65,11 +83,11 @@ def validate_run(run):
         raise ValueError("CI run belongs to another repository.")
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         raise ValueError("Select a completed successful CI run.")
-    if run.get("head_branch") != "main" or run.get("event") not in [
+    if run.get("head_branch") != deployment_branch() or run.get("event") not in [
         "push",
         "workflow_dispatch",
     ]:
-        raise ValueError("Select a published main-branch CI run.")
+        raise ValueError("Select a published CI run from the active deployment branch.")
     if run.get("path") != ".github/workflows/ci.yml":
         raise ValueError("Select the CI & Docker Build workflow.")
     require_hex(run.get("head_sha"), 40, "Source revision")
@@ -80,12 +98,12 @@ def validate_run(run):
     return "moomoo-deployment-" + str(run["run_attempt"])
 
 
-def automatic_request(run, event, main_revision):
+def automatic_request(run, event, branch_revision):
     """Bind an automatic request to its exact successful CI webhook attempt."""
     validate_run(run)
-    require_hex(main_revision, 40, "Current main revision")
+    require_hex(branch_revision, 40, "Current deployment branch revision")
     if run["event"] != "push":
-        raise ValueError("Automatic deployment requires a main push CI run.")
+        raise ValueError("Automatic deployment requires an active-branch push CI run.")
     if not isinstance(event, dict) or event.get("action") != "completed":
         raise ValueError("Automatic deployment requires a completed workflow event.")
     repository = event.get("repository")
@@ -119,7 +137,7 @@ def automatic_request(run, event, main_revision):
     return {
         "ci_run_id": str(run["id"]),
         "ci_run_attempt": str(run["run_attempt"]),
-        "deploy": "true" if run["head_sha"] == main_revision else "false",
+        "deploy": "true" if run["head_sha"] == branch_revision else "false",
     }
 
 
@@ -147,14 +165,16 @@ def validate_manifest(manifest, run):
     return {"revision": revision, "image": image, "tunnel_image": tunnel_image}
 
 
-def select_release(manifest, run, automatic=False, main_revision=None):
+def select_release(manifest, run, automatic=False, branch_revision=None):
     selected = validate_manifest(manifest, run)
     if automatic:
-        require_hex(main_revision, 40, "Current main revision")
+        require_hex(branch_revision, 40, "Current deployment branch revision")
         if run["event"] != "push":
-            raise ValueError("Automatic deployment requires a main push CI run.")
+            raise ValueError(
+                "Automatic deployment requires an active-branch push CI run."
+            )
     selected["deploy"] = (
-        "true" if not automatic or selected["revision"] == main_revision else "false"
+        "true" if not automatic or selected["revision"] == branch_revision else "false"
     )
     return selected
 
@@ -226,6 +246,7 @@ def deployment_settings(selected, environment):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="mode", required=True)
+    sub.add_parser("branch")
     publish = sub.add_parser("publish")
     publish.add_argument("--image", required=True)
     publish.add_argument("--tunnel-image", required=True)
@@ -236,14 +257,14 @@ def main():
     automatic = sub.add_parser("automatic")
     automatic.add_argument("--run", required=True, type=Path)
     automatic.add_argument("--event", required=True, type=Path)
-    automatic.add_argument("--main-revision", required=True)
+    automatic.add_argument("--branch-revision", "--main-revision", required=True)
     automatic.add_argument("--output", required=True, type=Path)
     select = sub.add_parser("select")
     select.add_argument("--run", required=True, type=Path)
     select.add_argument("--manifest", required=True, type=Path)
     select.add_argument("--output", required=True, type=Path)
     select.add_argument("--automatic", action="store_true")
-    select.add_argument("--main-revision")
+    select.add_argument("--branch-revision", "--main-revision")
     configure = sub.add_parser("configure")
     configure.add_argument("--revision", required=True)
     configure.add_argument("--image", required=True)
@@ -252,7 +273,9 @@ def main():
     configure.add_argument("--settings", required=True, type=Path)
     args = parser.parse_args()
     try:
-        if args.mode == "publish":
+        if args.mode == "branch":
+            print(deployment_branch())
+        elif args.mode == "publish":
             manifest = {
                 "schema": 1,
                 "repository": REPOSITORY,
@@ -287,7 +310,7 @@ def main():
             requested = automatic_request(
                 json.loads(args.run.read_text()),
                 json.loads(args.event.read_text()),
-                args.main_revision,
+                args.branch_revision,
             )
             args.output.write_text(
                 "".join(key + "=" + value + "\n" for key, value in requested.items())
@@ -297,7 +320,7 @@ def main():
                 json.loads(args.manifest.read_text()),
                 json.loads(args.run.read_text()),
                 args.automatic,
-                args.main_revision,
+                args.branch_revision,
             )
             args.output.write_text(
                 "".join(key + "=" + value + "\n" for key, value in selected.items())

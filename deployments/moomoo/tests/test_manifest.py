@@ -1,11 +1,13 @@
 """Validate release selection using synthetic CI records and public metadata."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -13,6 +15,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from deployment_manifest import (  # noqa: E402
     REPOSITORY,
     automatic_request,
+    deployment_branch,
     deployment_settings,
     select_release,
     validate_image,
@@ -51,6 +54,84 @@ def manifest():
 
 
 class ManifestTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"DEPLOY_BRANCH": ""}))
+
+    def test_deployment_branch_defaults_and_rejects_unsafe_configuration(self):
+        self.assertEqual(deployment_branch(), "main")
+        for branch in [
+            "main",
+            "hotfix/security-emudhra-20261023",
+            "hotfix/nested/Fix_1",
+        ]:
+            with (
+                self.subTest(branch=branch),
+                patch.dict(os.environ, {"DEPLOY_BRANCH": branch}),
+            ):
+                self.assertEqual(deployment_branch(), branch)
+        for branch in [
+            "feature/other",
+            "refs/heads/main",
+            "hotfix/",
+            "hotfix//other",
+            "hotfix/../main",
+            "hotfix/a.lock",
+            "hotfix/a b",
+            "hotfix/a\nmain",
+            "hotfix/a?b",
+            "hotfix/a@{b}",
+            "hotfix/café",
+        ]:
+            with (
+                self.subTest(branch=branch),
+                patch.dict(os.environ, {"DEPLOY_BRANCH": branch}),
+                self.assertRaises(ValueError),
+            ):
+                deployment_branch()
+
+    def test_only_the_configured_branch_can_supply_a_release(self):
+        branch = "hotfix/security-emudhra-20261023"
+        with self.assertRaises(ValueError):
+            validate_run(run_record() | {"head_branch": branch})
+        with patch.dict(os.environ, {"DEPLOY_BRANCH": branch}):
+            for event in ["push", "workflow_dispatch"]:
+                run = run_record() | {"head_branch": branch, "event": event}
+                self.assertEqual(validate_run(run), "moomoo-deployment-2")
+                self.assertEqual(select_release(manifest(), run)["deploy"], "true")
+            for other in ["main", "hotfix/other", "feature/other"]:
+                with self.subTest(branch=other), self.assertRaises(ValueError):
+                    validate_run(run_record() | {"head_branch": other})
+            with self.assertRaises(ValueError):
+                select_release(manifest(), run, True, "b" * 40)
+
+    def test_hotfix_automatic_requests_keep_exact_attempt_and_freshness_checks(self):
+        with patch.dict(
+            os.environ, {"DEPLOY_BRANCH": "hotfix/security-emudhra-20261023"}
+        ):
+            run = run_record() | {"head_branch": deployment_branch()}
+            event = {
+                "action": "completed",
+                "repository": {"full_name": REPOSITORY},
+                "workflow_run": run | {"head_repository": {"full_name": REPOSITORY}},
+            }
+            self.assertEqual(automatic_request(run, event, "b" * 40)["deploy"], "true")
+            self.assertEqual(automatic_request(run, event, "d" * 40)["deploy"], "false")
+            self.assertEqual(
+                select_release(manifest(), run, True, "d" * 40)["deploy"], "false"
+            )
+            self.assertEqual(select_release(manifest(), run)["deploy"], "true")
+            for changes in [
+                {"run_attempt": 3},
+                {"head_branch": "main"},
+                {"head_repository": {"full_name": "fork/repo"}},
+            ]:
+                with self.subTest(changes=changes), self.assertRaises(ValueError):
+                    automatic_request(
+                        run,
+                        event | {"workflow_run": event["workflow_run"] | changes},
+                        "b" * 40,
+                    )
+
     def test_release_binds_source_run_attempt_and_both_digests(self):
         self.assertEqual(
             validate_manifest(manifest(), run_record()),
@@ -75,6 +156,10 @@ class ManifestTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 validate_manifest(manifest(), run_record() | {name: value})
         self.assertEqual(validate_run(run_record()), "moomoo-deployment-2")
+        without_tunnel = manifest()
+        del without_tunnel["tunnel_image"]
+        with self.assertRaises(ValueError):
+            validate_manifest(without_tunnel, run_record())
         for key in ["image", "tunnel_image"]:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 validate_manifest(
