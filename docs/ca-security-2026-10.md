@@ -38,7 +38,9 @@ OpenD/state volume, tunnel identity and authorization setting. Hold both the
 shared operations flock and this repository's deployment lock; recreate the API
 and tunnel separately, retaining a protected frozen rollback model. Manual
 production probes can use initialize, ping and tools/list without invoking broker
-tools; the unchanged tunnel wrapper performs its existing read-only startup gate.
+tools; the tunnel wrapper performs its read-only startup gate. The synchronized
+wrapper retains main's restricted-client checks for REAL backends and rejects
+live-write and gateway-control permissions.
 
 OpenD remains a proprietary vendor binary with its own OpenSSL. Updating OS trust
 protects its system trust paths; it does not prove its complete internal TLS or
