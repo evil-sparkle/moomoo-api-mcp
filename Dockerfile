@@ -9,7 +9,7 @@
 # apt layer below is still resolved at build time, so this is reproducibility of
 # the base, not of the whole image; bump with `docker buildx imagetools inspect
 # ubuntu:22.04`.
-ARG UBUNTU_DIGEST=sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02
+ARG UBUNTU_DIGEST=sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
 FROM ubuntu:22.04@${UBUNTU_DIGEST}
 
 # ca-certificates/curl/tar/gzip fetch OpenD; libssl-dev is its runtime dependency.
@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     gzip \
     libssl-dev \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1 \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ RUN echo "Fetching OpenD from ${OPEND_URL}..." \
 # ---------------------------------------------------------------------------
 # The MCP server.
 # ---------------------------------------------------------------------------
-COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -70,7 +71,7 @@ ENV PYTHONUNBUFFERED=1
 # at build time, which would make the same commit build a different interpreter
 # next month. uv.lock covers everything above it.
 ENV UV_PYTHON_DOWNLOADS=automatic
-ENV UV_PYTHON=3.12.13
+ENV UV_PYTHON=3.12.15
 ENV UV_PYTHON_PREFERENCE=only-managed
 # Not the default (~/.local/share/uv/python): the build runs as root and the
 # container does not, and a 0700 /root would leave the venv pointing at an

@@ -13,13 +13,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "deploy" / "tunnel-client"
-EXPECTED_VERSION = "v0.0.14"
-EXPECTED_SHA256 = "15bd17e805cad39d412199115bb9e10a978dd35258a114cdf25dd2ae6681c7d3"
+EXPECTED_VERSION = "v0.0.17"
+EXPECTED_SHA256 = "bd6a57c6c0511644267cafadd13ffdb53ece0d753e0b88857f957e78a8fbc793"
 
 
 def fake_release(tmp_path: Path) -> tuple[dict[str, str], Path]:
     archive = tmp_path / "fixture.zip"
-    binary = b"#!/bin/sh\nprintf 'tunnel-client 0.0.14\\n'\n"
+    binary = b"#!/bin/sh\nprintf 'tunnel-client 0.0.17\\n'\n"
     with ZipFile(archive, "w") as bundle:
         bundle.writestr("tunnel-client", binary)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -39,12 +39,12 @@ def test_release_manifest_pins_the_reviewed_official_asset() -> None:
 
     assert manifest == {
         "version": EXPECTED_VERSION,
-        "published_at": "2026-09-01T21:04:04Z",
-        "tag_commit": "0f870e50a973fa820d4c409000059e181e8d242b",
-        "archive": "tunnel-client-v0.0.14-linux-amd64.zip",
+        "published_at": "2026-10-21T16:47:31Z",
+        "tag_commit": "a248b7f725fc989c1eb26680cf4351ee33421f61",
+        "archive": "tunnel-client-v0.0.17-linux-amd64.zip",
         "url": (
-            "https://github.com/openai/tunnel-client/releases/download/v0.0.14/"
-            "tunnel-client-v0.0.14-linux-amd64.zip"
+            "https://github.com/openai/tunnel-client/releases/download/v0.0.17/"
+            "tunnel-client-v0.0.17-linux-amd64.zip"
         ),
         "sha256": EXPECTED_SHA256,
     }
