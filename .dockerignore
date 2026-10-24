@@ -12,3 +12,7 @@
 # Effective deployment snapshots contain credentials; keep them excluded even
 # if the build allowlist above is broadened later.
 .deploy-config*
+
+!deploy/
+!deploy/trust/
+!deploy/trust/harden_ca.py

@@ -12,13 +12,17 @@
 ARG UBUNTU_DIGEST=sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02
 FROM ubuntu:22.04@${UBUNTU_DIGEST}
 
-# ca-certificates/curl/tar/gzip fetch OpenD; libssl-dev is its runtime dependency.
+# ca-certificates/curl/tar/gzip fetch OpenD; keep its libssl-dev dependency.
+# Reject an older distro OpenSSL even when its CA package is current. This does
+# not replace OpenD's separately bundled libraries or establish their patch status.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     tar \
     gzip \
     libssl-dev \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3)" ge 3.0.2-0ubuntu1.30 \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -57,7 +61,9 @@ RUN echo "Fetching OpenD from ${OPEND_URL}..." \
 # ---------------------------------------------------------------------------
 # The MCP server.
 # ---------------------------------------------------------------------------
-COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
+
+COPY deploy/trust/harden_ca.py /opt/security/harden_ca.py
 
 WORKDIR /app
 
@@ -70,7 +76,9 @@ ENV PYTHONUNBUFFERED=1
 # at build time, which would make the same commit build a different interpreter
 # next month. uv.lock covers everything above it.
 ENV UV_PYTHON_DOWNLOADS=automatic
-ENV UV_PYTHON=3.12.13
+# Reuse the supported PBS runtime verified in the earlier security work.
+# Its OpenSSL is independent of Ubuntu libssl3 and OpenD's bundled libraries.
+ENV UV_PYTHON=3.12.15
 ENV UV_PYTHON_PREFERENCE=only-managed
 # Not the default (~/.local/share/uv/python): the build runs as root and the
 # container does not, and a 0700 /root would leave the venv pointing at an
@@ -79,11 +87,13 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
 # Install dependencies first for optimal Docker layer caching
 COPY pyproject.toml uv.lock README.md LICENSE ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project \
+    && /app/.venv/bin/python /opt/security/harden_ca.py
 
 # Copy source tree and install project cleanly (non-editable in production image)
 COPY src/ ./src/
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable \
+    && /app/.venv/bin/python /opt/security/harden_ca.py
 
 # Put the venv first on PATH
 ENV PATH="/app/.venv/bin:$PATH"

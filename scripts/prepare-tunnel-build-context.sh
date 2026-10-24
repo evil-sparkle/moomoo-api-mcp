@@ -12,8 +12,10 @@ mkdir "$staging"
 for name in Dockerfile runtime.py tunnel-client.yaml; do
   cp "$root/deploy/tunnel-client/container/$name" "$staging/$name"
 done
-cp "$root/deploy/tunnel-client/release.json" "$root/deploy/tunnel-client/install.py" "$staging/"
+cp "$root/deploy/tunnel-client/release.json" "$root/deploy/tunnel-client/install.py" \
+  "$root/deploy/tunnel-client/source.json" "$root/deploy/tunnel-client/rebuild.py" "$staging/"
 cp "$root/scripts/private_chatgpt_preflight.py" "$staging/"
+cp "$root/deploy/trust/harden_ca.py" "$staging/"
 python3 - "$staging" <<'HASH'
 import hashlib, pathlib, sys
 root = pathlib.Path(sys.argv[1])

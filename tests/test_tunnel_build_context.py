@@ -16,9 +16,11 @@ def test_build_context_excludes_synthetic_secret_canaries(tmp_path, local_build)
     (repo / "scripts").mkdir(parents=True)
     assets = repo / "deploy/tunnel-client"
     (assets / "container").mkdir(parents=True)
+    (repo / "deploy/trust").mkdir()
+    (repo / "deploy/trust/harden_ca.py").write_text("public fixture")
     for name in ("Dockerfile", "runtime.py", "tunnel-client.yaml"):
         (assets / "container" / name).write_text("public fixture")
-    for name in ("install.py", "release.json"):
+    for name in ("install.py", "release.json", "source.json", "rebuild.py"):
         (assets / name).write_text("public fixture")
     (repo / "scripts/private_chatgpt_preflight.py").write_text("public fixture")
     for name in ("build-tunnel-image.sh", "prepare-tunnel-build-context.sh"):
@@ -62,10 +64,13 @@ pathlib.Path(os.environ['CONTEXT_RESULT']).write_text(json.dumps(files))
     assert json.loads(result.read_text()) == sorted(
         [
             "Dockerfile",
+            "harden_ca.py",
             "runtime.py",
             "tunnel-client.yaml",
             "install.py",
             "release.json",
+            "source.json",
+            "rebuild.py",
             "private_chatgpt_preflight.py",
         ]
     )

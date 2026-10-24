@@ -33,6 +33,7 @@ urls.Repository = "https://github.com/evil-sparkle/moomoo-api-mcp"
 urls.Issues = "https://github.com/evil-sparkle/moomoo-api-mcp/issues"
 dependencies = [
     "anyio>=4.0.0",
+    "certifi>=2026.10.19",  # distrust compromised eMudhra parent roots
     # <2 because the server is built on FastMCP: mcp 2.x renamed it to
     # MCPServer and moved the request context, so 2.x fails at import.
     # >=1.25.0 is the tested baseline for structured dispatch errors and
