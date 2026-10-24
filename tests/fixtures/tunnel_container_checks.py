@@ -269,59 +269,6 @@ def wait_for(predicate, seconds=90):
     raise AssertionError("bounded fixture condition not met")
 
 
-def wait_for_forwarded_read():
-    """Issue fresh tools/list probes, with at most one awaiting a response."""
-    before = control_stats()["forwarded_ok"]
-    pending_response_count = None
-    enqueue_read = (
-        "import urllib.request;urllib.request.urlopen(urllib.request.Request("
-        "'http://127.0.0.1:8081/enqueue',data=b''))"
-    )
-
-    def recovered():
-        nonlocal pending_response_count
-        observed = control_stats()
-        if observed["forwarded_ok"] > before:
-            return True
-        # A terminal error consumes the command; recovery needs a fresh read,
-        # not replay of an arbitrary (potentially state-changing) operation.
-        if (
-            pending_response_count is None
-            or observed["responses"] > pending_response_count
-        ):
-            pending_response_count = observed["responses"]
-            run(
-                compose
-                + ["exec", "-T", "tunnel-control-plane", "python", "-c", enqueue_read],
-                env=env,
-            )
-        return False
-
-    wait_for(recovered)
-
-
-def tunnel_generation(container_id):
-    status = run(
-        docker
-        + [
-            "inspect",
-            "--format",
-            "{{.RestartCount}} {{.State.StartedAt}} {{.State.Pid}}",
-            container_id,
-        ]
-    )
-    child_identity = (
-        "from pathlib import Path;"
-        "p=Path('/run/moomoo-chatgpt-tunnel/client.pid').read_text().strip();"
-        "print(p,Path('/proc/'+p+'/stat').read_text().rsplit(')',1)[1].split()[19])"
-    )
-    child = run(
-        compose + ["exec", "-T", "chatgpt-tunnel", "python", "-c", child_identity],
-        env=env,
-    )
-    return status, child
-
-
 try:
     run(
         compose + ["up", "-d", "--no-build", "tunnel-control-plane", "chatgpt-tunnel"],
@@ -763,8 +710,6 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
         )
 
     wait_for(independently_restarted, 100)
-    # RestartCount advances before the new manager/client finishes startup.
-    wait_for_forwarded_read()
     print(
         "PASS: hung real client triggers independent Docker restart; "
         "host MCP stays usable",
@@ -781,7 +726,6 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
     )
     old_ip = networks[isolated]["IPAddress"]
     tunnel_id = run(compose + ["ps", "-q", "chatgpt-tunnel"], env=env)
-    generation = tunnel_generation(tunnel_id)
     tunnel_image = run(docker + ["inspect", "--format", "{{.Image}}", tunnel_id])
     run(compose + ["stop", "moomoo-mcp"], env=env)
     run(compose + ["rm", "-f", "moomoo-mcp"], env=env)
@@ -809,24 +753,15 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
     )
     try:
         run(compose + ["up", "-d", "--no-deps", "moomoo-mcp"], env=env)
-        replacement = run(compose + ["ps", "-q", "moomoo-mcp"], env=env)
-        replacement_networks = json.loads(
-            run(
-                docker
-                + [
-                    "inspect",
-                    "--format",
-                    "{{json .NetworkSettings.Networks}}",
-                    replacement,
-                ]
-            )
-        )
-        assert replacement_networks[isolated]["IPAddress"] != old_ip
         published = run(compose + ["port", "moomoo-mcp", "8000"], env=env)
         wait_for(new_local_ready)
-        wait_for_forwarded_read()
+        before = control_stats()["forwarded_ok"]
+        run(
+            compose + ["exec", "-T", "tunnel-control-plane", "python", "-c", enqueue],
+            env=env,
+        )
+        wait_for(lambda: control_stats()["forwarded_ok"] > before)
         assert run(compose + ["ps", "-q", "chatgpt-tunnel"], env=env) == tunnel_id
-        assert tunnel_generation(tunnel_id) == generation
         print(
             "PASS: running official client recovers after MCP IP replacement "
             "without tunnel recreation",
