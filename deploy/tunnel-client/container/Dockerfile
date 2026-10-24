@@ -2,10 +2,12 @@ ARG GO_VERSION=1.27.3
 FROM golang:${GO_VERSION}-bookworm AS go-toolchain
 
 FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS verified
-# Debian security update removes both original and AAA cross-sign paths.
+# Refresh Debian CA and OpenSSL security packages in both build and runtime
+# stages; reject an outdated OpenSSL package left in the pinned Python base.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && apt-get install -y --no-install-recommends --only-upgrade ca-certificates libssl3 openssl \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20250419~deb12u2 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3)" ge 3.0.22-1~deb12u1 \
     && rm -rf /var/lib/apt/lists/*
 COPY harden_ca.py /opt/security/harden_ca.py
 RUN python /opt/security/harden_ca.py
@@ -17,10 +19,12 @@ RUN python rebuild.py fetch --destination /source \
     && python rebuild.py build --source /source --destination /out/tunnel-client
 
 FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
-# Debian security update removes both original and AAA cross-sign paths.
+# Refresh Debian CA and OpenSSL security packages in both build and runtime
+# stages; reject an outdated OpenSSL package left in the pinned Python base.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && apt-get install -y --no-install-recommends --only-upgrade ca-certificates libssl3 openssl \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20250419~deb12u2 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3)" ge 3.0.22-1~deb12u1 \
     && rm -rf /var/lib/apt/lists/*
 COPY harden_ca.py /opt/security/harden_ca.py
 RUN python /opt/security/harden_ca.py
