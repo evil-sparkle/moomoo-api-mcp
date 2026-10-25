@@ -1000,6 +1000,9 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
     )
     (workspace / "preflight-server.py").chmod(0o444)
     before = control_stats()["authenticated"]
+    # These fail-fast manager probes require only the internal service network.
+    # Do not repeatedly bind a new RootlessKit host port for each recreate:
+    # the prior ephemeral port can still be held during asynchronous teardown.
     for behavior, diagnostic in (
         ("REAL", "READ_ONLY"),
         ("UNKNOWN", "READ_ONLY"),
@@ -1020,7 +1023,7 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
             .replace(
                 "    container_name: null",
                 "    container_name: !reset null\n"
-                '    ports: !override ["127.0.0.1::8000"]',
+                "    ports: !override []",
             )
             .replace("    build: null", "    build: !reset null")
         )
