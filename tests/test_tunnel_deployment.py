@@ -128,8 +128,8 @@ def test_config_uses_fixed_origins_and_environment_authentication() -> None:
 def test_supported_images_preserve_distro_tls_security_floors() -> None:
     api = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     tunnel = (ASSETS / "container/Dockerfile").read_text(encoding="utf-8")
-    assert "libssl3)\" ge 3.0.2-0ubuntu1.30" in api
-    assert "libssl3)\" ge 3.0.22-1~deb12u1" in tunnel
+    assert 'libssl3)" ge 3.0.2-0ubuntu1.30' in api
+    assert 'libssl3)" ge 3.0.22-1~deb12u1' in tunnel
     assert "--only-upgrade ca-certificates libssl3 openssl" in tunnel
 
 
