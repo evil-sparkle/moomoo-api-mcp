@@ -39,9 +39,12 @@ is READ_ONLY.
 
 **For an existing READ_ONLY Ubuntu deployment, follow the
 [Ansible and CI/CD runbook](docs/deploy-ansible.md).** The application owns its
-Ansible role. A successful main CI run records immutable application and tunnel
-image digests; GitHub Actions then deploys that exact release over Tailscale and
-SSH. The same workflow accepts an older successful CI run for manual rollback.
+Ansible role. CI on the branch selected by `DEPLOY_BRANCH` records immutable
+application and tunnel image digests; GitHub Actions then deploys that exact
+release over Tailscale and SSH. See the
+[production branch guide](docs/deployment-branches.md) for hotfix backports and
+the verified return to `main`. The same workflow accepts
+an older successful CI run from the selected branch for manual image redeployment.
 The migration preserves the existing Compose project, OpenD login volume and
 journal volumes, and reuses the protected configuration already on the server.
 

@@ -5,6 +5,9 @@ repository owns the playbook and role, CI publishes a release record, and a
 separate deployment workflow rolls out its immutable image digests. Host
 provisioning remains outside this release workflow.
 
+The [production branch guide](deployment-branches.md) explains `DEPLOY_BRANCH`,
+temporary hotfix releases, feature synchronization and the return to `main`.
+
 Native deployment supports **READ_ONLY**, **SIMULATE** and **REAL** on Linux
 AMD64 with the application user's rootless Docker daemon and named OpenD/state
 volumes. Set the public expected mode explicitly and match it in the protected
@@ -23,11 +26,13 @@ bounded by the deployment's trading policy.
 1. CI tests the application and native deployment, builds or retags both images,
    and saves `moomoo-deployment-<attempt>/deployment.json`. The public record
    binds both ECR digests to the full commit, CI run and successful attempt.
-2. `auto-deploy.yml` accepts successful main **push** CI from this repository.
+2. `auto-deploy.yml` accepts successful **push** CI from this repository's
+   selected `DEPLOY_BRANCH` (`main` when unset).
    It checks the webhook's exact run/attempt and skips a superseded revision.
    It dispatches the same `deploy.yml` used for a manual rollback.
 3. `deploy.yml` independently rechecks the CI record and manifest, and checks
-   current main again for automatic requests. Deployment requests share one
+   the current selected-branch revision again for automatic requests. The
+   controller workflow itself stays on `main`. Deployment requests share one
    concurrency group and never cancel an in-progress rollout.
 4. Ansible requires an explicit single-host limit and non-root execution. It
    uses a shared deployment lock, exports an allowlist of public files from the
@@ -104,15 +109,16 @@ by the application user at mode 0600, and the running container uses the intende
 Compose project and named state volumes. Perform account login and device
 verification directly as the operator.
 
-Merge the deployment implementation, wait for its main CI to finish
-successfully, and select that CI run in **Vultr deployment**. Use its explicit
-successful attempt for the first cutover. Automatic deployment follows later
-successful main pushes once deployment access is configured. For manual
-dispatch, leave `automatic=false`; the workflow's branch must be `main`.
+Select the application branch with `DEPLOY_BRANCH`, wait for its publishing CI
+to finish successfully, and select that CI run in **Vultr deployment**. Use its
+explicit successful attempt for the first cutover. Automatic deployment follows
+successful pushes to the selected branch once deployment access is configured.
+Manual CI publication requires a separate deployment dispatch. For that
+dispatch, leave `automatic=false`; the controller workflow's branch must be `main`.
 
 ```sh
 gh workflow run deploy.yml --repo evil-sparkle/moomoo-api-mcp --ref main \
-  -f ci_run_id='<successful-main-CI-run-id>' \
+  -f ci_run_id='<successful-selected-branch-CI-run-id>' \
   -f ci_run_attempt='<successful-attempt>' -f automatic=false
 ```
 
@@ -138,11 +144,12 @@ It never reloads edited `.env` settings or rewinds/deletes journal data. Select 
 release from this same project; older releases without frozen snapshots are not
 eligible for this operation.
 
-Dispatching the workflow with an older successful main CI run instead deploys
+Dispatching the workflow with an older successful selected-branch CI run deploys
 that older image **with current server settings**. This is an image redeployment,
 not restoration of a historical configuration. Automatic deployment skips a
-revision that is no longer main. Failed/in-progress CI, foreign repositories and
-mismatched attempts are refused. Tags such as `latest` are never accepted.
+revision that is no longer the selected branch's current head. Failed/in-progress
+CI, foreign repositories and mismatched attempts are refused. Tags such as
+`latest` are never accepted.
 
 CI artifacts are retained for 30 days. ECR image retention is independent: a
 record can outlive its image, in which case pulling fails before the current
