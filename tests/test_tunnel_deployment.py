@@ -13,13 +13,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "deploy" / "tunnel-client"
-EXPECTED_VERSION = "v0.0.17"
-EXPECTED_SHA256 = "bd6a57c6c0511644267cafadd13ffdb53ece0d753e0b88857f957e78a8fbc793"
+EXPECTED_VERSION = "v0.0.18"
+EXPECTED_SHA256 = "3c82307316acd93c88a384b62af1d81d3f4cb0efa975f9c0bfaef922866a04c4"
 
 
 def fake_release(tmp_path: Path) -> tuple[dict[str, str], Path]:
     archive = tmp_path / "fixture.zip"
-    binary = b"#!/bin/sh\nprintf 'tunnel-client 0.0.17\\n'\n"
+    binary = b"#!/bin/sh\nprintf 'tunnel-client 0.0.18\\n'\n"
     with ZipFile(archive, "w") as bundle:
         bundle.writestr("tunnel-client", binary)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -39,12 +39,12 @@ def test_release_manifest_pins_the_reviewed_official_asset() -> None:
 
     assert manifest == {
         "version": EXPECTED_VERSION,
-        "published_at": "2026-10-21T16:47:31Z",
-        "tag_commit": "a248b7f725fc989c1eb26680cf4351ee33421f61",
-        "archive": "tunnel-client-v0.0.17-linux-amd64.zip",
+        "published_at": "2026-10-23T20:25Z",
+        "tag_commit": "274a5588414819f063d27100a4fb1096aae3830f",
+        "archive": "tunnel-client-v0.0.18-linux-amd64.zip",
         "url": (
-            "https://github.com/openai/tunnel-client/releases/download/v0.0.17/"
-            "tunnel-client-v0.0.17-linux-amd64.zip"
+            "https://github.com/openai/tunnel-client/releases/download/v0.0.18/"
+            "tunnel-client-v0.0.18-linux-amd64.zip"
         ),
         "sha256": EXPECTED_SHA256,
     }
@@ -113,6 +113,9 @@ def test_config_uses_fixed_origins_and_environment_authentication() -> None:
     config = yaml.safe_load((ASSETS / "container/tunnel-client.yaml").read_text())
     assert config["control_plane"]["base_url"] == "https://api.openai.com"
     assert config["control_plane"]["api_key"] == "env:CONTROL_PLANE_API_KEY"
+    # v0.0.18 adds opt-in AWS identity and loopback HTTP support; neither is enabled.
+    assert set(config["control_plane"]) == {"base_url", "api_key"}
+    assert "harpoon" not in config
     assert config["mcp"]["server_urls"] == [
         {"channel": "main", "url": "http://moomoo-mcp:8000/mcp"}
     ]
