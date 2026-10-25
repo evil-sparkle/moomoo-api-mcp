@@ -1022,8 +1022,7 @@ print('PASS: non-root environment credentials; root filesystem writes refused')"
             yaml.safe_dump(fixture)
             .replace(
                 "    container_name: null",
-                "    container_name: !reset null\n"
-                "    ports: !override []",
+                "    container_name: !reset null\n    ports: !override []",
             )
             .replace("    build: null", "    build: !reset null")
         )
