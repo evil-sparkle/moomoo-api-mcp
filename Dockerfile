@@ -12,7 +12,8 @@
 ARG UBUNTU_DIGEST=sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956
 FROM ubuntu:22.04@${UBUNTU_DIGEST}
 
-# ca-certificates/curl/tar/gzip fetch OpenD; libssl-dev is its runtime dependency.
+# ca-certificates/curl/tar/gzip fetch OpenD; retain libssl-dev for runtime.
+# Enforce a patched distro libssl3, independent of OpenD's bundled OpenSSL.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -20,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gzip \
     libssl-dev \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3)" ge 3.0.2-0ubuntu1.30 \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
