@@ -1,0 +1,92 @@
+name: Official tunnel release evidence
+
+# Read-only validation of a specific upstream release, never a deployment.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - deploy/tunnel-client/release.json
+      - deploy/tunnel-client/install.py
+      - deploy/tunnel-client/container/Dockerfile
+      - .github/workflows/tunnel-release-evidence.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Check signed ZIP and SPDX
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: openai/tunnel-client
+          ref: 274a5588414819f063d27100a4fb1096aae3830f
+          path: upstream-tunnel-tag
+          persist-credentials: false
+      - name: Verify the reviewed source and artifact pin
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          m = json.loads(Path("deploy/tunnel-client/release.json").read_text())
+          assert m["version"] == "v0.0.18"
+          assert m["tag_commit"] == "274a5588414819f063d27100a4fb1096aae3830f"
+          assert m["archive"] == "tunnel-client-v0.0.18-linux-amd64.zip"
+          assert m["url"] == (
+              "https://github.com/openai/tunnel-client/releases/download/v0.0.18/"
+              "tunnel-client-v0.0.18-linux-amd64.zip"
+          )
+          assert m["sha256"] == (
+              "3c82307316acd93c88a384b62af1d81d3f4cb0efa975f9c0bfaef922866a04c4"
+          )
+          PY
+          test "$(git -C upstream-tunnel-tag rev-parse HEAD)" = 274a5588414819f063d27100a4fb1096aae3830f
+      - name: Download immutable release subjects and signed provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tunnel-evidence"
+          gh release download v0.0.18 --repo openai/tunnel-client \
+            --dir "$RUNNER_TEMP/tunnel-evidence" \
+            --pattern 'tunnel-client-v0.0.18-linux-amd64.zip' \
+            --pattern 'tunnel-client-v0.0.18-linux-amd64.spdx.json' \
+            --pattern 'tunnel-client-v0.0.18-linux-amd64-licenses.txt' \
+            --pattern 'SHA256SUMS.txt' \
+            --pattern 'tunnel-client-v0.0.18-provenance.sigstore.json'
+      - name: Check ZIP hash, signed subjects and exact SPDX inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/tunnel-evidence"
+          ZIP=tunnel-client-v0.0.18-linux-amd64.zip
+          SPDX=tunnel-client-v0.0.18-linux-amd64.spdx.json
+          LICENSES=tunnel-client-v0.0.18-linux-amd64-licenses.txt
+          BUNDLE=tunnel-client-v0.0.18-provenance.sigstore.json
+          printf '%s  %s\n' \
+            3c82307316acd93c88a384b62af1d81d3f4cb0efa975f9c0bfaef922866a04c4 \
+            "$ZIP" | sha256sum --check -
+          for artifact in "$ZIP" "$SPDX" "$LICENSES" SHA256SUMS.txt; do
+            gh attestation verify "$artifact" \
+              --bundle "$BUNDLE" \
+              --repo openai/tunnel-client \
+              --signer-workflow openai/tunnel-client/.github/workflows/release.yml \
+              --source-ref refs/tags/v0.0.18 \
+              --source-digest 274a5588414819f063d27100a4fb1096aae3830f \
+              --signer-digest 274a5588414819f063d27100a4fb1096aae3830f \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --deny-self-hosted-runners
+          done
+          "$GITHUB_WORKSPACE/upstream-tunnel-tag/scripts/verify_release_archive.sh" \
+            --flavor client --archive "$ZIP" --sbom "$SPDX" \
+            --checksums SHA256SUMS.txt
+          unzip -p "$ZIP" tunnel-client > "$RUNNER_TEMP/pinned-tunnel-client"
+          go version -m "$RUNNER_TEMP/pinned-tunnel-client" | tee "$RUNNER_TEMP/go-buildinfo.txt"
+          grep -F 'go1.27.3' "$RUNNER_TEMP/go-buildinfo.txt"
