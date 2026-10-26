@@ -11,6 +11,18 @@
       - not moomoo_mcp_previous.stat.exists or moomoo_mcp_previous.stat.islnk
     fail_msg: A current release must remain a symbolic link to its verified snapshot.
 
+- name: Check whether the prior release has a compatible frozen snapshot
+  ansible.builtin.stat:
+    path: "{{ moomoo_mcp_previous.stat.lnk_source }}/resolved-compose.json"
+  register: moomoo_mcp_previous_snapshot
+  when: moomoo_mcp_previous.stat.islnk | default(false)
+
+- name: Capture the actual predecessor for first or legacy-format migrations
+  ansible.builtin.set_fact:
+    moomoo_mcp_capture_predecessor: >-
+      {{ not (moomoo_mcp_previous.stat.islnk | default(false))
+         or not (moomoo_mcp_previous_snapshot.stat.isreg | default(false)) }}
+
 - name: Check for an existing public selection at this immutable release path
   ansible.builtin.stat:
     path: "{{ moomoo_mcp_release }}/deployment.json"
@@ -80,7 +92,7 @@
 
 - name: Preserve the existing project and state and validate server-side configuration
   ansible.builtin.command:
-    argv: "{{ ['python3', 'scripts/ansible_deployment.py', 'prepare'] + ([] if (moomoo_mcp_previous.stat.islnk | default(false)) else ['--capture-predecessor']) }}"
+    argv: "{{ ['python3', 'scripts/ansible_deployment.py', 'prepare'] + (['--capture-predecessor'] if moomoo_mcp_capture_predecessor else []) }}"
     chdir: "{{ moomoo_mcp_release }}"
   changed_when: false
 
@@ -123,13 +135,13 @@
       ansible.builtin.command:
         argv: [python3, scripts/ansible_deployment.py, compose, up, -d, --no-build, --remove-orphans]
         chdir: "{{ moomoo_mcp_previous.stat.lnk_source }}"
-      when: moomoo_mcp_previous.stat.islnk | default(false)
+      when: not moomoo_mcp_capture_predecessor
       changed_when: true
     - name: Restore the actual frozen runtime on the first migration
       ansible.builtin.command:
         argv: [python3, scripts/ansible_deployment.py, restore]
         chdir: "{{ moomoo_mcp_release }}"
-      when: not (moomoo_mcp_previous.stat.islnk | default(false))
+      when: moomoo_mcp_capture_predecessor
       changed_when: true
       no_log: true
     - name: Fail the release after restoring its predecessor

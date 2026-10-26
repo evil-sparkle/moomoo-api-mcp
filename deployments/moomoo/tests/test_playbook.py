@@ -204,6 +204,32 @@ class PlaybookTests(unittest.TestCase):
             "synthetic-secret-must-not-escape", result.stdout + result.stderr
         )
 
+    def test_failed_legacy_release_upgrade_restores_actual_runtime(self):
+        releases = self.server / ".local/share/moomoo-api-mcp/releases"
+        previous = releases / "legacy-format"
+        (previous / "scripts").mkdir(parents=True)
+        (previous / "scripts/ansible_deployment.py").write_text(
+            "raise SystemExit('Stale legacy release must not be restored')\n"
+        )
+        current = releases.parent / "current"
+        current.symlink_to(previous)
+        self.state.write_text(json.dumps({"image": SECOND}))
+
+        result = self.deploy(fail_image=IMAGE)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.root / "legacy-restored").exists())
+        self.assertEqual(current.resolve(), previous)
+        self.assertEqual(
+            json.loads(self.state.read_text())["image"],
+            "sha256:" + "d" * 64,
+        )
+        snapshots = list(releases.glob("*/previous-compose.json"))
+        self.assertEqual(len(snapshots), 1)
+        self.assertNotIn(
+            "synthetic-secret-must-not-escape", result.stdout + result.stderr
+        )
+
     def test_configuration_changes_create_a_new_snapshot_without_rewriting_rollback(
         self,
     ):
