@@ -9,13 +9,18 @@ from moomoo import (
     AuType,
     KLType,
     OpenQuoteContext,
+    OptionCondType,
+    OptionDataFilter,
     OptionType,
     SubType,
     TradeDateMarket,
 )
 
 from moomoo_mcp.services.admission import AdmissionPlan, prepare_market_call
+from moomoo_mcp.services.broker_data_reads import BrokerDataReads
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher, QuotaRequest
+from moomoo_mcp.services.data_evidence import OptionChainFilter, bounded_rows
+from moomoo_mcp.services.instruments import InstrumentAdapter
 from moomoo_mcp.services.quote_errors import raise_quote_error
 from moomoo_mcp.services.rate_limit import (
     ProviderRequestLimiter,
@@ -81,7 +86,7 @@ TRADING_DAY_MARKETS = tuple(
 )
 
 
-class MarketDataService:
+class MarketDataService(BrokerDataReads):
     """Service to access market data via OpenQuoteContext.
 
     This service provides methods to retrieve market quotes, historical K-line data,
@@ -95,6 +100,7 @@ class MarketDataService:
         *,
         option_chain_limiter: ProviderRequestLimiter | None = None,
         dispatcher: BrokerRequestDispatcher | None = None,
+        instrument_adapter: InstrumentAdapter | None = None,
     ):
         """Initialize MarketDataService with an existing quote context.
 
@@ -115,6 +121,9 @@ class MarketDataService:
         )
         self.option_chain_limiter = self.dispatcher.limiter(
             QuotaRequest("get_option_chain")
+        )
+        self.instrument_adapter = instrument_adapter or InstrumentAdapter(
+            lambda: self.quote_ctx, dispatcher=self.dispatcher
         )
 
     def prepare_admission(self, method: str, params: dict[str, Any]) -> AdmissionPlan:
@@ -393,6 +402,8 @@ class MarketDataService:
         start: str | None = None,
         end: str | None = None,
         option_type: str = "ALL",
+        option_cond_type: str = "ALL",
+        data_filter: OptionChainFilter | None = None,
     ) -> list[dict]:
         """Get option contracts for an underlying within an expiry date range.
 
@@ -422,10 +433,11 @@ class MarketDataService:
         underlying, normalized_type = self._validate_option_chain(
             code, start, end, option_type
         )
+        filters = self._option_filters(option_cond_type, data_filter)
         reservation = self.option_chain_limiter.reserve()
         try:
             return self._query_option_chain(
-                reservation, underlying, start, end, normalized_type
+                reservation, underlying, start, end, normalized_type, filters
             )
         finally:
             reservation.release()
@@ -436,6 +448,8 @@ class MarketDataService:
         start: str | None = None,
         end: str | None = None,
         option_type: str = "ALL",
+        option_cond_type: str = "ALL",
+        data_filter: OptionChainFilter | None = None,
     ) -> list[dict]:
         """Validate and await quota before consuming an SDK worker slot.
 
@@ -446,6 +460,7 @@ class MarketDataService:
         underlying, normalized_type = self._validate_option_chain(
             code, start, end, option_type
         )
+        filters = self._option_filters(option_cond_type, data_filter)
         reservation = await self.option_chain_limiter.acquire()
         try:
             return await anyio.to_thread.run_sync(
@@ -456,6 +471,7 @@ class MarketDataService:
                     start,
                     end,
                     normalized_type,
+                    filters,
                 ),
                 # Allow cancellation cleanup to release an unused reservation
                 # even after a worker is assigned. start() rejects late work.
@@ -490,6 +506,7 @@ class MarketDataService:
         start: str | None,
         end: str | None,
         normalized_type: str,
+        filters: dict[str, Any] | None = None,
     ) -> list[dict]:
         if not self.quote_ctx:
             raise RuntimeError("Quote context not connected")
@@ -499,11 +516,40 @@ class MarketDataService:
             start=start,
             end=end,
             option_type=getattr(OptionType, normalized_type),
+            **(filters or {}),
         )
         if ret != RET_OK:
             raise_quote_error("get_option_chain", data, [underlying])
 
-        return as_frame("get_option_chain", data).to_dict("records")
+        return bounded_rows(as_frame("get_option_chain", data).to_dict("records"))
+
+    @staticmethod
+    def _option_filters(condition: str, filters: OptionChainFilter | None) -> dict:
+        import inspect
+
+        normalized = validate_choice(
+            "option_cond_type", condition, ("ALL", "WITHIN", "OUTSIDE")
+        )
+        supplied: dict[str, Any] = {}
+        if normalized != "ALL":
+            supplied["option_cond_type"] = getattr(OptionCondType, normalized)
+        if filters is not None:
+            checked = OptionChainFilter.model_validate(filters)
+            values = checked.model_dump(exclude_none=True)
+            supported = inspect.signature(OptionDataFilter).parameters
+            if set(values) - set(supported):
+                raise RuntimeError(
+                    "Installed SDK does not support requested option filters"
+                )
+            if values:
+                supplied["data_filter"] = OptionDataFilter(**values)
+        if set(supplied) - set(
+            inspect.signature(OpenQuoteContext.get_option_chain).parameters
+        ):
+            raise RuntimeError(
+                "Installed SDK does not support requested chain parameters"
+            )
+        return supplied
 
     def get_market_snapshot(self, codes: list[str]) -> list[dict]:
         """Get market snapshot for multiple stocks.

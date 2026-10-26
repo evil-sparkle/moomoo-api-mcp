@@ -178,6 +178,9 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             trading_controls.close()
         raise
     try:
+        instrument_adapter = InstrumentAdapter(
+            lambda: moomoo_service.quote_ctx, dispatcher=dispatcher
+        )
         trade_service = TradeService(
             host=resolved.opend_host,
             port=resolved.opend_port,
@@ -195,9 +198,7 @@ def _build_services(settings: Settings | None = None) -> AppContext:
             # Reads the shared quote context through a callable, not the object:
             # the connection is opened lazily and replaced on reconnect, so holding
             # the instance would pin whichever one existed at wiring time.
-            instrument_lookup=InstrumentAdapter(
-                lambda: moomoo_service.quote_ctx, dispatcher=dispatcher
-            ),
+            instrument_lookup=instrument_adapter,
         )
     except BaseException:
         for store in (execution_store, real_execution_store):
@@ -231,7 +232,9 @@ def _build_services(settings: Settings | None = None) -> AppContext:
 
         # Create market data service using the shared quote context
         market_data_service = MarketDataService(
-            quote_ctx=moomoo_service.quote_ctx, dispatcher=dispatcher
+            quote_ctx=moomoo_service.quote_ctx,
+            dispatcher=dispatcher,
+            instrument_adapter=instrument_adapter,
         )
 
         trade_service.start_paper_recovery()
@@ -354,6 +357,7 @@ mcp = AgentFriendlyMCP(
 
 # Import tools to register them
 import moomoo_mcp.tools.account  # noqa: E402, F401
+import moomoo_mcp.tools.broker_data  # noqa: E402, F401
 import moomoo_mcp.tools.market_data  # noqa: E402, F401
 import moomoo_mcp.tools.system  # noqa: E402, F401
 import moomoo_mcp.tools.trade_inspection  # noqa: E402, F401

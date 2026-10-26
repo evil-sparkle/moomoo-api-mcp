@@ -31,12 +31,13 @@ import time
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from moomoo import RET_OK, OpenQuoteContext
 
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
+from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.trading_policy import (
     OPTION_CLASSIFICATION,
     InstrumentFacts,
@@ -66,6 +67,8 @@ class _StaticFacts:
     classification: str
     lot_size: float | None
     expires_at: float
+    raw: dict[str, Any] = field(default_factory=dict)
+    observed_at: str | None = None
 
 
 def normalize_quote(value: Any) -> float | None:
@@ -198,13 +201,115 @@ class InstrumentAdapter:
         return facts
 
     def _snapshots(
-        self, quote_ctx: OpenQuoteContext, codes: list[str]
+        self, quote_ctx: OpenQuoteContext, codes: list[str], *, strict: bool = False
     ) -> dict[str, dict[str, Any]]:
         ret, data = self.dispatcher.call(
             "get_market_snapshot", quote_ctx.get_market_snapshot, codes
         )
         rows = _rows("get_market_snapshot", ret, data)
+        returned = [str(row.get("code")) for row in rows]
+        if strict and (
+            len(set(returned)) != len(returned) or set(returned) - set(codes)
+        ):
+            raise InstrumentLookupError("Snapshot has duplicate/unexpected codes")
         return {str(row.get("code")): row for row in rows}
+
+    def read_facts(self, codes: list[str]) -> list[dict[str, Any]]:
+        """Expose reference facts using the same static cache and fresh snapshots.
+
+        This observational path permits incomplete metadata; valuation remains
+        fail-closed in __call__. A fact's source and age are retained separately.
+        No lifecycle assumption is reconstructed from the contract symbol.
+        """
+        from moomoo_mcp.services.data_evidence import validate_codes
+
+        validate_codes(codes)
+        context = self._quote_ctx_provider()
+        if context is None:
+            raise InstrumentLookupError("Quote context not connected")
+        snapshot_started = utc_now_iso()
+        snapshots = self._snapshots(context, codes, strict=True)
+        snapshot_received = utc_now_iso()
+        static = self._static_facts(context, codes)
+        fields = {
+            "is_option": "option_valid",
+            "option_type": "option_type",
+            "underlying": "stock_owner",
+            "expiry": "strike_time",
+            "strike": "option_strike_price",
+            "classification": "stock_type",
+            "lot_size": "lot_size",
+            "currency": "currency",
+            "exercise_style": "option_area_type",
+            "settlement_mode": "option_settlement_mode",
+            "settlement_cutoff": "settlement_cutoff",
+            "deliverable_size": "option_contract_size",
+            "deliverable_description": "deliverable_description",
+            "monetary_multiplier": OPTION_MONETARY_MULTIPLIER_FIELD,
+            "standard_status": "option_standard_type",
+        }
+        result = []
+        for code in codes:
+            metadata = static.get(code)
+            snapshot = snapshots.get(code, {})
+            reference = metadata.raw if metadata else {}
+            facts = {}
+            for name, key in fields.items():
+                observations = []
+                for method, record, observed_at in (
+                    (
+                        "get_stock_basicinfo",
+                        reference,
+                        metadata.observed_at if metadata else None,
+                    ),
+                    ("get_market_snapshot", snapshot, snapshot_received),
+                ):
+                    value = record.get(key)
+                    if isinstance(value, float) and not math.isfinite(value):
+                        continue
+                    if value is None or (
+                        isinstance(value, str) and value in {"", "N/A"}
+                    ):
+                        continue
+                    if name in {"lot_size", "deliverable_size", "monetary_multiplier"}:
+                        value = normalize_quote(value)
+                        if value is None:
+                            continue
+                    observations.append(
+                        {
+                            "source_method": method,
+                            "value": value,
+                            "observed_at": observed_at,
+                        }
+                    )
+                conflict = any(
+                    item["value"] != observations[0]["value"]
+                    for item in observations[1:]
+                )
+                facts[name] = {
+                    "state": "CONFLICT"
+                    if conflict
+                    else "KNOWN"
+                    if observations
+                    else "UNKNOWN",
+                    "value": observations[0]["value"]
+                    if observations and not conflict
+                    else None,
+                    "evidence": observations,
+                }
+            result.append(
+                {
+                    "code": code,
+                    "facts": facts,
+                    "snapshot_requested_at": snapshot_started,
+                    "snapshot_received_at": snapshot_received,
+                    "snapshot_present": code in snapshots,
+                    "reference_present": code in static,
+                    "static_cache_ttl_seconds": self._metadata_ttl,
+                    "compatibility_verified": False,
+                }
+            )
+        return result
 
     def _static_facts(
         self, quote_ctx: OpenQuoteContext, codes: list[str]
@@ -301,6 +406,8 @@ class InstrumentAdapter:
                         classification=reported.strip().upper(),
                         lot_size=normalize_quote(row.get("lot_size")),
                         expires_at=self._clock() + self._metadata_ttl,
+                        raw=dict(row),
+                        observed_at=utc_now_iso(),
                     )
         return found
 
