@@ -135,6 +135,18 @@ class TestCheckHealthTool:
         assert result.json["execution_halted"] is False
 
     @pytest.mark.asyncio
+    async def test_lock_attempt_observation_crosses_mcp_boundary(
+        self, call_tool, mock_moomoo_service
+    ):
+        observation = {"status": "failed", "checked_at": "2026-10-25T12:00:00Z"}
+        stub_health(
+            mock_moomoo_service, {**HEALTHY, "gateway_lock_at_rest": observation}
+        )
+        result = await call_tool("check_health")
+        assert result.json["gateway_lock_at_rest"] == observation
+        assert result.json["status"] == "connected"
+
+    @pytest.mark.asyncio
     async def test_degraded_status_identifies_failing_service(
         self, call_tool, mock_moomoo_service
     ):

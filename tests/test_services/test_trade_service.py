@@ -1702,6 +1702,11 @@ class TestLockAtRest:
         # reconnect.
         assert mock_trade_ctx.unlock_trade.call_count == 2
 
+        assert service.gateway_lock_at_rest == {
+            "status": "not_attempted",
+            "checked_at": None,
+        }
+
     def test_a_successful_lock_at_rest_does_not_change_the_execution_state(
         self, mock_trade_ctx, credentialed_service
     ):
