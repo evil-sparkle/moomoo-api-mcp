@@ -213,6 +213,11 @@ validity flags are not independent financial reconciliation.
 
 ### Market Data
 
+Bounded research reads, source/receipt evidence, contract facts, optional chain
+filters and incomplete-fee coverage are documented in
+[Broker data evidence](docs/broker-data-evidence.md). Runtime capability evidence
+separates installed SDK and served schema from provider/connector verification.
+
 All MCP tool failures expose matching JSON text and structured content with
 `isError: true`, an `error_code`, the tool/operation, observation time,
 `retryable`, and a concrete `next_action`. Shared handling distinguishes invalid
