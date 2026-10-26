@@ -208,7 +208,8 @@ async def get_option_chain(
         - option_type: 'CALL' or 'PUT'.
         - strike_time: Expiration date, in the market's own timezone.
         - strike_price: Strike price.
-        - lot_size: Contract multiplier / lot size.
+        - lot_size: Provider lot/deliverable size, not the monetary multiplier.
+          Read option_contract_multiplier from a snapshot or instrument facts.
         - suspension, stock_id, index_option_type, expiration_cycle,
           option_standard_type, option_settlement_mode.
 
@@ -226,6 +227,8 @@ async def get_option_chain(
         to five seconds without occupying an SDK worker, then raises an error
         containing retry_after_seconds. Provider rejections are not retried.
         Independent server processes and other OpenD clients are not coordinated.
+        Responses above 2000 rows or 2 MiB fail explicitly; narrow the expiry
+        or selected filters rather than interpreting a truncated chain as complete.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
     started = utc_now_iso()
