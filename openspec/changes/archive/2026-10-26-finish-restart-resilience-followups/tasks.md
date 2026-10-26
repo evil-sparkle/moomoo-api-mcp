@@ -13,8 +13,11 @@
 
 ## Workflow follow-up
 
-- Review and publish before considering a backport to the selected hotfix.
-- Archive after review/merge under the repository policy.
+- Implementation merged via [PR #73](https://github.com/evil-sparkle/moomoo-api-mcp/pull/73)
+  on 2026-10-26 as `2b60ae2be08687a87fe27d585c17a4e598295ea7`.
+- Canonical system-health specification synchronized and change archived in a
+  separate follow-up PR under the repository policy.
+- Any backport to the selected hotfix remains separate.
 - Task 3.12 is explicitly deferred and non-blocking by user decision on
   2026-10-26. Accept the documented OpenD-wide behavior for the current design;
   successful live unlock/re-lock does not count as live scope proof.
@@ -38,4 +41,4 @@
   REAL unlock, order, or production restart was performed. The user subsequently
   authorized the isolated local unlock test documented in
   `unlock-verification.md`; it successfully unlocked/relocked and restored the
-  original paper service, with no orders. Changes remain local pending review/publication.
+  original paper service, with no orders. The implementation was subsequently reviewed and merged via PR #73.

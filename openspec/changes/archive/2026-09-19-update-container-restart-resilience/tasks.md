@@ -136,6 +136,6 @@ The descriptions above retain the original findings. Current disposition:
   Neither unlock response distinguished an already-unlocked gateway, so this
   verifies credential-based unlock/relock but does not independently prove scope.
   The temporary gateway was stopped and the original paper container restored.
-  See `finish-restart-resilience-followups/unlock-verification.md` for the separate
+  See [unlock verification](../2026-10-26-finish-restart-resilience-followups/unlock-verification.md) for the separate
   documentary, build, and runtime evidence. Do not infer scope from mock results
   or from two successful unlock calls alone.
