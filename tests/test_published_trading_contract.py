@@ -133,6 +133,8 @@ async def test_contract_digest_matches_served_tools_and_preserves_visibility():
         ).encode()
     ).hexdigest()
     assert metadata == {
+        "sdk_version": "10.10.7008",
+        "build_revision": None,
         "package_version": "0.2.1",
         "contract_version": CONTRACT_VERSION,
         "source_revision": "unknown",

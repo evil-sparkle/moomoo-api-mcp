@@ -10,6 +10,10 @@ from unittest.mock import Mock
 import anyio.to_thread
 import pytest
 
+from moomoo_mcp.services.broker_data_reads import (
+    BROKER_READ_OPERATIONS,
+    BrokerDataReads,
+)
 from moomoo_mcp.services.broker_dispatch import (
     OPERATION_POLICIES,
     UNTIMED_OPERATIONS,
@@ -265,6 +269,39 @@ def test_runtime_sdk_calls_have_registered_dispatch_gates():
     assert isinstance(sdk.args[1], ast.Name) and sdk.args[1].id == "operation"
     assert registered.issuperset(SDK_QUERY_OPERATIONS)
     observed.update(SDK_QUERY_OPERATIONS)
+    read_tree = ast.parse(inspect.getsource(BrokerDataReads))
+    reads = [
+        node
+        for node in ast.walk(read_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_read"
+    ]
+    assert all(isinstance(node.args[0], ast.Constant) for node in reads)
+    assert {
+        node.args[0].value for node in reads if isinstance(node.args[0], ast.Constant)
+    } == BROKER_READ_OPERATIONS
+    gate_tree = ast.parse(inspect.getsource(BrokerDataReads))
+    gates = [
+        node
+        for node in ast.walk(gate_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "call"
+    ]
+    assert len(gates) == 1
+    assert ast.unparse(gates[0].args[0]) == "operation"
+    assert ast.unparse(gates[0].args[1]) == "method"
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and ast.unparse(node.args[0]) == "self.quote_ctx"
+        and ast.unparse(node.args[1]) == "operation"
+        for node in ast.walk(gate_tree)
+    )
+    assert registered.issuperset(BROKER_READ_OPERATIONS)
+    observed.update(BROKER_READ_OPERATIONS)
     assert observed == registered
 
 

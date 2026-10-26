@@ -58,7 +58,16 @@ class TestCheckHealthTool:
 
         result = await call_tool("check_health")
 
-        assert result.structured == {
+        market_data = result.structured["market_data"]
+        assert market_data["connector_import"] == "UNKNOWN"
+        assert all(
+            row["live_verification"] == "UNKNOWN" for row in market_data["operations"]
+        )
+        assert {
+            key: value
+            for key, value in result.structured.items()
+            if key != "market_data"
+        } == {
             **HEALTHY,
             "mcp_server": server_contract_identity(await mcp.list_tools()),
             "client_authorization": {
@@ -88,14 +97,26 @@ class TestCheckHealthTool:
     )
     @pytest.mark.asyncio
     async def test_restricted_health_omits_the_global_account_count(
-        self, call_tool, mock_moomoo_service, grants
+        self, call_tool, mock_moomoo_service, mock_trade_service, grants
     ):
         stub_health(mock_moomoo_service, HEALTHY)
 
         with client_grants_context(grants):
             result = await call_tool("check_health")
 
-        assert result.structured["trade"] == {"status": "ok"}
+        if grants.permissions == frozenset({"market_read"}):
+            assert result.structured["trade"] == {
+                "status": "not_probed",
+                "reason": "client_scope",
+            }
+            mock_moomoo_service.start_health_check.assert_called_once_with(
+                trade_service=None
+            )
+            mock_trade_service.start_journal_health.assert_not_called()
+            mock_trade_service.start_real_journal_health.assert_not_called()
+            mock_trade_service.submit_probe.assert_not_called()
+        else:
+            assert result.structured["trade"] == {"status": "ok"}
         assert result.structured["client_authorization"]["restricted"] is True
         assert HEALTHY["trade"]["account_count"] == 2
 

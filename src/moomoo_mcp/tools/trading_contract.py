@@ -186,7 +186,7 @@ def published_input_schema(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def server_contract_identity(tools: list[Tool]) -> dict[str, str]:
+def server_contract_identity(tools: list[Tool]) -> dict[str, Any]:
     """Hash exactly the visible tools/list contract, never credentials or records."""
     definitions = [
         tool.model_dump(mode="json", by_alias=True, exclude_none=True)
@@ -200,6 +200,8 @@ def server_contract_identity(tools: list[Tool]) -> dict[str, str]:
     except PackageNotFoundError:
         package_version = "unknown"
     return {
+        "sdk_version": _sdk_version(),
+        "build_revision": None,
         "package_version": package_version,
         "contract_version": CONTRACT_VERSION,
         # This package does not currently embed a trustworthy source revision.
@@ -207,3 +209,9 @@ def server_contract_identity(tools: list[Tool]) -> dict[str, str]:
         "source_revision": "unknown",
         "tools_schema_sha256": hashlib.sha256(encoded).hexdigest(),
     }
+
+
+def _sdk_version() -> str | None:
+    from moomoo_mcp.services.data_evidence import sdk_version
+
+    return sdk_version()
