@@ -61,6 +61,8 @@ than relying on a host's displayed import. Listing tools performs no broker call
 | Field | Meaning |
 | --- | --- |
 | `package_version` | Installed MCP package version, or `unknown` when unavailable. Different source builds can share a package version. |
+| `sdk_version` | Installed moomoo SDK version, or null; the lockfile does not identify a deployed installation. |
+| `build_revision` | Null until an embedded build identity is available. |
 | `contract_version` | Explicit version of this server's published trading contract. |
 | `source_revision` | Embedded source revision when available; currently `unknown`. Never infer a commit from OpenD or a local checkout. |
 | `tools_schema_sha256` | SHA-256 of the tools visible to this authenticated caller, including descriptions, input/output schemas and annotations. |
@@ -72,6 +74,12 @@ and hash its UTF-8 bytes. Compare only within the same credential scope:
 restricted clients can have a different catalog and digest. Compare the actual
 `tools/list` response as well as the digest; metadata cannot prove what an
 external host has cached.
+
+`check_health.market_data` adds layered capability evidence described in
+[Broker data evidence](broker-data-evidence.md). A credential with only
+`market_read` skips private trade and journal probes; `health_scope` explicitly
+reports `MARKET_DATA_ONLY` and trade status is `not_probed`. The aggregate health
+status may be degraded because the private service was deliberately not probed.
 
 `gateway_version` identifies OpenD. It does not identify this MCP package,
 contract, source build or a host's cached tools. The repository serves stateless
