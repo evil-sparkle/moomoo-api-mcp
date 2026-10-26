@@ -52,6 +52,10 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
           pending IDs and broker recovery evidence. REAL recovery never assumes
           absence or automatically resubmits an operation.
         - gateway_version: OpenD version when the gateway reports one, else null.
+        - gateway_lock_at_rest: Last connect/reconnect lock attempt status
+          ('not_applicable', 'not_attempted', 'succeeded', or 'failed') and nullable
+          checked_at. Historical observation, not current gateway lock state.
+          SIMULATE does not request a lock and reports 'not_applicable'.
         - mcp_server: Package and contract versions, source_revision (unknown when
           unavailable), and SHA-256 of the currently authorized tools/list contract.
           Compare with the served tools/list using the same credential; this does

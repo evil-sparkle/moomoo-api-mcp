@@ -41,7 +41,7 @@ TOKEN="smoke-test-token-not-a-secret"
 PROBE_IMAGE="python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c"
 
 ENV_FILE="$(mktemp)"
-ISOLATION_FILE="$(mktemp --suffix=.yml)"
+ISOLATION_FILE="$(mktemp)"
 FIXTURE_DIR="$(mktemp -d)"
 chmod 755 "$FIXTURE_DIR"
 cp tests/fixtures/opend_stub.py "$FIXTURE_DIR/opend-stub"
@@ -418,6 +418,7 @@ fi
 # Docker's restart policy. The supervisor has to make it visible by exiting.
 echo "==> killing the MCP server process"
 instance_before="$(container_instance)"
+starts_before="$(gateway_starts)"
 kill_in_container "the MCP server" moomoo-api-mcp supervisor
 
 echo "==> the container is replaced and comes back serving"
@@ -432,5 +433,8 @@ if ! stateless_request_lists_tools; then
   show_last_tools_response
   exit 1
 fi
+
+wait_for 120 "the replacement gateway to start" gateway_restarted_since "${starts_before}"
+wait_for 180 "the replacement MCP server to reach the new gateway" gateway_has_connections
 
 echo "PASSED: the gateway restarts alone, the server takes the container with it."

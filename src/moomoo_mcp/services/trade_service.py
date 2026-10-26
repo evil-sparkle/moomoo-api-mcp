@@ -317,6 +317,11 @@ class TradeService:
         self._connect_future: Future | None = None
         self._closed = False
         self._execution = _ExecutionState()
+        self._lock_observation_mutex = threading.Lock()
+        self._lock_observation: dict[str, str | None] = {
+            "status": "not_attempted",
+            "checked_at": None,
+        }
         self.events = TradeEventBuffer()
         self.paper = (
             PaperExecution(self, execution_store, simulated_account_allowlist)
@@ -328,6 +333,22 @@ class TradeService:
             if real_execution_store is not None
             else None
         )
+
+    @property
+    def gateway_lock_at_rest(self) -> dict[str, str | None]:
+        """Last connect-time lock attempt, not the current gateway lock state."""
+        if not self.locks_gateway_at_rest:
+            return {"status": "not_applicable", "checked_at": None}
+        with self._lock_observation_mutex:
+            return dict(self._lock_observation)
+
+    def _record_lock_attempt(self, status: str) -> None:
+        # This mutex never covers SDK calls or waits for the JIT lock.
+        with self._lock_observation_mutex:
+            self._lock_observation = {
+                "status": status,
+                "checked_at": utc_now_iso(),
+            }
 
     def prepare_admission(self, method: str, params: dict[str, Any]) -> AdmissionPlan:
         return prepare_trade_call(self, method, params)
@@ -760,8 +781,10 @@ class TradeService:
         try:
             self._lock_gateway(trade_ctx)
         except Exception as exc:  # noqa: BLE001 - runs on an SDK-owned thread
+            self._record_lock_attempt("failed")
             logger.warning(f"Failed to lock the trade gateway after {when}: {exc}")
         else:
+            self._record_lock_attempt("succeeded")
             logger.info(
                 f"Locked trade gateway after {when} ({self.policy.mode.value} mode)."
             )

@@ -60,7 +60,7 @@ documentation-only change must not make, or a test that turns a **gap** or
       over HTTP that a foreign `mcp-session-id` is processed rather than
       rejected and that a call is answered with one JSON response. Pinned and
       asserted in `TestStatelessStreamableHTTP` in `tests/test_server.py`.
-- [ ] 3.2 Test: after the MCP process is killed and the container restarts,
+- [x] 3.2 Test: after the MCP process is killed and the container restarts,
       the smoke test waits for the new MCP server to reach the new gateway, as
       it already does after a gateway-only restart. Also assert that
       `initialize` returns no `mcp-session-id`. Today the smoke test accepts
@@ -73,7 +73,7 @@ documentation-only change must not make, or a test that turns a **gap** or
       keeps the connection. Only the reconnect path is tested. Pinned and
       asserted in `TestReadOnlyGatewayLock.test_a_refused_lock_on_initial_connect_is_logged_and_keeps_the_connection`
       in `tests/test_services/test_trade_service.py`.
-- [ ] 3.5 Runtime: order-command errors do not distinguish "outcome unknown"
+- [x] 3.5 Runtime: order-command errors do not distinguish "outcome unknown"
       (transport lost) from "rejected by the broker". Consider a distinct error
       that tells the caller to query orders before retrying.
 - [x] 3.6 Stale wording outside the specs: the `unlock_trade` tool docstring
@@ -81,24 +81,61 @@ documentation-only change must not make, or a test that turns a **gap** or
       The rewritten compose tests and smoke test for the single container no
       longer say sessions live in server memory. Updated to state that unlock
       state is maintained on the OpenD gateway.
-- [ ] 3.7 `.env.example` lists `OPEND_VERSION`, `OPEND_TAG`, `OPEND_URL` and
+- [x] 3.7 `.env.example` lists `OPEND_VERSION`, `OPEND_TAG`, `OPEND_URL` and
       `OPEND_SHA256` as optional overrides, but no Compose file forwards them as
       build args, so setting them has no effect. Either forward them or remove
       the block. If forwarded, a host `.env` could override the reviewed pin,
       which the integrity requirement would then need to address.
-- [ ] 3.8 Process: add a PR-description line stating whether the change affects
+- [x] 3.8 Process: add a PR-description line stating whether the change affects
       a documented behaviour or architectural contract. The bug-fix exemption
       in `openspec/AGENTS.md` skips the proposal, not the spec-impact check, and
       `openspec validate --strict` checks structure only, so it cannot catch a
       stale spec. The stale checksum passed it.
-- [ ] 3.9 Runtime, if wanted: notifications. With `json_response=True` a
+- [x] 3.9 Runtime, if wanted: notifications. With `json_response=True` a
       tool's `ctx.info` / `ctx.warning` never reaches an HTTP client. Options:
       move anything a caller needs into tool results (it may already be
       there), or make JSON responses a setting so SSE-capable clients get
       notifications again. The spec would then need a MODIFIED requirement.
-- [ ] 3.10 Decide: should REAL mode hold a standing startup unlock at all?
+- [x] 3.10 Decide: should REAL mode hold a standing startup unlock at all?
       (`design.md` § Open Questions.)
-- [ ] 3.11 Decide: should a refused READ_ONLY lock surface in `check_health`
+- [x] 3.11 Decide: should a refused READ_ONLY lock surface in `check_health`
       rather than the log only?
-- [ ] 3.12 Establish: is OpenD's unlock gateway-wide or per connection? Needs
-      a live REAL-mode test.
+- 3.12 **Deferred, non-blocking (approved 2026-10-26):** establish live
+      cross-connection unlock scope. Accept the documented OpenD-wide behavior
+      for the current design; the live scope experiment has not passed.
+
+
+### Follow-up reconciliation — 2026-10-25
+
+The descriptions above retain the original findings. Current disposition:
+
+- 3.2: `scripts/smoke-test.sh` rejects session IDs and now waits for replacement
+  MCP gateway connections after observing a new gateway start. The final isolated
+  Docker smoke test passed on 2026-10-25 using the synthetic gateway; this is
+  container lifecycle evidence, not live broker acceptance.
+- 3.5: superseded by paper/REAL execution journals, structured dispatch outcomes,
+  and reconciliation. See `services/paper_execution.py`, `real_execution.py`,
+  `order_errors.py` and their tests; unknown outcomes are never blindly replayed.
+- 3.7: `docker-compose.yml` forwards all four build arguments. `.env.example`
+  documents local-build-only scope and reviewed default pins; production pulls
+  prebuilt images. Covered by `tests/test_environment_contract.py`.
+- 3.8: `.github/pull_request_template.md` now prompts for documented behavior and
+  architectural contract impact, including bug fixes, plus release impact.
+- 3.9: decision closed: retain JSON-only responses and dropped notifications.
+  `transport-sessions` and `TestStatelessStreamableHTTP` specify/test this behavior;
+  callers consume structured results. SSE remains a separate optional feature.
+- 3.10: resolved by `trade-unlock` and server startup: no startup unlock; stored
+  REAL credentials unlock only just in time for mutations.
+- 3.11: health now reports `gateway_lock_at_rest` as the latest connect/reconnect
+  attempt and completion time, separately from connectivity and execution halt.
+  It does not claim current lock state or expose raw provider messages.
+- 3.12: deferred, non-blocking; live cross-connection scope remains unverified. Official documentation
+  confirms the documented scope is OpenD-wide. After the user supplied the trade
+  credential locally, an isolated hotfix gateway successfully locked, unlocked,
+  and re-locked through two distinct SDK connections, with zero order mutations.
+  Neither unlock response distinguished an already-unlocked gateway, so this
+  verifies credential-based unlock/relock but does not independently prove scope.
+  The temporary gateway was stopped and the original paper container restored.
+  See `finish-restart-resilience-followups/unlock-verification.md` for the separate
+  documentary, build, and runtime evidence. Do not infer scope from mock results
+  or from two successful unlock calls alone.
