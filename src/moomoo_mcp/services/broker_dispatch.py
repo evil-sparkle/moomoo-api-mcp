@@ -41,6 +41,16 @@ class OperationPolicy:
 # Only explicitly shared APIs use the same group. The max-quantity grouping is
 # conservative: the combo docs describe one limit for max-quantity query APIs.
 OPERATION_POLICIES = {
+    "get_rehab": OperationPolicy(60, "gateway", "quote/get-rehab.html"),
+    "get_corporate_actions_dividends": OperationPolicy(
+        30, "gateway", "quote/get-corporate-actions-dividends.html"
+    ),
+    "get_earnings_calendar": OperationPolicy(
+        60, "gateway", "quote/get-earnings-calendar.html"
+    ),
+    "get_option_volatility": OperationPolicy(
+        30, "gateway", "quote/get-option-volatility.html"
+    ),
     "accinfo_query": OperationPolicy(
         10, "account", "trade/get-funds.html", condition="refresh"
     ),
@@ -109,6 +119,7 @@ OPERATION_POLICIES = {
 # These interfaces have no published numeric frequency policy. Subscription
 # capacity and the minimum hold period are still enforced by OpenD.
 UNTIMED_OPERATIONS = {
+    "get_history_kl_quota": "quote/get-history-kl-quota.html",
     "get_acc_list": "trade/get-acc-list.html",
     "get_global_state": "quote/get-global-state.html",
     "get_stock_basicinfo": "quote/get-static-info.html",

@@ -97,11 +97,17 @@ class TestLifespanResilience:
 
         # A failed trade connection must not trigger an unlock attempt.
         trade_service.unlock_trade.assert_not_called()
-        market_data_cls.assert_called_once_with(quote_ctx=None, dispatcher=ANY)
+        market_data_cls.assert_called_once_with(
+            quote_ctx=None, dispatcher=ANY, instrument_adapter=ANY
+        )
         dispatcher = trade_cls.call_args.kwargs["dispatcher"]
         assert quote_cls.call_args.kwargs["dispatcher"] is dispatcher
         assert market_data_cls.call_args.kwargs["dispatcher"] is dispatcher
         assert trade_cls.call_args.kwargs["instrument_lookup"].dispatcher is dispatcher
+        assert (
+            market_data_cls.call_args.kwargs["instrument_adapter"]
+            is trade_cls.call_args.kwargs["instrument_lookup"]
+        )
 
         # The session ending is not the process ending: the connections outlive
         # it, and only shutdown releases them.

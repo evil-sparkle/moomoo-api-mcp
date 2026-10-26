@@ -71,6 +71,12 @@ def prepare_market_call(
     )
 
     operations = {
+        "get_market_snapshot_evidence": "get_market_snapshot",
+        "get_instrument_facts": "get_market_snapshot",
+        "get_rehab": "get_rehab",
+        "get_corporate_actions_dividends": "get_corporate_actions_dividends",
+        "get_earnings_calendar": "get_earnings_calendar",
+        "get_option_volatility": "get_option_volatility",
         "get_historical_klines": "request_history_kline",
         "get_historical_klines_page": "request_history_kline",
         "get_option_expiration_date": "get_option_expiration_date",
@@ -85,6 +91,23 @@ def prepare_market_call(
         return AdmissionPlan()
     if service.quote_ctx is None:
         raise RuntimeError("Quote context not connected")
+    if method in {"get_market_snapshot_evidence", "get_instrument_facts"}:
+        from moomoo_mcp.services.data_evidence import validate_codes
+
+        validate_codes(params["codes"])
+    if method in {
+        "get_rehab",
+        "get_corporate_actions_dividends",
+        "get_earnings_calendar",
+        "get_option_volatility",
+    }:
+        from moomoo_mcp.services.broker_data_reads import validate_limit
+
+        validate_limit(params["limit"])
+    if method == "get_option_volatility":
+        return AdmissionPlan(
+            [QuotaRequest("get_market_snapshot"), QuotaRequest(operation)]
+        )
     if operation == "get_market_snapshot" and not params["codes"]:
         return AdmissionPlan()
     if operation == "request_history_kline":

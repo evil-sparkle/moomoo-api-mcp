@@ -8,9 +8,11 @@ from mcp.server.session import ServerSession
 from moomoo_mcp.client_authorization import (
     client_authorization_status,
     current_client_grants,
+    permission_allowed,
     visible_journal_health,
 )
 from moomoo_mcp.server import AppContext, mcp
+from moomoo_mcp.services.data_evidence import capability_evidence
 from moomoo_mcp.tools.annotations import READ_ONLY_TOOL
 from moomoo_mcp.tools.offload import await_futures
 from moomoo_mcp.tools.trading_contract import server_contract_identity
@@ -52,6 +54,10 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
           pending IDs and broker recovery evidence. REAL recovery never assumes
           absence or automatically resubmits an operation.
         - gateway_version: OpenD version when the gateway reports one, else null.
+        - gateway_lock_at_rest: Last connect/reconnect lock attempt status
+          ('not_applicable', 'not_attempted', 'succeeded', or 'failed') and nullable
+          checked_at. Historical observation, not current gateway lock state.
+          SIMULATE does not request a lock and reports 'not_applicable'.
         - mcp_server: Package and contract versions, source_revision (unknown when
           unavailable), and SHA-256 of the currently authorized tools/list contract.
           Compare with the served tools/list using the same credential; this does
@@ -60,13 +66,30 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
     lifespan_context = ctx.request_context.lifespan_context
     moomoo_service = lifespan_context.moomoo_service
     trade_service = lifespan_context.trade_service
+    account_reads = permission_allowed("real_read") or permission_allowed(
+        "simulate_read"
+    )
 
     # Both probes start immediately on their own dedicated workers, so health
     # never queues behind ordinary SDK traffic, and the deadline covers every
     # wait from this point on. Awaiting the probe futures directly — rather than
     # parking a shared worker thread on them — keeps the event loop free to
     # answer while a stuck gateway is still being diagnosed.
-    check = moomoo_service.start_health_check(trade_service=trade_service)
+    check = moomoo_service.start_health_check(
+        trade_service=trade_service if account_reads else None
+    )
+    if not account_reads:
+        await await_futures(check.futures, check.remaining())
+        status = check.result()
+        status["trade"] = {"status": "not_probed", "reason": "client_scope"}
+        status["health_scope"] = "MARKET_DATA_ONLY"
+        status["execution_journal"] = {"state": "NOT_AUTHORIZED"}
+        status["real_execution_journal"] = {"state": "NOT_AUTHORIZED"}
+        status["client_authorization"] = client_authorization_status()
+        tools = await mcp.list_tools()
+        status["mcp_server"] = server_contract_identity(tools)
+        status["market_data"] = capability_evidence({tool.name for tool in tools})
+        return status
     journal_future = trade_service.start_journal_health()
     real_journal_future = trade_service.start_real_journal_health()
     await await_futures(
@@ -92,7 +115,9 @@ async def check_health(ctx: Context[ServerSession, AppContext]) -> dict[str, Any
         status["real_execution_journal"], "REAL"
     )
     status["client_authorization"] = client_authorization_status()
-    status["mcp_server"] = server_contract_identity(await mcp.list_tools())
+    tools = await mcp.list_tools()
+    status["mcp_server"] = server_contract_identity(tools)
+    status["market_data"] = capability_evidence({tool.name for tool in tools})
 
     await ctx.info(f"Health check status: {status.get('status')}")
 

@@ -238,6 +238,11 @@ class HealthCheck:
                 self.trade_service.trading_market if self.trade_service else None
             ),
             "gateway_version": quote_result.get("gateway_version"),
+            "gateway_lock_at_rest": (
+                self.trade_service.gateway_lock_at_rest
+                if self.trade_service is not None
+                else {"status": "not_applicable", "checked_at": None}
+            ),
         }
 
         # The execution halt is read from memory, with no gateway request, and

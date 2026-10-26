@@ -7,6 +7,7 @@ from mcp.server.session import ServerSession
 
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.services.data_evidence import DataEvidence, OptionChainFilter, evidence
 from moomoo_mcp.services.market_data_service import validate_candle_filters
 from moomoo_mcp.tools.annotations import MUTATING_TOOL, READ_ONLY_TOOL
 from moomoo_mcp.tools.kline_cursor import (
@@ -173,8 +174,19 @@ async def get_option_chain(
     start: str | None = None,
     end: str | None = None,
     option_type: str = "ALL",
-) -> list[dict]:
+    option_cond_type: str = "ALL",
+    data_filter: OptionChainFilter | None = None,
+    include_evidence: bool = False,
+) -> list[dict] | DataEvidence:
     """Get option contracts for an underlying within a range of expiry dates.
+
+    Optional option_cond_type is ALL, WITHIN or OUTSIDE (moneyness).
+    data_filter selects explicit upstream Greek, IV, volume and OI bounds.
+    IV uses percentage points, delta uses [-1,1], counts are whole contracts.
+    Provider filtering may truncate precision (IV: integer; Greeks: 3 decimals).
+    OI is updated daily; filters do not certify current liquidity or quote age.
+    include_evidence=true returns an additive envelope with exact applied inputs;
+    default false retains the legacy list. No filter silently falls back.
 
     Use the returned `code` values verbatim as leg symbols for
     preview_combo_order and place_combo_order, and as codes for get_stock_quote.
@@ -196,7 +208,8 @@ async def get_option_chain(
         - option_type: 'CALL' or 'PUT'.
         - strike_time: Expiration date, in the market's own timezone.
         - strike_price: Strike price.
-        - lot_size: Contract multiplier / lot size.
+        - lot_size: Provider lot/deliverable size, not the monetary multiplier.
+          Read option_contract_multiplier from a snapshot or instrument facts.
         - suspension, stock_id, index_option_type, expiration_cycle,
           option_standard_type, option_settlement_mode.
 
@@ -214,15 +227,43 @@ async def get_option_chain(
         to five seconds without occupying an SDK worker, then raises an error
         containing retry_after_seconds. Provider rejections are not retried.
         Independent server processes and other OpenD clients are not coordinated.
+        Responses above 2000 rows or 2 MiB fail explicitly; narrow the expiry
+        or selected filters rather than interpreting a truncated chain as complete.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
+    started = utc_now_iso()
+    filters = {}
+    if option_cond_type != "ALL":
+        filters["option_cond_type"] = option_cond_type
+    if data_filter is not None:
+        filters["data_filter"] = data_filter
     contracts = await market_data_service.get_option_chain_async(
         code=code,
         start=start,
         end=end,
         option_type=option_type,
+        **filters,
     )
     await ctx.info(f"Retrieved {len(contracts)} option contracts for {code}")
+    if include_evidence:
+        return evidence(
+            "get_option_chain",
+            started,
+            contracts,
+            scope={
+                "code": code,
+                "start": start,
+                "end": end,
+                "option_type": option_type,
+                "option_cond_type": option_cond_type,
+                "data_filter": data_filter.model_dump(exclude_none=True)
+                if data_filter
+                else None,
+            },
+            limitations=[
+                "Provider filter inputs, not fresh liquidity; OI updated daily."
+            ],
+        )
     return contracts
 
 

@@ -119,6 +119,13 @@ def client_authorization_status() -> dict:
 
 MARKET_TOOLS = frozenset(
     {
+        "get_market_snapshot_evidence",
+        "get_instrument_facts",
+        "get_history_kl_quota",
+        "get_rehab",
+        "get_corporate_actions_dividends",
+        "get_earnings_calendar",
+        "get_option_volatility",
         "get_stock_quote",
         "get_historical_klines",
         "get_historical_klines_page",

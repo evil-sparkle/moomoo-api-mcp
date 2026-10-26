@@ -39,9 +39,12 @@ is READ_ONLY.
 
 **For an existing READ_ONLY Ubuntu deployment, follow the
 [Ansible and CI/CD runbook](docs/deploy-ansible.md).** The application owns its
-Ansible role. A successful main CI run records immutable application and tunnel
-image digests; GitHub Actions then deploys that exact release over Tailscale and
-SSH. The same workflow accepts an older successful CI run for manual rollback.
+Ansible role. CI on the branch selected by `DEPLOY_BRANCH` records immutable
+application and tunnel image digests; GitHub Actions then deploys that exact
+release over Tailscale and SSH. See the
+[production branch guide](docs/deployment-branches.md) for hotfix backports and
+the verified return to `main`. The same workflow accepts
+an older successful CI run from the selected branch for manual image redeployment.
 The migration preserves the existing Compose project, OpenD login volume and
 journal volumes, and reuses the protected configuration already on the server.
 
@@ -141,6 +144,13 @@ See [contributor guidance](#contributing) for checks, hooks and OpenSpec workflo
 
   A `connected` result means OpenD answered. It does **not** mean trading is unlocked, that an order would be accepted, or that a given market is authorized for the account. The server also starts even when OpenD is unreachable, so `check_health` stays callable while you diagnose the gateway.
 
+  `gateway_lock_at_rest` reports the last connect/reconnect lock attempt: `status`
+  is `not_attempted`, `succeeded`, `failed`, or `not_applicable`, with a nullable
+  UTC `checked_at`. SIMULATE reports `not_applicable` and issues no gateway lock.
+  This is a historical attempt, not proof of the gateway's current lock state.
+  It does not alter connectivity or clear a REAL execution halt. Raw broker
+  errors remain outside this field; consult server logs for failure details.
+
   `mcp_server` separately reports `package_version`, `contract_version`,
   `source_revision` (`unknown` when unavailable), and `tools_schema_sha256` for
   this credential's visible `tools/list`. `gateway_version` is OpenD's version.
@@ -202,6 +212,11 @@ do not alone prove an error. Internal arithmetic consistency and provider
 validity flags are not independent financial reconciliation.
 
 ### Market Data
+
+Bounded research reads, source/receipt evidence, contract facts, optional chain
+filters and incomplete-fee coverage are documented in
+[Broker data evidence](docs/broker-data-evidence.md). Runtime capability evidence
+separates installed SDK and served schema from provider/connector verification.
 
 All MCP tool failures expose matching JSON text and structured content with
 `isError: true`, an `error_code`, the tool/operation, observation time,
@@ -465,6 +480,29 @@ If the re-lock after an order fails, the gateway may still be unlocked, so
 execution **halts**: new placements and `NORMAL`/`ENABLE` modifications are
 refused while cancellations stay allowed. `check_health` reports the halt, and
 a successful `lock_trade` is the only way to clear it.
+
+**Throughput trade-off (decision: 2026-10-26).** Retain the current per-operation
+unlock/write/re-lock sequence for the intended occasional REAL trading workload.
+Short unlock periods are preferred over higher sustained throughput. This
+decision does not introduce a persistent unlock or a batch execution window.
+
+The [provider's lock/unlock API limit](https://openapi.moomoo.com/moomoo-api-doc/en/trade/unlock.html)
+is 10 requests per 30 seconds per user ID. Each just-in-time REAL mutation uses
+two calls, and the application reserves quota for both before dispatch. This
+implies at most five complete cycles per 30 seconds from that quota alone, with
+less capacity available when startup, reconnects, manual calls, or other clients
+consume it. This is a theoretical quota bound, not a measured throughput promise.
+The two extra API round trips add latency, and serialization makes concurrent
+mutations wait. SIMULATE operations do not use this unlock/re-lock sequence.
+
+Revisit this decision if sustained REAL traffic, frequent modifications or
+cancellations, rate-limit refusals, or execution latency become operational
+problems. Measure those effects before changing the policy. A bounded unlock
+window would require a separate design for exclusive gateway ownership,
+per-operation authorization, failure recovery, and reliable re-locking; a
+database lock alone cannot govern clients connecting directly to OpenD. The
+local hotfix test verified unlock and re-lock, but did not load-test throughput
+or independently establish cross-connection unlock scope.
 
 #### Trading mode
 

@@ -5,6 +5,13 @@ import pytest
 from moomoo_mcp.server import mcp
 
 READ_ONLY = {
+    "get_market_snapshot_evidence",
+    "get_instrument_facts",
+    "get_history_kl_quota",
+    "get_rehab",
+    "get_corporate_actions_dividends",
+    "get_earnings_calendar",
+    "get_option_volatility",
     "check_health",
     "get_account_summary",
     "get_accounts",

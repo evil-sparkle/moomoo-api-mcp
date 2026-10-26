@@ -306,12 +306,18 @@ class TradeQueryService:
             row_limit=400,
         )
         result: list[OrderFeeResult] = []
+        seen: set[str] = set()
         for row in rows:
             order_id = exact_identifier(row.get("order_id"), "order_id")
             if order_id not in order_id_list:
                 raise TradeQueryError(
                     "INVALID_RESPONSE", "order_fee_query", "unexpected order identifier"
                 )
+            if order_id in seen:
+                raise TradeQueryError(
+                    "INVALID_RESPONSE", "order_fee_query", "duplicate order identifier"
+                )
+            seen.add(order_id)
             details = row.get("fee_details")
             normalized = None
             if isinstance(details, (list, tuple)):

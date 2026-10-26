@@ -49,6 +49,66 @@ def services():
 class TestHealthyGateway:
     """Both probes succeed."""
 
+    def test_lock_failure_and_recovery_are_independent_of_connectivity(self, services):
+        moomoo_service, trade_service = services
+        assert trade_service.gateway_lock_at_rest == {
+            "status": "not_attempted",
+            "checked_at": None,
+        }
+        trade_service.trade_ctx.unlock_trade.return_value = (
+            -1,
+            "private provider data",
+        )
+        trade_service._enforce_gateway_lock(trade_service.trade_ctx, "connecting")
+        health = moomoo_service.check_health(trade_service=trade_service)
+        assert health["status"] == "connected"
+        assert health["execution_halted"] is False
+        assert health["gateway_lock_at_rest"]["status"] == "failed"
+        assert health["gateway_lock_at_rest"]["checked_at"].endswith("Z")
+        assert "private provider data" not in repr(health)
+
+        trade_service.trade_ctx.unlock_trade.return_value = (0, "")
+        trade_service._enforce_gateway_lock(trade_service.trade_ctx, "reconnecting")
+        health = moomoo_service.check_health(trade_service=trade_service)
+        assert health["gateway_lock_at_rest"]["status"] == "succeeded"
+        assert trade_service.trade_ctx.unlock_trade.call_count == 2
+
+    def test_health_does_not_wait_for_a_pending_lock_attempt(self, services):
+        moomoo_service, trade_service = services
+        started, release = threading.Event(), threading.Event()
+
+        def blocked_lock(**_kwargs):
+            started.set()
+            release.wait(5)
+            return 0, ""
+
+        trade_service.trade_ctx.unlock_trade.side_effect = blocked_lock
+        worker = threading.Thread(
+            target=trade_service._enforce_gateway_lock,
+            args=(trade_service.trade_ctx, "connecting"),
+        )
+        worker.start()
+        try:
+            assert started.wait(1)
+            before = time.monotonic()
+            health = moomoo_service.check_health(trade_service=trade_service)
+            assert time.monotonic() - before < 1
+            assert health["gateway_lock_at_rest"]["status"] == "not_attempted"
+        finally:
+            release.set()
+            worker.join(2)
+
+    def test_simulate_reports_no_lock_policy(self, services):
+        moomoo_service, trade_service = services
+        trade_service.policy = TradingPolicy(TradingMode.SIMULATE)
+        trade_service._enforce_gateway_lock(trade_service.trade_ctx, "connecting")
+        health = moomoo_service.check_health(trade_service=trade_service)
+        assert health["gateway_lock_at_rest"] == {
+            "status": "not_applicable",
+            "checked_at": None,
+        }
+        trade_service.trade_ctx.unlock_trade.assert_not_called()
+
     def test_reports_connected_with_endpoint_and_timestamp(self, services):
         moomoo_service, trade_service = services
 

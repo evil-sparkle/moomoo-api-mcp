@@ -18,6 +18,56 @@ from tests.rate_limit_clock import FakeClock
 import moomoo_mcp.tools.trade_queries  # noqa: F401,E402  isort:skip
 
 
+def test_fee_duplicate_rows_are_not_double_counted(queries):
+    service, context, _ = queries
+    context.order_fee_query.return_value = (
+        RET_OK,
+        pd.DataFrame([{"order_id": "1", "fee_amount": 0}] * 2),
+    )
+    with pytest.raises(TradeQueryError) as failure:
+        service.get_order_fees(["1"])
+    assert failure.value.code == "INVALID_RESPONSE"
+    context.unlock_trade.assert_not_called()
+    context.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fee_evidence_reports_missing_zero_and_partial_details(
+    queries, mcp_app_context
+):
+    service, context, _ = queries
+    mcp_app_context.trade_service = service
+    context.order_fee_query.return_value = (
+        RET_OK,
+        pd.DataFrame(
+            [
+                {"order_id": "1", "fee_amount": 0, "fee_details": []},
+                {"order_id": "2", "fee_amount": None, "fee_details": None},
+            ]
+        ),
+    )
+    result = await call_mcp_tool(
+        mcp_app_context,
+        "get_order_fees",
+        {
+            "order_id_list": ["1", "2", "3"],
+            "include_evidence": True,
+            "trd_env": "REAL",
+            "acc_id": "123",
+        },
+    )
+    payload = result.structured["result"]
+    assert payload["coverage"]["missing"] == ["3"]
+    assert payload["scope"]["amounts_complete"] is False
+    assert payload["scope"]["missing_amount_ids"] == ["2"]
+    assert payload["scope"]["missing_detail_ids"] == ["2"]
+    assert payload["scope"]["currency"] is None
+    assert payload["data"][0]["fee_amount"] == 0
+    assert payload["data"][1]["fee_amount"] is None
+    context.order_fee_query.assert_called_once()
+    context.unlock_trade.assert_not_called()
+
+
 @pytest.fixture
 def queries():
     clock = FakeClock()
