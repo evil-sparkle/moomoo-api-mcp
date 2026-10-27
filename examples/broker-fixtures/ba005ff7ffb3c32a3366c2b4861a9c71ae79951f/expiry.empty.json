@@ -1,0 +1,32 @@
+{
+  "broker_double_methods": [
+    "get_option_expiration_date"
+  ],
+  "case_id": "expiry.empty",
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "request": {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "code": "US.SYNTH"
+      },
+      "name": "get_option_expiration_date"
+    }
+  },
+  "response": {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [],
+      "isError": false,
+      "structuredContent": {
+        "result": []
+      }
+    }
+  }
+}

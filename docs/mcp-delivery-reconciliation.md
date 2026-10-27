@@ -82,6 +82,16 @@ and connector import. It establishes no broker health, permission, entitlement,
 quote freshness or financial reconciliation. The older observations above remain
 dated evidence; this source change does not identify or update their deployment.
 
+The synthetic broker handoff was rolled forward to runtime source commit
+`ba005ff7ffb3c32a3366c2b4861a9c71ae79951f`, with all 55 committed runtime-file
+hashes and its source tree pinned in the new manifest. The original `2c019d5`
+artifact remains unchanged for existing consumers. All 14 wire/catalogue files
+in the new set are byte-identical to the earlier artifact; the manifest records
+the newly verified runtime source rather than relabelling the old source hash.
+Local source generation has no embedded image resource, so its catalogue still
+truthfully reports unknown build/source identity. It makes no network, gateway,
+account, entitlement or quote-storage claim.
+
 ## Source, profiles, and imported definitions
 
 `server.py` imports `trade_queries`, `trade_inspection`, and `trading`; their
