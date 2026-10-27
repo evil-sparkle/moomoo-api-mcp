@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--destination",
         type=Path,
-        default=Path("/opt/openai/tunnel-client/v0.0.14/tunnel-client"),
+        default=Path("/opt/openai/tunnel-client/v0.0.18/tunnel-client"),
     )
     parser.add_argument("--verify-only", action="store_true")
     return parser

@@ -1,9 +1,17 @@
-FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS verified
+FROM python:3.13.17-slim-bookworm@sha256:e32be0e55814a08977501ca863271d9bd02443710db8f2afaf8372e2c4508530 AS base
+# Refresh Debian CA and OpenSSL packages in the shared build/runtime base.
+# Reject outdated libssl3 independently from the Go binary's certificate denylist.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade ca-certificates libssl3 openssl \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20250419~deb12u2 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3)" ge 3.0.22-1~deb12u1 \
+    && rm -rf /var/lib/apt/lists/*
+FROM base AS verified
 WORKDIR /build
 COPY install.py release.json ./
 RUN python install.py --destination /out/tunnel-client
 
-FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+FROM base
 COPY --from=verified /out/tunnel-client /usr/local/bin/tunnel-client
 COPY --chmod=0444 release.json /opt/tunnel/release.json
 COPY --chmod=0444 private_chatgpt_preflight.py runtime.py /opt/tunnel/
