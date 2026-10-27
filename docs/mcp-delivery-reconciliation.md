@@ -4,6 +4,71 @@ Source registration, a credential-visible endpoint schema, and a hosted
 connector import are separate evidence layers. Do not add duplicate tools or
 widen write permissions to repair an unexplained catalogue difference.
 
+## Connected release and remaining hosted acceptance, 2026-10-27
+
+The selected hotfix is now `7be5c35e35582bf48ddef34a2d1d2b1dcce066c9`.
+[Publisher CI 40510646871](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/40510646871)
+and [VPS deployment 40511431769](https://github.com/evil-sparkle/moomoo-api-mcp/actions/runs/40511431769)
+succeeded. Actual connected health at `2026-10-27T13:31:29Z` reports that exact
+source/build revision, installed SDK `10.10.7008`, and connected quote/trade
+probes. This supersedes the older unknown-build observations for that endpoint;
+the remembered local OpenD test container is a separate unchanged process.
+
+The reported grants are `market_read`, `real_read`, `simulate_read` and
+`simulate_write`. An isolated catalogue reconstructed from identical runtime
+source under those grants has 49 tools and SHA-256
+`301c67c5a2f9d2cd7a925f500f4ddf3d316dd88fdfd8017aafaca326bdb202d7`,
+matching connected health's reported fingerprint. It is still a reconstruction,
+not a directly captured authenticated endpoint catalogue.
+
+The current chat imports 35 functions: 31 matching names, 18 expected names
+unavailable and four extra names. Missing names include all nine account reads
+in the historical table below plus `get_corporate_actions_dividends`,
+`get_earnings_calendar`, `get_history_kl_quota`, `get_instrument_facts`,
+`get_market_snapshot_evidence`, `get_option_volatility`, `get_prepared_trade`,
+`get_rehab` and `prepare_trade_request`. The four extras remain
+`acknowledge_recovery`, `lock_trade`, `unlock_trade` and
+`unsubscribe_market_data`; they were not invoked. Imported argument gaps also
+include `currency` on `get_account_summary` and `option_cond_type`, `data_filter`
+and `include_evidence` on `get_option_chain`.
+
+The available host/plugin management tools expose no raw authenticated MCP
+request or connector schema refresh. Their approval-policy controls do not
+change broker grants and are not a remedy. Same-profile endpoint capture and
+host import reconciliation therefore require an operator-controlled client and
+host capability. Preserve the unknown cause until those artifacts are compared.
+This source needs no duplicate broker wrapper or wider write permissions.
+
+### Catalogue-only operator capture
+
+The existing startup/full preflight deliberately expects account-read tools.
+For a market-only or other restricted profile, use the separate catalogue client
+that reuses its authenticated loopback-only transport:
+
+```sh
+python -m scripts.mcp_catalogue --url http://127.0.0.1:8000/mcp \
+  --authorization-file /operator/protected-header \
+  --output /operator/evidence/catalogue.json
+```
+
+The operator supplies the complete header through the existing protected-file
+mechanism; no credential is a command argument. Use the intended client identity
+and an already approved local endpoint/forward. The client refuses redirects and
+remote URLs, initializes the protocol and retrieves every `tools/list` page. It
+makes no `tools/call`, health, account, quote or broker request. Pages, tool count,
+response bytes, cumulative catalogue bytes and cursor size are bounded; repeated
+cursors, duplicate names and malformed definitions fail. Existing output files
+and symlinks are never overwritten; new artifacts are mode 0600.
+
+The artifact preserves complete tool definitions and records the server-compatible
+name-sorted compact JSON SHA-256, pagination count and request/receipt bounds.
+`authorization_profile_verified` remains false: a catalogue cannot itself attest
+which account/credential/profile supplied it. Bind that fact through the operator's
+non-secret client configuration record and compare only like profiles. Match the
+artifact with the host's imported definitions before choosing a refresh/remedy.
+The capture establishes schema delivery only, not market-only authorization
+acceptance, entitlement, quote quality, recording rights or broker support.
+
 ## Evidence collected 2026-10-26
 
 Worker B inspected fetched `origin/main` at
