@@ -133,3 +133,6 @@ docs/deploy-*.md
 
 .chatgpt-deploy.json
 .chatgpt-selection-*
+
+# Worker checkouts under this primary repository root
+/.worktrees/
