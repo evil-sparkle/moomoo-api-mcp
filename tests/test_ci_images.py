@@ -192,6 +192,34 @@ def test_published_tags_are_disjoint_and_match_deploy_lookup(tmp_path, prefix):
     ]
 
 
+def test_app_context_passes_public_build_sha_to_the_image_only(tmp_path):
+    output = tmp_path / "output"
+    environment = {
+        "PATH": os.defpath,
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_SHA": COMMIT,
+        "GITHUB_SERVER_URL": "https://example.invalid",
+        "GITHUB_REPOSITORY": "synthetic/repository",
+        "IMAGE": "moomoo-api-mcp",
+    }
+    subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", step("docker-build", "context")["run"]],
+        cwd=tmp_path,
+        env=environment,
+        check=True,
+        capture_output=True,
+        timeout=15,
+    )
+    lines = output.read_text().splitlines()
+    assert "build_args=SOURCE_REVISION=" + COMMIT in lines
+    assert "context=." in lines
+    assert "file=./Dockerfile" in lines
+    assert step("docker-build", "build")["with"]["build-args"] == (
+        "${{ steps.context.outputs.build_args }}"
+    )
+
+
 @pytest.mark.parametrize(
     "changed,tests,smoke,mcp,tunnel",
     [
