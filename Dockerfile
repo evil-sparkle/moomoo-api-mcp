@@ -92,7 +92,13 @@ RUN uv sync --frozen --no-dev --no-install-project \
 
 # Copy source tree and install project cleanly (non-editable in production image)
 COPY src/ ./src/
-RUN uv sync --frozen --no-dev --no-editable \
+# A missing build argument keeps developer/local builds explicitly unknown.
+# This file is generated inside the build, never copied from the host context.
+ARG SOURCE_REVISION=""
+RUN if [ -n "${SOURCE_REVISION}" ]; then \
+      /app/.venv/bin/python ./src/moomoo_mcp/build_identity.py --source-revision "${SOURCE_REVISION}"; \
+    fi \
+    && uv sync --frozen --no-dev --no-editable \
     && /app/.venv/bin/python /opt/security/harden_ca.py
 
 # Put the venv first on PATH

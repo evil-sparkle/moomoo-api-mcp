@@ -27,7 +27,7 @@ from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.tools.trading_contract import server_contract_identity
 
-SOURCE = "2c019d50238d636deea5e49d3b48eac7868ff69b"
+SOURCE = "ba005ff7ffb3c32a3366c2b4861a9c71ae79951f"
 ROOT = Path(__file__).resolve().parents[1]
 DESTINATION = ROOT / "examples" / "broker-fixtures" / SOURCE
 NORMAL = "US.SYNTH261030C100000"
@@ -52,6 +52,9 @@ def source_manifest(*, verify_git: bool = False) -> dict:
     manifest = json.loads((DESTINATION / "manifest.json").read_text())
     assert manifest["fixture_kind"] == "SYNTHETIC"
     assert manifest["source_commit"] == SOURCE
+    assert manifest["source_url"] == (
+        "https://github.com/evil-sparkle/moomoo-api-mcp/tree/" + SOURCE
+    ), "fixture source URL must identify the pinned source commit"
     for record in manifest["runtime_files"]:
         current = (ROOT / record["path"]).read_bytes()
         assert hashlib.sha256(current).hexdigest() == record["sha256"], record["path"]

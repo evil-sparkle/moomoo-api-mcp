@@ -53,6 +53,17 @@ def test_exact_source_and_hashes_are_separate_from_payload_identity():
     assert payload("chain.normal_adjusted")["result"]["source_revision"] is None
 
 
+def test_source_manifest_rejects_a_link_to_a_different_source(tmp_path, monkeypatch):
+    manifest = read("manifest")
+    manifest["source_url"] = (
+        "https://github.com/evil-sparkle/moomoo-api-mcp/tree/" + "0" * 40
+    )
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr("tests.broker_fixture_handoff.DESTINATION", tmp_path)
+    with pytest.raises(AssertionError):
+        source_manifest()
+
+
 def test_catalogue_contains_only_the_actual_market_profile_and_valid_schemas():
     fixture = read("catalogue.market_read")
     assert fixture["permissions"] == ["market_read"]

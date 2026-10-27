@@ -436,6 +436,7 @@ jobs:
           else
             echo 'context=.' >> "$GITHUB_OUTPUT"
             echo 'file=./Dockerfile' >> "$GITHUB_OUTPUT"
+            echo "build_args=SOURCE_REVISION=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           fi
           echo 'labels<<IMAGE_LABELS' >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/image-labels" >> "$GITHUB_OUTPUT"
@@ -452,6 +453,7 @@ jobs:
           push: ${{ env.PUSH == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
           labels: ${{ steps.context.outputs.labels }}
+          build-args: ${{ steps.context.outputs.build_args }}
           cache-from: type=gha,scope=${{ env.IMAGE }}
           cache-to: type=gha,mode=max,scope=${{ env.IMAGE }}
 

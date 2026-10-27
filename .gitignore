@@ -25,6 +25,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+# Generated only inside the image build, never committed as checkout identity.
+/src/moomoo_mcp/_build_identity.json
 
 # PyInstaller
 *.manifest

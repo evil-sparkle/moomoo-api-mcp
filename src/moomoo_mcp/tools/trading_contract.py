@@ -15,6 +15,7 @@ from typing import Annotated, Any
 from mcp.types import Tool
 from pydantic import Field, StrictInt, StrictStr
 
+from moomoo_mcp.build_identity import embedded_source_revision
 from moomoo_mcp.services.execution_identity import (
     IDENTITY_TOKEN_MAX_LENGTH,
     IDENTITY_TOKEN_MIN_LENGTH,
@@ -199,14 +200,14 @@ def server_contract_identity(tools: list[Tool]) -> dict[str, Any]:
         package_version = version("moomoo-api-mcp")
     except PackageNotFoundError:
         package_version = "unknown"
+    source_revision = embedded_source_revision()
     return {
         "sdk_version": _sdk_version(),
-        "build_revision": None,
+        "build_revision": source_revision,
         "package_version": package_version,
         "contract_version": CONTRACT_VERSION,
-        # This package does not currently embed a trustworthy source revision.
-        # OpenD's gateway version and a host's cached schema cannot supply it.
-        "source_revision": "unknown",
+        # Embedded image build provenance is not a live source attestation.
+        "source_revision": source_revision or "unknown",
         "tools_schema_sha256": hashlib.sha256(encoded).hexdigest(),
     }
 
