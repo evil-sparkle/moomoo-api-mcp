@@ -39,6 +39,59 @@ revision `unknown`, and restricted grants `market_read`, `real_read`,
 build. Installed deployed SDK identity remains unknown. The local validation
 environment used SDK `10.10.7008` and MCP `1.25.0`.
 
+## Versioned image build provenance
+
+New application image builds accept the public `SOURCE_REVISION` build argument.
+CI supplies its full checked-out commit, matching the OCI revision-label input.
+Before the non-editable package installation, the Dockerfile generates the fixed
+package resource `moomoo_mcp/_build_identity.json` with exactly these fields:
+
+```json
+{"schema_version":1,"source_revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+```
+
+The example SHA is synthetic. Version 1 accepts only canonical lowercase full
+40- or 64-character hexadecimal Git object IDs. Other types, abbreviated IDs,
+uppercase, whitespace, additional fields and noncanonical resource encoding are
+rejected. The resource contains no environment snapshot, timestamps, credentials,
+repository paths, Git configuration, account data or broker responses. The host
+resource path is excluded from the Docker context and Git; generation occurs
+inside the build rather than copying a possibly stale checkout artifact.
+
+Runtime reads only this bounded resource from its own installed package. It does
+not inspect Git, environment variables, container labels or private files to
+derive the identity. Setting a runtime `SOURCE_REVISION` or `GITHUB_SHA` cannot
+override it. Builds without the argument, ordinary developer/wheel installs
+without generated metadata, unreadable resources and invalid metadata retain
+`source_revision: "unknown"` and `build_revision: null`.
+
+With valid metadata, both existing health fields contain the embedded source SHA.
+`build_revision` here identifies the declared source of that build, not a unique
+build attempt, image digest or reproducibility guarantee. The existing health
+keys and tools-schema calculation remain unchanged. SDK version still comes from
+the installed SDK; OpenD/gateway version is independent.
+
+An unchanged image reused under a newer release tag retains its original embedded
+build revision. Compare that build, immutable image digest and selected release
+manifest separately. Neither a new tag nor a documentation-only commit rewrites
+an existing image's provenance.
+
+This is build provenance, not cryptographic remote source attestation. A caller
+must still verify the running image/endpoint, intended credential-visible schema
+and connector import. It establishes no broker health, permission, entitlement,
+quote freshness or financial reconciliation. The older observations above remain
+dated evidence; this source change does not identify or update their deployment.
+
+The synthetic broker handoff was rolled forward to runtime source commit
+`ba005ff7ffb3c32a3366c2b4861a9c71ae79951f`, with all 55 committed runtime-file
+hashes and its source tree pinned in the new manifest. The original `2c019d5`
+artifact remains unchanged for existing consumers. All 14 wire/catalogue files
+in the new set are byte-identical to the earlier artifact; the manifest records
+the newly verified runtime source rather than relabelling the old source hash.
+Local source generation has no embedded image resource, so its catalogue still
+truthfully reports unknown build/source identity. It makes no network, gateway,
+account, entitlement or quote-storage claim.
+
 ## Source, profiles, and imported definitions
 
 `server.py` imports `trade_queries`, `trade_inspection`, and `trading`; their

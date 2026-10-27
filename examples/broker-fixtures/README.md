@@ -114,3 +114,15 @@ under 128 KiB and the whole JSON bundle is under 256 KiB.
 
 Live WIS-25/WIS-26/WIS-32 and private fee-reconciliation gates remain separate.
 This bundle unblocks offline adapter/snapshot evolution, not live acceptance.
+
+## Current runtime fixture pin
+
+The replay generator now targets `ba005ff7ffb3c32a3366c2b4861a9c71ae79951f/`,
+which pins the runtime build-identity implementation and all 55 source files.
+Its 14 wire/catalogue JSON files are byte-identical to the original
+`2c019d50238d636deea5e49d3b48eac7868ff69b/` set. The original set is preserved
+unchanged for consumers. Each manifest keeps its own exact source commit/tree,
+runtime hashes, package versions and payload hashes; no old artifact is relabelled.
+The generator remains synthetic and denies SDK context construction, sockets,
+private account access and services. No image metadata is injected into its
+source-only catalogue; unknown identity is preserved until an actual image build.

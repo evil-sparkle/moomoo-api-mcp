@@ -1,0 +1,72 @@
+{
+  "broker_double_methods": [
+    "get_option_chain"
+  ],
+  "case_id": "chain.empty",
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "request": {
+    "id": 4,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "code": "US.SYNTH",
+        "end": "2026-10-30",
+        "include_evidence": true,
+        "start": "2026-10-30"
+      },
+      "name": "get_option_chain"
+    }
+  },
+  "response": {
+    "id": 4,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"schema_version\": \"2026-10-26.1\",\n  \"source_method\": \"get_option_chain\",\n  \"requested_at\": \"2026-10-26T14:30:00Z\",\n  \"received_at\": \"2026-10-26T14:30:00.250Z\",\n  \"sdk_version\": \"10.10.7008\",\n  \"source_revision\": null,\n  \"delay_status\": \"UNKNOWN\",\n  \"entitlement_status\": \"UNKNOWN\",\n  \"timestamp_semantics\": \"Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.\",\n  \"scope\": {\n    \"code\": \"US.SYNTH\",\n    \"start\": \"2026-10-30\",\n    \"end\": \"2026-10-30\",\n    \"option_type\": \"ALL\",\n    \"option_cond_type\": \"ALL\",\n    \"data_filter\": null\n  },\n  \"coverage\": {\n    \"requested\": [],\n    \"returned\": [],\n    \"missing\": [],\n    \"complete_response\": true,\n    \"provider_history_complete\": null,\n    \"truncated\": false,\n    \"total_returned\": 0\n  },\n  \"errors\": {},\n  \"data\": [],\n  \"limitations\": [\n    \"Provider filter inputs, not fresh liquidity; OI updated daily.\"\n  ]\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "result": {
+          "coverage": {
+            "complete_response": true,
+            "missing": [],
+            "provider_history_complete": null,
+            "requested": [],
+            "returned": [],
+            "total_returned": 0,
+            "truncated": false
+          },
+          "data": [],
+          "delay_status": "UNKNOWN",
+          "entitlement_status": "UNKNOWN",
+          "errors": {},
+          "limitations": [
+            "Provider filter inputs, not fresh liquidity; OI updated daily."
+          ],
+          "received_at": "2026-10-26T14:30:00.250Z",
+          "requested_at": "2026-10-26T14:30:00Z",
+          "schema_version": "2026-10-26.1",
+          "scope": {
+            "code": "US.SYNTH",
+            "data_filter": null,
+            "end": "2026-10-30",
+            "option_cond_type": "ALL",
+            "option_type": "ALL",
+            "start": "2026-10-30"
+          },
+          "sdk_version": "10.10.7008",
+          "source_method": "get_option_chain",
+          "source_revision": null,
+          "timestamp_semantics": "Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp."
+        }
+      }
+    }
+  }
+}
