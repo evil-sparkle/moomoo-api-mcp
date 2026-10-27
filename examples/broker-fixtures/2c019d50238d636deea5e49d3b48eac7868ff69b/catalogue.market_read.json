@@ -1,0 +1,2382 @@
+{
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "response": {
+    "id": "catalog",
+    "jsonrpc": "2.0",
+    "result": {
+      "tools": [
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get margin ratio for stocks.\n\n    Args:\n        code_list: List of stock codes (e.g., ['US.AAPL', 'US.TSLA']).\n\n    Returns:\n        List of margin ratio dictionaries.\n    ",
+          "inputSchema": {
+            "properties": {
+              "code_list": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Code List",
+                "type": "array"
+              }
+            },
+            "required": [
+              "code_list"
+            ],
+            "title": "get_margin_ratioArguments",
+            "type": "object"
+          },
+          "name": "get_margin_ratio",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "get_margin_ratioOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get bounded snapshots with identifier coverage and UTC receipt times.\n\n    Legacy get_market_snapshot is unchanged. Provider bid/ask/sizes/update_time\n    remain verbatim; unknown delay, entitlement and per-side age stay unknown.\n    A successful response is not evidence of NBBO, freshness or fillability.\n    ",
+          "inputSchema": {
+            "properties": {
+              "codes": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "title": "Codes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "codes"
+            ],
+            "title": "get_market_snapshot_evidenceArguments",
+            "type": "object"
+          },
+          "name": "get_market_snapshot_evidence",
+          "outputSchema": {
+            "$defs": {
+              "Coverage": {
+                "properties": {
+                  "complete_response": {
+                    "title": "Complete Response",
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Missing",
+                    "type": "array"
+                  },
+                  "provider_history_complete": {
+                    "title": "Provider History Complete",
+                    "type": "null"
+                  },
+                  "requested": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Requested",
+                    "type": "array"
+                  },
+                  "returned": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Returned",
+                    "type": "array"
+                  },
+                  "total_returned": {
+                    "title": "Total Returned",
+                    "type": "integer"
+                  },
+                  "truncated": {
+                    "title": "Truncated",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requested",
+                  "returned",
+                  "missing",
+                  "complete_response",
+                  "provider_history_complete",
+                  "truncated",
+                  "total_returned"
+                ],
+                "title": "Coverage",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "coverage": {
+                "$ref": "#/$defs/Coverage"
+              },
+              "data": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Data",
+                "type": "array"
+              },
+              "delay_status": {
+                "const": "UNKNOWN",
+                "title": "Delay Status",
+                "type": "string"
+              },
+              "entitlement_status": {
+                "const": "UNKNOWN",
+                "title": "Entitlement Status",
+                "type": "string"
+              },
+              "errors": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Errors",
+                "type": "object"
+              },
+              "limitations": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Limitations",
+                "type": "array"
+              },
+              "received_at": {
+                "title": "Received At",
+                "type": "string"
+              },
+              "requested_at": {
+                "title": "Requested At",
+                "type": "string"
+              },
+              "schema_version": {
+                "title": "Schema Version",
+                "type": "string"
+              },
+              "scope": {
+                "additionalProperties": true,
+                "title": "Scope",
+                "type": "object"
+              },
+              "sdk_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Sdk Version"
+              },
+              "source_method": {
+                "title": "Source Method",
+                "type": "string"
+              },
+              "source_revision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Revision"
+              },
+              "timestamp_semantics": {
+                "title": "Timestamp Semantics",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "source_method",
+              "requested_at",
+              "received_at",
+              "sdk_version",
+              "source_revision",
+              "delay_status",
+              "entitlement_status",
+              "timestamp_semantics",
+              "scope",
+              "coverage",
+              "errors",
+              "data",
+              "limitations"
+            ],
+            "title": "DataEvidence",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Read contract facts using the existing InstrumentAdapter cache and new snapshots.\n\n    Monetary multiplier, deliverable and lot size remain separate. Each fact\n    has source, observation time and KNOWN/UNKNOWN/CONFLICT state. No hardcoded\n    multiplier, symbol-derived currency or inferred settlement/cutoff. Static\n    metadata may be cached for 300s; snapshot facts are requested anew. Unknown\n    lifecycle facts cannot establish compatibility for consumer simulation.\n    ",
+          "inputSchema": {
+            "properties": {
+              "codes": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "title": "Codes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "codes"
+            ],
+            "title": "get_instrument_factsArguments",
+            "type": "object"
+          },
+          "name": "get_instrument_facts",
+          "outputSchema": {
+            "$defs": {
+              "Coverage": {
+                "properties": {
+                  "complete_response": {
+                    "title": "Complete Response",
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Missing",
+                    "type": "array"
+                  },
+                  "provider_history_complete": {
+                    "title": "Provider History Complete",
+                    "type": "null"
+                  },
+                  "requested": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Requested",
+                    "type": "array"
+                  },
+                  "returned": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Returned",
+                    "type": "array"
+                  },
+                  "total_returned": {
+                    "title": "Total Returned",
+                    "type": "integer"
+                  },
+                  "truncated": {
+                    "title": "Truncated",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requested",
+                  "returned",
+                  "missing",
+                  "complete_response",
+                  "provider_history_complete",
+                  "truncated",
+                  "total_returned"
+                ],
+                "title": "Coverage",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "coverage": {
+                "$ref": "#/$defs/Coverage"
+              },
+              "data": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Data",
+                "type": "array"
+              },
+              "delay_status": {
+                "const": "UNKNOWN",
+                "title": "Delay Status",
+                "type": "string"
+              },
+              "entitlement_status": {
+                "const": "UNKNOWN",
+                "title": "Entitlement Status",
+                "type": "string"
+              },
+              "errors": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Errors",
+                "type": "object"
+              },
+              "limitations": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Limitations",
+                "type": "array"
+              },
+              "received_at": {
+                "title": "Received At",
+                "type": "string"
+              },
+              "requested_at": {
+                "title": "Requested At",
+                "type": "string"
+              },
+              "schema_version": {
+                "title": "Schema Version",
+                "type": "string"
+              },
+              "scope": {
+                "additionalProperties": true,
+                "title": "Scope",
+                "type": "object"
+              },
+              "sdk_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Sdk Version"
+              },
+              "source_method": {
+                "title": "Source Method",
+                "type": "string"
+              },
+              "source_revision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Revision"
+              },
+              "timestamp_semantics": {
+                "title": "Timestamp Semantics",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "source_method",
+              "requested_at",
+              "received_at",
+              "sdk_version",
+              "source_revision",
+              "delay_status",
+              "entitlement_status",
+              "timestamp_semantics",
+              "scope",
+              "coverage",
+              "errors",
+              "data",
+              "limitations"
+            ],
+            "title": "DataEvidence",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Observe aggregate historical K-line quota without security details.\n\n    Used and remaining counts are provider observations, not reservations.\n    Missing is unknown; zero is a valid exhausted quota. Distinct from quote\n    subscriptions and endpoint frequency limits. Reuse existing candle paging.\n    ",
+          "inputSchema": {
+            "properties": {},
+            "title": "get_history_kl_quotaArguments",
+            "type": "object"
+          },
+          "name": "get_history_kl_quota",
+          "outputSchema": {
+            "$defs": {
+              "Coverage": {
+                "properties": {
+                  "complete_response": {
+                    "title": "Complete Response",
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Missing",
+                    "type": "array"
+                  },
+                  "provider_history_complete": {
+                    "title": "Provider History Complete",
+                    "type": "null"
+                  },
+                  "requested": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Requested",
+                    "type": "array"
+                  },
+                  "returned": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Returned",
+                    "type": "array"
+                  },
+                  "total_returned": {
+                    "title": "Total Returned",
+                    "type": "integer"
+                  },
+                  "truncated": {
+                    "title": "Truncated",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requested",
+                  "returned",
+                  "missing",
+                  "complete_response",
+                  "provider_history_complete",
+                  "truncated",
+                  "total_returned"
+                ],
+                "title": "Coverage",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "coverage": {
+                "$ref": "#/$defs/Coverage"
+              },
+              "data": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Data",
+                "type": "array"
+              },
+              "delay_status": {
+                "const": "UNKNOWN",
+                "title": "Delay Status",
+                "type": "string"
+              },
+              "entitlement_status": {
+                "const": "UNKNOWN",
+                "title": "Entitlement Status",
+                "type": "string"
+              },
+              "errors": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Errors",
+                "type": "object"
+              },
+              "limitations": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Limitations",
+                "type": "array"
+              },
+              "received_at": {
+                "title": "Received At",
+                "type": "string"
+              },
+              "requested_at": {
+                "title": "Requested At",
+                "type": "string"
+              },
+              "schema_version": {
+                "title": "Schema Version",
+                "type": "string"
+              },
+              "scope": {
+                "additionalProperties": true,
+                "title": "Scope",
+                "type": "object"
+              },
+              "sdk_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Sdk Version"
+              },
+              "source_method": {
+                "title": "Source Method",
+                "type": "string"
+              },
+              "source_revision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Revision"
+              },
+              "timestamp_semantics": {
+                "title": "Timestamp Semantics",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "source_method",
+              "requested_at",
+              "received_at",
+              "sdk_version",
+              "source_revision",
+              "delay_status",
+              "entitlement_status",
+              "timestamp_semantics",
+              "scope",
+              "coverage",
+              "errors",
+              "data",
+              "limitations"
+            ],
+            "title": "DataEvidence",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Read stock adjustment factors, bounded to 1\u20131000 returned rows.\n\n    At most 2000 provider rows/2 MiB are accepted; excess fails explicitly.\n    Truncation is explicit. Preserve factor bases, dates and cash fields; this\n    is not a complete dividend/split feed or point-in-time event archive.\n    ",
+          "inputSchema": {
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "limit": {
+                "default": 200,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "title": "get_rehabArguments",
+            "type": "object"
+          },
+          "name": "get_rehab",
+          "outputSchema": {
+            "$defs": {
+              "Coverage": {
+                "properties": {
+                  "complete_response": {
+                    "title": "Complete Response",
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Missing",
+                    "type": "array"
+                  },
+                  "provider_history_complete": {
+                    "title": "Provider History Complete",
+                    "type": "null"
+                  },
+                  "requested": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Requested",
+                    "type": "array"
+                  },
+                  "returned": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Returned",
+                    "type": "array"
+                  },
+                  "total_returned": {
+                    "title": "Total Returned",
+                    "type": "integer"
+                  },
+                  "truncated": {
+                    "title": "Truncated",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requested",
+                  "returned",
+                  "missing",
+                  "complete_response",
+                  "provider_history_complete",
+                  "truncated",
+                  "total_returned"
+                ],
+                "title": "Coverage",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "coverage": {
+                "$ref": "#/$defs/Coverage"
+              },
+              "data": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Data",
+                "type": "array"
+              },
+              "delay_status": {
+                "const": "UNKNOWN",
+                "title": "Delay Status",
+                "type": "string"
+              },
+              "entitlement_status": {
+                "const": "UNKNOWN",
+                "title": "Entitlement Status",
+                "type": "string"
+              },
+              "errors": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Errors",
+                "type": "object"
+              },
+              "limitations": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Limitations",
+                "type": "array"
+              },
+              "received_at": {
+                "title": "Received At",
+                "type": "string"
+              },
+              "requested_at": {
+                "title": "Requested At",
+                "type": "string"
+              },
+              "schema_version": {
+                "title": "Schema Version",
+                "type": "string"
+              },
+              "scope": {
+                "additionalProperties": true,
+                "title": "Scope",
+                "type": "object"
+              },
+              "sdk_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Sdk Version"
+              },
+              "source_method": {
+                "title": "Source Method",
+                "type": "string"
+              },
+              "source_revision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Revision"
+              },
+              "timestamp_semantics": {
+                "title": "Timestamp Semantics",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "source_method",
+              "requested_at",
+              "received_at",
+              "sdk_version",
+              "source_revision",
+              "delay_status",
+              "entitlement_status",
+              "timestamp_semantics",
+              "scope",
+              "coverage",
+              "errors",
+              "data",
+              "limitations"
+            ],
+            "title": "DataEvidence",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Read bounded provider dividend records in announcement-date order.\n\n    Dates/status/amount/currency are retained only as supplied; no parsing of\n    prose to invent money or timing. Empty dividend_list means no returned\n    events, not complete historical coverage. Missing list fails explicitly.\n    ",
+          "inputSchema": {
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "limit": {
+                "default": 200,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "title": "get_corporate_actions_dividendsArguments",
+            "type": "object"
+          },
+          "name": "get_corporate_actions_dividends",
+          "outputSchema": {
+            "$defs": {
+              "Coverage": {
+                "properties": {
+                  "complete_response": {
+                    "title": "Complete Response",
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Missing",
+                    "type": "array"
+                  },
+                  "provider_history_complete": {
+                    "title": "Provider History Complete",
+                    "type": "null"
+                  },
+                  "requested": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Requested",
+                    "type": "array"
+                  },
+                  "returned": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Returned",
+                    "type": "array"
+                  },
+                  "total_returned": {
+                    "title": "Total Returned",
+                    "type": "integer"
+                  },
+                  "truncated": {
+                    "title": "Truncated",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requested",
+                  "returned",
+                  "missing",
+                  "complete_response",
+                  "provider_history_complete",
+                  "truncated",
+                  "total_returned"
+                ],
+                "title": "Coverage",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "coverage": {
+                "$ref": "#/$defs/Coverage"
+              },
+              "data": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Data",
+                "type": "array"
+              },
+              "delay_status": {
+                "const": "UNKNOWN",
+                "title": "Delay Status",
+                "type": "string"
+              },
+              "entitlement_status": {
+                "const": "UNKNOWN",
+                "title": "Entitlement Status",
+                "type": "string"
+              },
+              "errors": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Errors",
+                "type": "object"
+              },
+              "limitations": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Limitations",
+                "type": "array"
+              },
+              "received_at": {
+                "title": "Received At",
+                "type": "string"
+              },
+              "requested_at": {
+                "title": "Requested At",
+                "type": "string"
+              },
+              "schema_version": {
+                "title": "Schema Version",
+                "type": "string"
+              },
+              "scope": {
+                "additionalProperties": true,
+                "title": "Scope",
+                "type": "object"
+              },
+              "sdk_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Sdk Version"
+              },
+              "source_method": {
+                "title": "Source Method",
+                "type": "string"
+              },
+              "source_revision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Revision"
+              },
+              "timestamp_semantics": {
+                "title": "Timestamp Semantics",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "source_method",
+              "requested_at",
+              "received_at",
+              "sdk_version",
+              "source_revision",
+              "delay_status",
+              "entitlement_status",
+              "timestamp_semantics",
+              "scope",
+              "coverage",
+              "errors",
+              "data",
+              "limitations"
+            ],
+            "title": "DataEvidence",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Read a market's earnings calendar over explicit dates at most 7 days apart.\n\n    Provider order/timing and actual versus estimated fields are preserved.\n    Returns at most limit rows with explicit truncation; no auto-pagination.\n    Event/fiscal dates are not historical information-availability evidence.\n    ",
+          "inputSchema": {
+            "properties": {
+              "end": {
+                "title": "End",
+                "type": "string"
+              },
+              "limit": {
+                "default": 200,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "market": {
+                "enum": [
+                  "US",
+                  "HK",
+                  "SH",
+                  "SZ",
+                  "SG",
+                  "JP",
+                  "AU",
+                  "CA"
+                ],
+                "title": "Market",
+                "type": "string"
+              },
+              "start": {
+                "title": "Start",
+                "type": "string"
+              }
+            },
+            "required": [
+              "market",
+              "start",
+              "end"
+            ],
+            "title": "get_earnings_calendarArguments",
+            "type": "object"
+          },
+          "name": "get_earnings_calendar",
+          "outputSchema": {
+            "$defs": {
+              "Coverage": {
+                "properties": {
+                  "complete_response": {
+                    "title": "Complete Response",
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Missing",
+                    "type": "array"
+                  },
+                  "provider_history_complete": {
+                    "title": "Provider History Complete",
+                    "type": "null"
+                  },
+                  "requested": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Requested",
+                    "type": "array"
+                  },
+                  "returned": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Returned",
+                    "type": "array"
+                  },
+                  "total_returned": {
+                    "title": "Total Returned",
+                    "type": "integer"
+                  },
+                  "truncated": {
+                    "title": "Truncated",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requested",
+                  "returned",
+                  "missing",
+                  "complete_response",
+                  "provider_history_complete",
+                  "truncated",
+                  "total_returned"
+                ],
+                "title": "Coverage",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "coverage": {
+                "$ref": "#/$defs/Coverage"
+              },
+              "data": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Data",
+                "type": "array"
+              },
+              "delay_status": {
+                "const": "UNKNOWN",
+                "title": "Delay Status",
+                "type": "string"
+              },
+              "entitlement_status": {
+                "const": "UNKNOWN",
+                "title": "Entitlement Status",
+                "type": "string"
+              },
+              "errors": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Errors",
+                "type": "object"
+              },
+              "limitations": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Limitations",
+                "type": "array"
+              },
+              "received_at": {
+                "title": "Received At",
+                "type": "string"
+              },
+              "requested_at": {
+                "title": "Requested At",
+                "type": "string"
+              },
+              "schema_version": {
+                "title": "Schema Version",
+                "type": "string"
+              },
+              "scope": {
+                "additionalProperties": true,
+                "title": "Scope",
+                "type": "object"
+              },
+              "sdk_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Sdk Version"
+              },
+              "source_method": {
+                "title": "Source Method",
+                "type": "string"
+              },
+              "source_revision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Revision"
+              },
+              "timestamp_semantics": {
+                "title": "Timestamp Semantics",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "source_method",
+              "requested_at",
+              "received_at",
+              "sdk_version",
+              "source_revision",
+              "delay_status",
+              "entitlement_status",
+              "timestamp_semantics",
+              "scope",
+              "coverage",
+              "errors",
+              "data",
+              "limitations"
+            ],
+            "title": "DataEvidence",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Read dated option IV/HV in percentage points (25 means 25%, not .25).\n\n    Copy an exact discovered option code; provider classification must be DRVT.\n    Underlying stock codes are rejected. HV lookback 5\u2013250 days, default 30.\n    Missing values stay missing; no interpolation or forward-fill. Annualization,\n    publication/revision and expired-contract coverage remain unverified.\n    This is historical context, not an undervaluation or expected-return signal.\n    ",
+          "inputSchema": {
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "hv_days": {
+                "default": 30,
+                "maximum": 250,
+                "minimum": 5,
+                "title": "Hv Days",
+                "type": "integer"
+              },
+              "limit": {
+                "default": 200,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "period": {
+                "default": "MONTH",
+                "enum": [
+                  "WEEK",
+                  "MONTH",
+                  "QUARTER",
+                  "HALF_YEAR",
+                  "YEAR"
+                ],
+                "title": "Period",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "title": "get_option_volatilityArguments",
+            "type": "object"
+          },
+          "name": "get_option_volatility",
+          "outputSchema": {
+            "$defs": {
+              "Coverage": {
+                "properties": {
+                  "complete_response": {
+                    "title": "Complete Response",
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Missing",
+                    "type": "array"
+                  },
+                  "provider_history_complete": {
+                    "title": "Provider History Complete",
+                    "type": "null"
+                  },
+                  "requested": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Requested",
+                    "type": "array"
+                  },
+                  "returned": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Returned",
+                    "type": "array"
+                  },
+                  "total_returned": {
+                    "title": "Total Returned",
+                    "type": "integer"
+                  },
+                  "truncated": {
+                    "title": "Truncated",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requested",
+                  "returned",
+                  "missing",
+                  "complete_response",
+                  "provider_history_complete",
+                  "truncated",
+                  "total_returned"
+                ],
+                "title": "Coverage",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "coverage": {
+                "$ref": "#/$defs/Coverage"
+              },
+              "data": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Data",
+                "type": "array"
+              },
+              "delay_status": {
+                "const": "UNKNOWN",
+                "title": "Delay Status",
+                "type": "string"
+              },
+              "entitlement_status": {
+                "const": "UNKNOWN",
+                "title": "Entitlement Status",
+                "type": "string"
+              },
+              "errors": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Errors",
+                "type": "object"
+              },
+              "limitations": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Limitations",
+                "type": "array"
+              },
+              "received_at": {
+                "title": "Received At",
+                "type": "string"
+              },
+              "requested_at": {
+                "title": "Requested At",
+                "type": "string"
+              },
+              "schema_version": {
+                "title": "Schema Version",
+                "type": "string"
+              },
+              "scope": {
+                "additionalProperties": true,
+                "title": "Scope",
+                "type": "object"
+              },
+              "sdk_version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Sdk Version"
+              },
+              "source_method": {
+                "title": "Source Method",
+                "type": "string"
+              },
+              "source_revision": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Source Revision"
+              },
+              "timestamp_semantics": {
+                "title": "Timestamp Semantics",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "source_method",
+              "requested_at",
+              "received_at",
+              "sdk_version",
+              "source_revision",
+              "delay_status",
+              "entitlement_status",
+              "timestamp_semantics",
+              "scope",
+              "coverage",
+              "errors",
+              "data",
+              "limitations"
+            ],
+            "title": "DataEvidence",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "description": "Get real-time stock quotes for specified codes.\n\n    Returns current price, open, high, low, volume, and other quote data.\n    Automatically subscribes to the stocks before fetching quotes.\n\n    On QUOTE_PERMISSION_DENIED, stop repeated equivalent OpenD requests and\n    continue with another available market-data tool or web source. Confirm the\n    exact listing and currency, and report the source, quote timestamp/timezone\n    and delayed or stale status.\n\n    Args:\n        codes: List of stock codes (e.g., ['US.AAPL', 'HK.00700']).\n\n    Returns:\n        List of quote dictionaries containing:\n        - code: Stock code\n        - last_price: Latest price\n        - open_price: Open price\n        - high_price: High price\n        - low_price: Low price\n        - prev_close_price: Previous close\n        - volume: Trading volume\n        - turnover: Turnover amount\n        - And other quote fields\n    ",
+          "inputSchema": {
+            "properties": {
+              "codes": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Codes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "codes"
+            ],
+            "title": "get_stock_quoteArguments",
+            "type": "object"
+          },
+          "name": "get_stock_quote",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "get_stock_quoteOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get historical candlestick (K-line) data for a stock.\n\n    Returns OHLCV (Open, High, Low, Close, Volume) data for technical analysis.\n\n    Args:\n        code: Stock code (e.g., 'US.AAPL').\n        ktype: K-line type. Options:\n            - K_1M: 1 minute\n            - K_3M: 3 minutes\n            - K_5M: 5 minutes\n            - K_15M: 15 minutes\n            - K_30M: 30 minutes\n            - K_60M: 60 minutes\n            - K_DAY: Daily (default)\n            - K_WEEK: Weekly\n            - K_MON: Monthly\n            - K_QUARTER: Quarterly\n            - K_YEAR: Yearly\n            An unrecognized value is rejected, not quietly replaced with daily\n            candles.\n        start: Start date in YYYY-MM-DD format. Defaults to 365 days before end.\n        end: End date in YYYY-MM-DD format. Defaults to today.\n        max_count: Maximum number of candles to return (default 100, max 1000).\n        autype: Adjustment type for splits/dividends:\n            - QFQ: Forward adjustment (default)\n            - HFQ: Backward adjustment\n            - NONE: No adjustment\n            An unrecognized value is rejected, not quietly replaced with QFQ.\n\n    Returns:\n        A SINGLE PAGE of K-line dictionaries. The provider's continuation token\n        is discarded here, so for a wide date range this list can be a prefix of\n        the range rather than all of it, with no indication that more exists.\n        Use get_historical_klines_page when completeness matters.\n\n        Each dictionary contains:\n        - time_key: Candlestick timestamp\n        - open: Open price\n        - high: High price\n        - low: Low price\n        - close: Close price\n        - volume: Volume\n        - turnover: Turnover\n        - change_rate: Price change rate\n        - pe_ratio: Provider-supplied historical P/E, passed through unchanged\n          when present. Do not assume it is trailing-twelve-month (TTM) P/E.\n\n    Note:\n        This tool does not reconstruct point-in-time TTM P/E from earnings\n        announcements or their availability dates. The provider's historical\n        documentation does not guarantee the earnings basis of pe_ratio.\n        Missing TTM data is not synthesized. For current TTM P/E, use\n        get_market_snapshot's pe_ttm_ratio; a current snapshot cannot supply\n        historical TTM values for a backtest.\n    ",
+          "inputSchema": {
+            "properties": {
+              "autype": {
+                "default": "QFQ",
+                "title": "Autype",
+                "type": "string"
+              },
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "End"
+              },
+              "ktype": {
+                "default": "K_DAY",
+                "title": "Ktype",
+                "type": "string"
+              },
+              "max_count": {
+                "default": 100,
+                "title": "Max Count",
+                "type": "integer"
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Start"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "title": "get_historical_klinesArguments",
+            "type": "object"
+          },
+          "name": "get_historical_klines",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "get_historical_klinesOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "List the option expiration dates available for an underlying.\n\n    Start here when building an option strategy: pick an expiry from this list,\n    then call get_option_chain for that single date to get the exact contract\n    symbols. Querying a chain without narrowing the expiry returns a much larger\n    response.\n\n    Args:\n        code: Underlying security code (e.g., 'US.AAPL', 'HK.00700').\n\n    Returns:\n        List of expiration dictionaries containing:\n        - strike_time: The expiration date, in the market's own timezone\n          (US market dates are US Eastern; HK and A-share dates are Beijing).\n        - option_expiry_date_distance: Days until expiry; negative if expired.\n        - expiration_cycle: Settlement cycle (HK index options only).\n\n        An empty list means the provider reported no expirations for this\n        underlying. That is a successful result, not an error \u2014 a provider\n        failure or a missing permission raises instead.\n    ",
+          "inputSchema": {
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "title": "get_option_expiration_dateArguments",
+            "type": "object"
+          },
+          "name": "get_option_expiration_date",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "get_option_expiration_dateOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get option contracts for an underlying within a range of expiry dates.\n\n    Optional option_cond_type is ALL, WITHIN or OUTSIDE (moneyness).\n    data_filter selects explicit upstream Greek, IV, volume and OI bounds.\n    IV uses percentage points, delta uses [-1,1], counts are whole contracts.\n    Provider filtering may truncate precision (IV: integer; Greeks: 3 decimals).\n    OI is updated daily; filters do not certify current liquidity or quote age.\n    include_evidence=true returns an additive envelope with exact applied inputs;\n    default false retains the legacy list. No filter silently falls back.\n\n    Use the returned `code` values verbatim as leg symbols for\n    preview_combo_order and place_combo_order, and as codes for get_stock_quote.\n    Do not construct an option symbol by hand.\n\n    Args:\n        code: Underlying security code (e.g., 'US.AAPL').\n        start: First expiration date to include, 'YYYY-MM-DD'. Set start and end\n            to the same date to fetch one expiry, which is usually what you\n            want. Omit both and the provider uses today plus 30 days.\n        end: Last expiration date to include, 'YYYY-MM-DD' (inclusive).\n        option_type: 'ALL' (default), 'CALL', or 'PUT'.\n\n    Returns:\n        List of contract dictionaries containing:\n        - code: The exact contract symbol to use in other tools.\n        - name: Contract name.\n        - stock_owner: The underlying's code.\n        - option_type: 'CALL' or 'PUT'.\n        - strike_time: Expiration date, in the market's own timezone.\n        - strike_price: Strike price.\n        - lot_size: Provider lot/deliverable size, not the monetary multiplier.\n          Read option_contract_multiplier from a snapshot or instrument facts.\n        - suspension, stock_id, index_option_type, expiration_cycle,\n          option_standard_type, option_settlement_mode.\n\n        An empty list means no contracts matched \u2014 a successful result. A\n        provider rejection (unsupported underlying, missing options permission,\n        gateway failure) raises an error instead, so the two are never confused.\n\n    Note:\n        The provider accepts a range of at most 30 days. A wider range is\n        rejected with an error rather than being silently truncated, so you are\n        never handed a partial chain believing it is complete.\n\n        All clients of this server share 10 option-chain calls per rolling\n        30 seconds (plus a 0.1-second safety margin). Quota admission waits up\n        to five seconds without occupying an SDK worker, then raises an error\n        containing retry_after_seconds. Provider rejections are not retried.\n        Independent server processes and other OpenD clients are not coordinated.\n        Responses above 2000 rows or 2 MiB fail explicitly; narrow the expiry\n        or selected filters rather than interpreting a truncated chain as complete.\n    ",
+          "inputSchema": {
+            "$defs": {
+              "OptionChainFilter": {
+                "additionalProperties": false,
+                "properties": {
+                  "delta_max": {
+                    "anyOf": [
+                      {
+                        "maximum": 1,
+                        "minimum": -1,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Delta Max"
+                  },
+                  "delta_min": {
+                    "anyOf": [
+                      {
+                        "maximum": 1,
+                        "minimum": -1,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Delta Min"
+                  },
+                  "gamma_max": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Gamma Max"
+                  },
+                  "gamma_min": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Gamma Min"
+                  },
+                  "implied_volatility_max": {
+                    "anyOf": [
+                      {
+                        "maximum": 10000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Implied Volatility Max"
+                  },
+                  "implied_volatility_min": {
+                    "anyOf": [
+                      {
+                        "maximum": 10000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Implied Volatility Min"
+                  },
+                  "open_interest_max": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Open Interest Max"
+                  },
+                  "open_interest_min": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Open Interest Min"
+                  },
+                  "rho_max": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Rho Max"
+                  },
+                  "rho_min": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Rho Min"
+                  },
+                  "theta_max": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Theta Max"
+                  },
+                  "theta_min": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Theta Min"
+                  },
+                  "vega_max": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Vega Max"
+                  },
+                  "vega_min": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Vega Min"
+                  },
+                  "vol_max": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Vol Max"
+                  },
+                  "vol_min": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Vol Min"
+                  }
+                },
+                "title": "OptionChainFilter",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "data_filter": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/OptionChainFilter"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "End"
+              },
+              "include_evidence": {
+                "default": false,
+                "title": "Include Evidence",
+                "type": "boolean"
+              },
+              "option_cond_type": {
+                "default": "ALL",
+                "title": "Option Cond Type",
+                "type": "string"
+              },
+              "option_type": {
+                "default": "ALL",
+                "title": "Option Type",
+                "type": "string"
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Start"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "title": "get_option_chainArguments",
+            "type": "object"
+          },
+          "name": "get_option_chain",
+          "outputSchema": {
+            "$defs": {
+              "Coverage": {
+                "properties": {
+                  "complete_response": {
+                    "title": "Complete Response",
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Missing",
+                    "type": "array"
+                  },
+                  "provider_history_complete": {
+                    "title": "Provider History Complete",
+                    "type": "null"
+                  },
+                  "requested": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Requested",
+                    "type": "array"
+                  },
+                  "returned": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Returned",
+                    "type": "array"
+                  },
+                  "total_returned": {
+                    "title": "Total Returned",
+                    "type": "integer"
+                  },
+                  "truncated": {
+                    "title": "Truncated",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "requested",
+                  "returned",
+                  "missing",
+                  "complete_response",
+                  "provider_history_complete",
+                  "truncated",
+                  "total_returned"
+                ],
+                "title": "Coverage",
+                "type": "object"
+              },
+              "DataEvidence": {
+                "properties": {
+                  "coverage": {
+                    "$ref": "#/$defs/Coverage"
+                  },
+                  "data": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "title": "Data",
+                    "type": "array"
+                  },
+                  "delay_status": {
+                    "const": "UNKNOWN",
+                    "title": "Delay Status",
+                    "type": "string"
+                  },
+                  "entitlement_status": {
+                    "const": "UNKNOWN",
+                    "title": "Entitlement Status",
+                    "type": "string"
+                  },
+                  "errors": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Errors",
+                    "type": "object"
+                  },
+                  "limitations": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Limitations",
+                    "type": "array"
+                  },
+                  "received_at": {
+                    "title": "Received At",
+                    "type": "string"
+                  },
+                  "requested_at": {
+                    "title": "Requested At",
+                    "type": "string"
+                  },
+                  "schema_version": {
+                    "title": "Schema Version",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "additionalProperties": true,
+                    "title": "Scope",
+                    "type": "object"
+                  },
+                  "sdk_version": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Sdk Version"
+                  },
+                  "source_method": {
+                    "title": "Source Method",
+                    "type": "string"
+                  },
+                  "source_revision": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Source Revision"
+                  },
+                  "timestamp_semantics": {
+                    "title": "Timestamp Semantics",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schema_version",
+                  "source_method",
+                  "requested_at",
+                  "received_at",
+                  "sdk_version",
+                  "source_revision",
+                  "delay_status",
+                  "entitlement_status",
+                  "timestamp_semantics",
+                  "scope",
+                  "coverage",
+                  "errors",
+                  "data",
+                  "limitations"
+                ],
+                "title": "DataEvidence",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "result": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "$ref": "#/$defs/DataEvidence"
+                  }
+                ],
+                "title": "Result"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "get_option_chainOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get historical candles one page at a time, with explicit continuation.\n\n    Use this instead of get_historical_klines when you need the whole date\n    range: get_historical_klines returns a single page and discards the\n    provider's continuation, so its list can silently be a prefix of what you\n    asked for.\n\n    One call fetches one page. To read a full range, loop:\n\n        page = get_historical_klines_page(code=\"US.AAPL\", start=..., end=...)\n        rows = page[\"data\"]\n        while page[\"has_more\"]:\n            page = get_historical_klines_page(\n                code=\"US.AAPL\", start=..., end=..., cursor=page[\"next_cursor\"]\n            )\n            rows += page[\"data\"]\n\n    Bound that loop. Stop when next_cursor is null, and surface an error rather\n    than treating a failed page as the end of the data.\n\n    Args:\n        code: Stock code (e.g., 'US.AAPL').\n        ktype: K-line type: K_1M, K_3M, K_5M, K_10M, K_15M, K_30M, K_60M,\n            K_120M, K_180M, K_240M, K_DAY (default), K_WEEK, K_MON, K_QUARTER,\n            K_YEAR. An unrecognized value is rejected rather than quietly\n            treated as daily.\n        start: Start date 'YYYY-MM-DD'. Defaults to 365 days before end.\n        end: End date 'YYYY-MM-DD'. Defaults to today.\n        max_count: Maximum candles per page (default 100).\n        autype: Adjustment for splits/dividends: 'QFQ' (forward, default),\n            'HFQ' (backward), or 'NONE'. An unrecognized value is rejected\n            rather than quietly treated as QFQ.\n        cursor: The next_cursor from the previous page. Omit for the first page.\n            Pass every other argument unchanged alongside it \u2014 a cursor belongs\n            to one specific query, and changing a filter mid-traversal is a new\n            query, not a continuation of this one.\n\n    Returns:\n        Dictionary containing:\n        - data: List of candle dictionaries (time_key, open, high, low, close,\n          volume, turnover, change_rate, and pe_ratio when present), in the\n          provider's order. pe_ratio is provider-supplied historical P/E,\n          passed through unchanged; do not assume it is TTM P/E.\n        - next_cursor: Opaque cursor for the following page, or null when the\n          range is exhausted.\n        - has_more: True when next_cursor is non-null.\n\n        An empty data list with has_more=true is possible and does not mean the\n        range is finished \u2014 keep going until next_cursor is null.\n\n    Note:\n        This tool does not reconstruct point-in-time TTM P/E from earnings\n        announcements or their availability dates. The provider's historical\n        documentation does not guarantee the earnings basis of pe_ratio.\n        Missing TTM data is not synthesized. For current TTM P/E, use\n        get_market_snapshot's pe_ttm_ratio; a current snapshot cannot supply\n        historical TTM values for a backtest.\n\n        When start or end is omitted, the range is resolved once on the first\n        page and carried in the cursor, so a traversal that crosses midnight\n        keeps reading the same window. A malformed cursor, or one from a\n        different query, is rejected before any provider request.\n    ",
+          "inputSchema": {
+            "properties": {
+              "autype": {
+                "default": "QFQ",
+                "title": "Autype",
+                "type": "string"
+              },
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "cursor": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Cursor"
+              },
+              "end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "End"
+              },
+              "ktype": {
+                "default": "K_DAY",
+                "title": "Ktype",
+                "type": "string"
+              },
+              "max_count": {
+                "default": 100,
+                "title": "Max Count",
+                "type": "integer"
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Start"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "title": "get_historical_klines_pageArguments",
+            "type": "object"
+          },
+          "name": "get_historical_klines_page",
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_historical_klines_pageDictOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get market snapshot for multiple stocks efficiently.\n\n    This is ideal for checking current status of a watchlist without subscription.\n    Returns comprehensive market data including price, volume, and fundamentals.\n\n    On QUOTE_PERMISSION_DENIED, stop repeated equivalent OpenD requests and\n    continue with another available market-data tool or web source. Confirm the\n    exact listing and currency, and report the source, quote timestamp/timezone\n    and delayed or stale status. Independent account reads may still succeed.\n\n    Args:\n        codes: List of stock codes (up to 400).\n            E.g., ['US.AAPL', 'US.TSLA', 'HK.00700'].\n\n    Returns:\n        List of snapshot dictionaries containing:\n        - code: Stock code\n        - name: Stock name\n        - last_price: Latest price\n        - open_price: Open price\n        - high_price: High price\n        - low_price: Low price\n        - prev_close_price: Previous close\n        - volume: Trading volume\n        - turnover: Turnover amount\n        - turnover_rate: Turnover rate (%)\n        - pe_ratio: Provider's P/E field, separate from pe_ttm_ratio; do not\n          assume it is TTM P/E\n        - pe_ttm_ratio: Provider's trailing-twelve-month (TTM) P/E ratio;\n          use this field for current trailing P/E when available\n        - pb_ratio: P/B ratio\n        - And many more fields\n\n    Note:\n        Both P/E fields retain the provider's names and values. Missing TTM\n        data is not synthesized from pe_ratio or earnings. This is a current\n        snapshot, not a historical point-in-time TTM series for backtesting.\n    ",
+          "inputSchema": {
+            "properties": {
+              "codes": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Codes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "codes"
+            ],
+            "title": "get_market_snapshotArguments",
+            "type": "object"
+          },
+          "name": "get_market_snapshot",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "get_market_snapshotOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "description": "Get order book (market depth) showing bid/ask price levels.\n\n    Returns the top N bid and ask levels with prices and volumes.\n    Useful for analyzing liquidity and market sentiment.\n    Automatically subscribes to the stock before fetching order book.\n\n    On QUOTE_PERMISSION_DENIED, stop repeated equivalent OpenD requests and\n    continue with another available market-data tool or web source. Confirm the\n    exact listing and currency, and report the source, quote timestamp/timezone\n    and delayed or stale status.\n\n    Args:\n        code: Stock code (e.g., 'HK.00700', 'US.AAPL').\n        num: Number of price levels to return (default 10).\n\n    Returns:\n        Dictionary containing:\n        - code: Stock code\n        - Bid: List of bid levels, each as (price, volume, order_count, details)\n        - Ask: List of ask levels, each as (price, volume, order_count, details)\n    ",
+          "inputSchema": {
+            "properties": {
+              "code": {
+                "title": "Code",
+                "type": "string"
+              },
+              "num": {
+                "default": 10,
+                "title": "Num",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "title": "get_order_bookArguments",
+            "type": "object"
+          },
+          "name": "get_order_book"
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get the current session state of each instrument's market.\n\n    Reports what the provider observes right now. It is not a schedule: it says\n    nothing about when the next session begins, and it does not mean the account\n    is permitted to trade the instrument.\n\n    Args:\n        codes: Security codes (e.g., ['US.AAPL', 'HK.00700']).\n\n    Returns:\n        Dictionary containing:\n        - checked_at: UTC observation time (ISO-8601, 'Z' suffix). The state was\n          true as of this moment and can change at any session boundary.\n        - data: List of {code, stock_name, market_state} dictionaries.\n\n        market_state is the provider's own value \u2014 for example 'MORNING',\n        'REST' (midday break), 'AFTERNOON', 'CLOSED', 'PRE_MARKET_BEGIN',\n        'AFTER_HOURS_BEGIN', 'AUCTION'. These are preserved rather than reduced\n        to open/closed, because a pre-market session and a regular session do\n        not accept the same orders. Instruments in different markets can be in\n        different states in the same response.\n    ",
+          "inputSchema": {
+            "properties": {
+              "codes": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Codes",
+                "type": "array"
+              }
+            },
+            "required": [
+              "codes"
+            ],
+            "title": "get_market_stateArguments",
+            "type": "object"
+          },
+          "name": "get_market_state",
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_market_stateDictOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get a market's trading calendar for a date range.\n\n    Use this instead of assuming weekdays are trading days: holidays and\n    shortened sessions vary by market and are not derivable from the server's\n    clock or timezone.\n\n    Args:\n        market: Calendar market. One of 'HK', 'US', 'CN', 'NT' (Shenzhen/Shanghai\n            Connect), 'ST' (Stock Connect), 'JP', 'SG', 'MY', 'JP_FUTURE',\n            'SG_FUTURE'.\n        start: First date to include, 'YYYY-MM-DD'. Omit both dates for the 365\n            days ending today.\n        end: Last date to include, 'YYYY-MM-DD' (inclusive).\n\n    Returns:\n        Dictionary containing:\n        - market: The market queried.\n        - date_basis: Always 'market_local'. The dates below are calendar dates\n          in the market's own timezone, not the server's, and carry no time of\n          day.\n        - start / end: The requested bounds, echoed back (null when omitted and\n          resolved by the provider).\n        - data: List of {time, trade_date_type} dictionaries, one per trading\n          day. trade_date_type is 'WHOLE' for a full session, or a half-day\n          value such as 'MORNING' or 'AFTERNOON'.\n\n        Only trading days appear. A holiday is simply absent \u2014 it is not listed\n        and marked closed. Session opening and closing times are not part of\n        this response and must not be inferred from it.\n\n        A date appearing here does NOT mean a particular instrument trades that\n        day, or that the account is permitted to trade it. Combine with\n        get_market_state for the current session and with account permissions\n        for what may actually be traded.\n    ",
+          "inputSchema": {
+            "properties": {
+              "end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "End"
+              },
+              "market": {
+                "title": "Market",
+                "type": "string"
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Start"
+              }
+            },
+            "required": [
+              "market"
+            ],
+            "title": "get_trading_daysArguments",
+            "type": "object"
+          },
+          "name": "get_trading_days",
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_trading_daysDictOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "List the market-data subscriptions held by this server's connection.\n\n    get_stock_quote and get_order_book subscribe automatically, so symbols\n    appear here after you read them. Use this to see what is being held before\n    releasing anything with unsubscribe_market_data.\n\n    Returns:\n        Dictionary containing:\n        - checked_at: UTC observation time (ISO-8601, 'Z' suffix).\n        - connection: What THIS server's quote connection holds.\n          - subscriptions: {subscription_type: [codes]}.\n          - used_quota / option_used_quota / security_firm, when the provider\n            reports them.\n        - provider: Usage counted across EVERY client attached to the same\n          OpenD gateway, not just this server \u2014 total_used, remain,\n          option_used_quota, option_remain_quota, when reported.\n\n        Only fields the provider actually returns are present. No limit is\n        inferred or invented, and an absent quota field means \"not reported\",\n        not \"unlimited\".\n\n        The provider quota is shared: another client on the same gateway\n        consumes from it, so `connection` being small does not mean there is\n        headroom.\n    ",
+          "inputSchema": {
+            "properties": {},
+            "title": "get_subscriptionsArguments",
+            "type": "object"
+          },
+          "name": "get_subscriptions",
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_subscriptionsDictOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get list of user-defined security groups (watchlists).\n\n    Returns the user's custom watchlist groups from the Moomoo app.\n\n    Args:\n        group_type: Type of groups to return. Options:\n            - 0: All groups (default)\n            - 1: Custom groups only\n            - 2: System groups only\n\n    Returns:\n        List of group dictionaries containing:\n        - group_name: Name of the group\n        - group_id: Unique identifier for the group\n    ",
+          "inputSchema": {
+            "properties": {
+              "group_type": {
+                "default": 0,
+                "title": "Group Type",
+                "type": "integer"
+              }
+            },
+            "title": "get_user_security_groupArguments",
+            "type": "object"
+          },
+          "name": "get_user_security_group",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "get_user_security_groupOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Get list of securities in a specific user-defined group (watchlist).\n\n    Returns all stocks/securities that the user has added to a specific watchlist.\n\n    Args:\n        group_name: Name of the security group (e.g., 'Favorites', 'Tech').\n\n    Returns:\n        List of security dictionaries containing:\n        - code: Stock code (e.g., 'US.AAPL')\n        - name: Stock name\n        - lot_size: Lot size for trading\n        - stock_type: Type of security\n    ",
+          "inputSchema": {
+            "properties": {
+              "group_name": {
+                "title": "Group Name",
+                "type": "string"
+              }
+            },
+            "required": [
+              "group_name"
+            ],
+            "title": "get_user_securityArguments",
+            "type": "object"
+          },
+          "name": "get_user_security",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "title": "get_user_securityOutput",
+            "type": "object"
+          }
+        },
+        {
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "description": "Check connectivity to the Moomoo OpenD gateway and MCP server health.\n\n    Actively probes the quote and trade connections with read-only calls rather\n    than reporting on the existence of a connection object, and completes within\n    a five-second deadline.\n\n    A `connected` result means the gateway answered both probes. It does NOT\n    mean trading is unlocked, that an order would be accepted, or that any\n    particular market is authorized for the account.\n\n    Returns:\n        Dictionary containing:\n        - status: 'connected' (both probes succeeded), 'degraded' (exactly one\n          succeeded), or 'disconnected' (neither succeeded).\n        - host: Configured OpenD endpoint as 'host:port'.\n        - checked_at: UTC observation time (ISO-8601, 'Z' suffix).\n        - quote / trade: Per-service results, each with a status of 'ok',\n          'error', 'timeout', or 'unavailable', plus a 'reason' and a sanitized\n          'error' when the probe failed. Restricted clients omit the global\n          trading account count.\n        - trading_mode: This server's configured MOOMOO_TRADING_MODE\n          ('READ_ONLY', 'SIMULATE', or 'REAL'). It says which writes the server\n          will issue at all, which is separate from whether the gateway would\n          accept one.\n        - trade_market: The configured MOOMOO_TRADING_MARKET discovery filter\n          ('NONE' for all securities markets or one named market). It reports\n          configuration, not account availability or trading permission.\n        - execution_journal: Journal readiness, pending_operation_ids and durable\n          recovery_updates, including actual check times and assumed-absence decisions.\n          Background recovery reports its result on the next tool reply.\n        - real_execution_journal: Independent REAL readiness, admission epoch,\n          pending IDs and broker recovery evidence. REAL recovery never assumes\n          absence or automatically resubmits an operation.\n        - gateway_version: OpenD version when the gateway reports one, else null.\n        - gateway_lock_at_rest: Last connect/reconnect lock attempt status\n          ('not_applicable', 'not_attempted', 'succeeded', or 'failed') and nullable\n          checked_at. Historical observation, not current gateway lock state.\n          SIMULATE does not request a lock and reports 'not_applicable'.\n        - mcp_server: Package and contract versions, source_revision (unknown when\n          unavailable), and SHA-256 of the currently authorized tools/list contract.\n          Compare with the served tools/list using the same credential; this does\n          not attest to an external host cache or refresh it.\n    ",
+          "inputSchema": {
+            "properties": {},
+            "title": "check_healthArguments",
+            "type": "object"
+          },
+          "name": "check_health",
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "check_healthDictOutput",
+            "type": "object"
+          }
+        }
+      ]
+    }
+  }
+}

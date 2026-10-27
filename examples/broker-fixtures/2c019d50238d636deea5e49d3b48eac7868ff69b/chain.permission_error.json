@@ -1,0 +1,60 @@
+{
+  "broker_double_methods": [
+    "get_option_chain"
+  ],
+  "case_id": "chain.permission_error",
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "request": {
+    "id": 5,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "code": "US.SYNTH",
+        "include_evidence": true
+      },
+      "name": "get_option_chain"
+    }
+  },
+  "response": {
+    "id": 5,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\"error_code\": \"QUOTE_PERMISSION_DENIED\", \"message\": \"OpenD denied quote permission for this request.\", \"provider\": \"Moomoo OpenD\", \"tool\": \"get_option_chain\", \"operation\": \"get_option_chain\", \"checked_at\": \"2026-10-26T14:30:00.250Z\", \"requested_codes\": [\"US.SYNTH\"], \"denied_codes\": [], \"provider_message\": \"Quote permission denied\", \"retryable\": false, \"retry_condition\": \"OpenAPI quote permissions or session rights change.\", \"next_action\": \"Use another available market-data tool or web source.\", \"agent_guidance\": [\"Stop repeating equivalent OpenD quote requests for the denied data.\", \"Confirm the alternative source's exact instrument, exchange listing and currency; do not assume a ticker suffix or currency.\", \"Report the alternative source, quote timestamp/timezone and whether the price is delayed or stale.\", \"Label unverified quote times or freshness as unknown; do not present those quotes as real-time.\", \"Continue independent balance and holdings reads when they succeed; their costs and valuations are not verified live market quotes.\", \"If no suitable source is available, report prices as unavailable and continue the parts of the task that do not require them.\", \"Only explicitly named symbols appear in denied_codes; a failed batch does not establish that every requested symbol is denied.\"]}",
+          "type": "text"
+        }
+      ],
+      "isError": true,
+      "structuredContent": {
+        "agent_guidance": [
+          "Stop repeating equivalent OpenD quote requests for the denied data.",
+          "Confirm the alternative source's exact instrument, exchange listing and currency; do not assume a ticker suffix or currency.",
+          "Report the alternative source, quote timestamp/timezone and whether the price is delayed or stale.",
+          "Label unverified quote times or freshness as unknown; do not present those quotes as real-time.",
+          "Continue independent balance and holdings reads when they succeed; their costs and valuations are not verified live market quotes.",
+          "If no suitable source is available, report prices as unavailable and continue the parts of the task that do not require them.",
+          "Only explicitly named symbols appear in denied_codes; a failed batch does not establish that every requested symbol is denied."
+        ],
+        "checked_at": "2026-10-26T14:30:00.250Z",
+        "denied_codes": [],
+        "error_code": "QUOTE_PERMISSION_DENIED",
+        "message": "OpenD denied quote permission for this request.",
+        "next_action": "Use another available market-data tool or web source.",
+        "operation": "get_option_chain",
+        "provider": "Moomoo OpenD",
+        "provider_message": "Quote permission denied",
+        "requested_codes": [
+          "US.SYNTH"
+        ],
+        "retry_condition": "OpenAPI quote permissions or session rights change.",
+        "retryable": false,
+        "tool": "get_option_chain"
+      }
+    }
+  }
+}
