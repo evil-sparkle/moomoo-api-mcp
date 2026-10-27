@@ -7,6 +7,8 @@
 !LICENSE
 !src/
 !src/**
+# Build provenance is generated in-image from the CI argument, not host files.
+src/moomoo_mcp/_build_identity.json
 **/__pycache__/
 **/*.pyc
 # Effective deployment snapshots contain credentials; keep them excluded even

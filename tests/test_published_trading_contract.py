@@ -152,7 +152,13 @@ async def test_contract_digest_matches_served_tools_and_preserves_visibility():
     )
 
 
-def test_health_wire_identity_matches_the_served_catalog(gateway_client):
+@pytest.mark.parametrize("revision", [None, "a" * 40])
+def test_health_wire_identity_matches_the_served_catalog(
+    gateway_client, monkeypatch, revision
+):
+    monkeypatch.setattr(
+        "moomoo_mcp.tools.trading_contract.embedded_source_revision", lambda: revision
+    )
     client, _, services = gateway_client
     probe = MagicMock(spec=HealthCheck)
     probe.futures = []
@@ -177,6 +183,7 @@ def test_health_wire_identity_matches_the_served_catalog(gateway_client):
         ).encode()
     ).hexdigest()
     assert payload["mcp_server"]["tools_schema_sha256"] == expected_digest
-    assert payload["mcp_server"]["source_revision"] == "unknown"
+    assert payload["mcp_server"]["source_revision"] == (revision or "unknown")
+    assert payload["mcp_server"]["build_revision"] == revision
     assert payload["mcp_server"]["contract_version"] == CONTRACT_VERSION
     assert payload["gateway_version"] is None
