@@ -52,6 +52,9 @@ def source_manifest(*, verify_git: bool = False) -> dict:
     manifest = json.loads((DESTINATION / "manifest.json").read_text())
     assert manifest["fixture_kind"] == "SYNTHETIC"
     assert manifest["source_commit"] == SOURCE
+    assert manifest["source_url"] == (
+        "https://github.com/evil-sparkle/moomoo-api-mcp/tree/" + SOURCE
+    ), "fixture source URL must identify the pinned source commit"
     for record in manifest["runtime_files"]:
         current = (ROOT / record["path"]).read_bytes()
         assert hashlib.sha256(current).hexdigest() == record["sha256"], record["path"]
