@@ -1,0 +1,118 @@
+{
+  "broker_double_methods": [
+    "get_option_chain"
+  ],
+  "case_id": "chain.normal_adjusted",
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "request": {
+    "id": 3,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "code": "US.SYNTH",
+        "data_filter": {
+          "delta_max": 0.9,
+          "delta_min": 0.1
+        },
+        "end": "2026-10-30",
+        "include_evidence": true,
+        "start": "2026-10-30"
+      },
+      "name": "get_option_chain"
+    }
+  },
+  "response": {
+    "id": 3,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"schema_version\": \"2026-10-26.1\",\n  \"source_method\": \"get_option_chain\",\n  \"requested_at\": \"2026-10-26T14:30:00Z\",\n  \"received_at\": \"2026-10-26T14:30:00.250Z\",\n  \"sdk_version\": \"10.10.7008\",\n  \"source_revision\": null,\n  \"delay_status\": \"UNKNOWN\",\n  \"entitlement_status\": \"UNKNOWN\",\n  \"timestamp_semantics\": \"Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.\",\n  \"scope\": {\n    \"code\": \"US.SYNTH\",\n    \"start\": \"2026-10-30\",\n    \"end\": \"2026-10-30\",\n    \"option_type\": \"ALL\",\n    \"option_cond_type\": \"ALL\",\n    \"data_filter\": {\n      \"delta_min\": 0.1,\n      \"delta_max\": 0.9\n    }\n  },\n  \"coverage\": {\n    \"requested\": [],\n    \"returned\": [\n      \"US.SYNTH261030C100000\",\n      \"US.SYNTH1261030C100000\"\n    ],\n    \"missing\": [],\n    \"complete_response\": true,\n    \"provider_history_complete\": null,\n    \"truncated\": false,\n    \"total_returned\": 2\n  },\n  \"errors\": {},\n  \"data\": [\n    {\n      \"code\": \"US.SYNTH261030C100000\",\n      \"stock_owner\": \"US.SYNTH\",\n      \"stock_type\": \"DRVT\",\n      \"option_type\": \"CALL\",\n      \"strike_time\": \"2026-10-30\",\n      \"strike_price\": 100.0,\n      \"lot_size\": 100,\n      \"option_standard_type\": \"STANDARD\",\n      \"option_settlement_mode\": \"N/A\",\n      \"suspension\": false\n    },\n    {\n      \"code\": \"US.SYNTH1261030C100000\",\n      \"stock_owner\": \"US.SYNTH\",\n      \"stock_type\": \"DRVT\",\n      \"option_type\": \"CALL\",\n      \"strike_time\": \"2026-10-30\",\n      \"strike_price\": 100.0,\n      \"lot_size\": 150,\n      \"option_standard_type\": \"NON_STANDARD\",\n      \"option_settlement_mode\": \"N/A\",\n      \"suspension\": false\n    }\n  ],\n  \"limitations\": [\n    \"Provider filter inputs, not fresh liquidity; OI updated daily.\"\n  ],\n  \"timing\": {\n    \"deadline_seconds\": 15.0,\n    \"admission_seconds\": 0,\n    \"quota_wait_seconds\": 0,\n    \"worker_queue_seconds\": 0,\n    \"sdk_seconds\": 0,\n    \"total_seconds\": 0,\n    \"sdk_calls_started\": 1,\n    \"sdk_calls_completed\": 1,\n    \"sdk_in_flight\": false\n  }\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "result": {
+          "coverage": {
+            "complete_response": true,
+            "missing": [],
+            "provider_history_complete": null,
+            "requested": [],
+            "returned": [
+              "US.SYNTH261030C100000",
+              "US.SYNTH1261030C100000"
+            ],
+            "total_returned": 2,
+            "truncated": false
+          },
+          "data": [
+            {
+              "code": "US.SYNTH261030C100000",
+              "lot_size": 100,
+              "option_settlement_mode": "N/A",
+              "option_standard_type": "STANDARD",
+              "option_type": "CALL",
+              "stock_owner": "US.SYNTH",
+              "stock_type": "DRVT",
+              "strike_price": 100.0,
+              "strike_time": "2026-10-30",
+              "suspension": false
+            },
+            {
+              "code": "US.SYNTH1261030C100000",
+              "lot_size": 150,
+              "option_settlement_mode": "N/A",
+              "option_standard_type": "NON_STANDARD",
+              "option_type": "CALL",
+              "stock_owner": "US.SYNTH",
+              "stock_type": "DRVT",
+              "strike_price": 100.0,
+              "strike_time": "2026-10-30",
+              "suspension": false
+            }
+          ],
+          "delay_status": "UNKNOWN",
+          "entitlement_status": "UNKNOWN",
+          "errors": {},
+          "limitations": [
+            "Provider filter inputs, not fresh liquidity; OI updated daily."
+          ],
+          "received_at": "2026-10-26T14:30:00.250Z",
+          "requested_at": "2026-10-26T14:30:00Z",
+          "schema_version": "2026-10-26.1",
+          "scope": {
+            "code": "US.SYNTH",
+            "data_filter": {
+              "delta_max": 0.9,
+              "delta_min": 0.1
+            },
+            "end": "2026-10-30",
+            "option_cond_type": "ALL",
+            "option_type": "ALL",
+            "start": "2026-10-30"
+          },
+          "sdk_version": "10.10.7008",
+          "source_method": "get_option_chain",
+          "source_revision": null,
+          "timestamp_semantics": "Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.",
+          "timing": {
+            "admission_seconds": 0.0,
+            "deadline_seconds": 15.0,
+            "quota_wait_seconds": 0.0,
+            "sdk_calls_completed": 1,
+            "sdk_calls_started": 1,
+            "sdk_in_flight": false,
+            "sdk_seconds": 0.0,
+            "total_seconds": 0.0,
+            "worker_queue_seconds": 0.0
+          }
+        }
+      }
+    }
+  }
+}

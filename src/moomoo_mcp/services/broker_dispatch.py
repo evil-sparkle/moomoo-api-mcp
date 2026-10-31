@@ -5,19 +5,23 @@ resolved account ID; quote and user pools are shared across its local callers.
 See README's broker request limits for the policy inventory and source links.
 """
 
+import asyncio
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterator, Sequence
-from contextlib import contextmanager
-from contextvars import ContextVar
+from contextlib import asynccontextmanager, contextmanager, nullcontext
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, replace
 from threading import Lock
 from typing import Any, TypeVar
 
 import anyio
 import anyio.to_thread
+from typing_extensions import TypedDict
 
+from moomoo_mcp.services.health import run_detached
 from moomoo_mcp.services.rate_limit import (
+    ProviderRateLimitError,
     ProviderRequestLimiter,
     RateLimitPolicy,
     Reservation,
@@ -26,6 +30,136 @@ from moomoo_mcp.services.rate_limit import (
 T = TypeVar("T")
 PoolKey = tuple[str, int | None]
 DOC_ROOT = "https://openapi.moomoo.com/moomoo-api-doc/en/"
+READ_TIMEOUT_SECONDS = 15.0
+MAX_INFLIGHT_READS = 8
+MAX_PENDING_READS = 32
+
+
+class ReadTiming(TypedDict):
+    deadline_seconds: float
+    admission_seconds: float
+    quota_wait_seconds: float
+    worker_queue_seconds: float
+    sdk_seconds: float
+    total_seconds: float
+    sdk_calls_started: int
+    sdk_calls_completed: int
+    sdk_in_flight: bool
+
+
+class BrokerReadOverloadError(RuntimeError):
+    """This invocation was rejected before creating a timer or dispatching work."""
+
+    def __init__(self, operation: str, pending: int, maximum: int):
+        self.operation = operation
+        self.pending_reads = pending
+        self.max_pending_reads = maximum
+        super().__init__(
+            f"{operation} read admission is overloaded "
+            f"({pending}/{maximum} pending reads). This invocation was rejected "
+            "before admission or SDK dispatch; existing SDK calls were not aborted."
+        )
+
+
+class BrokerReadTimeoutError(TimeoutError):
+    """The caller's deadline expired, not a claim that OpenD aborted a query."""
+
+    def __init__(self, read: "_ReadCall"):
+        self.operation = read.operation
+        self.phase = read.phase
+        self.timing = read.timing()
+        super().__init__(
+            f"{self.operation} read await exceeded its "
+            f"{read.timeout_seconds:g}s end-to-end deadline during {self.phase}. "
+            + (
+                "The blocking SDK call may finish in the background; "
+                "OpenD execution was not aborted. Late results are ignored."
+                if self.timing["sdk_in_flight"]
+                else "No further SDK calls will start; unused reservations are "
+                "released. Already dispatched calls are not rolled back."
+            )
+        )
+
+
+class _ReadCall:
+    """Per-invocation state shared only with its own bounded SDK workers."""
+
+    def __init__(self, operation: str, timeout: float, clock: Callable[[], float]):
+        self.operation = operation
+        self.timeout_seconds = timeout
+        self.clock = clock
+        self.started = clock()
+        self.deadline = self.started + timeout
+        self.phase = "admission"
+        self._lock = Lock()
+        self._cancelled = False
+        self._finished: float | None = None
+        self._durations: dict[str, float] = {}
+        self._starts: dict[str, float] = {}
+        self._sdk_started = 0
+        self._sdk_completed = 0
+
+    def check(self) -> None:
+        with self._lock:
+            cancelled = self._cancelled
+        if cancelled:
+            raise RuntimeError(
+                "Read await was cancelled; dispatched SDK calls were not aborted"
+            )
+        if self.clock() >= self.deadline:
+            raise BrokerReadTimeoutError(self)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+
+    def finish(self) -> None:
+        with self._lock:
+            self._finished = self.clock()
+
+    @contextmanager
+    def measure(self, phase: str) -> Iterator[None]:
+        with self._lock:
+            previous = self.phase
+            self.phase = phase
+            self._starts[phase] = self.clock()
+            if phase == "sdk":
+                self._sdk_started += 1
+        failed = False
+        try:
+            yield
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            with self._lock:
+                elapsed = self.clock() - self._starts.pop(phase)
+                self._durations[phase] = self._durations.get(phase, 0) + elapsed
+                if phase == "sdk":
+                    self._sdk_completed += 1
+                if not self._cancelled and not failed:
+                    self.phase = previous
+
+    def timing(self) -> ReadTiming:
+        with self._lock:
+            now = self.clock() if self._finished is None else self._finished
+            durations = dict(self._durations)
+            for phase, started in self._starts.items():
+                durations[phase] = durations.get(phase, 0) + max(0, now - started)
+            return {
+                "deadline_seconds": self.timeout_seconds,
+                "admission_seconds": round(durations.get("admission", 0), 6),
+                "quota_wait_seconds": round(durations.get("quota", 0), 6),
+                "worker_queue_seconds": round(durations.get("worker_queue", 0), 6),
+                "sdk_seconds": round(durations.get("sdk", 0), 6),
+                "total_seconds": round(max(0, now - self.started), 6),
+                "sdk_calls_started": self._sdk_started,
+                "sdk_calls_completed": self._sdk_completed,
+                "sdk_in_flight": "sdk" in self._starts,
+            }
+
+
+_current_read: ContextVar[_ReadCall | None] = ContextVar("broker_read", default=None)
 
 
 @dataclass(frozen=True)
@@ -199,12 +333,36 @@ class BrokerRequestDispatcher:
         sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
         option_chain_limiter: ProviderRequestLimiter | None = None,
         max_wait_seconds: float = 5.0,
+        read_timeout_seconds: float = READ_TIMEOUT_SECONDS,
+        max_inflight_reads: int = MAX_INFLIGHT_READS,
+        max_pending_reads: int = MAX_PENDING_READS,
+        deadline_sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
     ):
         if not math.isfinite(max_wait_seconds) or max_wait_seconds < 0:
             raise ValueError("max_wait_seconds must be finite and non-negative")
+        if not math.isfinite(read_timeout_seconds) or read_timeout_seconds <= 0:
+            raise ValueError("read_timeout_seconds must be finite and positive")
+        if (
+            isinstance(max_inflight_reads, bool)
+            or not isinstance(max_inflight_reads, int)
+            or max_inflight_reads < 1
+        ):
+            raise ValueError("max_inflight_reads must be a positive integer")
+        if (
+            isinstance(max_pending_reads, bool)
+            or not isinstance(max_pending_reads, int)
+            or max_pending_reads < 1
+        ):
+            raise ValueError("max_pending_reads must be a positive integer")
         self.clock = clock
         self.sleep = sleep
         self.max_wait_seconds = max_wait_seconds
+        self.read_timeout_seconds = read_timeout_seconds
+        self.max_inflight_reads = max_inflight_reads
+        self.max_pending_reads = max_pending_reads
+        self._deadline_sleep = deadline_sleep
+        self._read_workers = 0
+        self._pending_reads = 0
         self._lock = Lock()
         self._limiters: dict[PoolKey, ProviderRequestLimiter] = {}
         if option_chain_limiter is not None:
@@ -215,6 +373,125 @@ class BrokerRequestDispatcher:
         self._lease: ContextVar[_DispatchLease | None] = ContextVar(
             "broker_dispatch_lease", default=None
         )
+
+    @property
+    def read_workers_in_flight(self) -> int:
+        """Includes abandoned workers until the blocking function really exits."""
+        with self._lock:
+            return self._read_workers
+
+    @property
+    def read_requests_pending(self) -> int:
+        """Admitted awaiters, including execution, quota and worker-queue waits."""
+        with self._lock:
+            return self._pending_reads
+
+    @asynccontextmanager
+    async def read_deadline(self, operation: str):
+        """Bound admission, worker queues, quota and execution with one deadline.
+
+        Cancellation stops the await, never the synchronous SDK thread. Native
+        client cancellation propagates unchanged; a deadline has a typed error.
+        One request slot covers the entire await, including quota and worker
+        queues. Nested scopes reuse that slot; overload never creates a timer.
+        """
+        existing = _current_read.get()
+        if existing is not None:
+            yield existing
+            return
+        with self._lock:
+            if self._pending_reads >= self.max_pending_reads:
+                raise BrokerReadOverloadError(
+                    operation, self._pending_reads, self.max_pending_reads
+                )
+            self._pending_reads += 1
+        try:
+            read = _ReadCall(operation, self.read_timeout_seconds, self.clock)
+            token = _current_read.set(read)
+            expired = False
+            try:
+                with anyio.CancelScope() as scope:
+
+                    async def expire() -> None:
+                        nonlocal expired
+                        await self._deadline_sleep(max(0, read.deadline - self.clock()))
+                        expired = True
+                        read.cancel()
+                        scope.cancel()
+
+                    timer = asyncio.create_task(expire())
+                    try:
+                        yield read
+                        read.check()
+                    except BaseException:
+                        read.cancel()
+                        raise
+                    finally:
+                        timer.cancel()
+                        with anyio.CancelScope(shield=True):
+                            await asyncio.gather(timer, return_exceptions=True)
+                if expired:
+                    raise BrokerReadTimeoutError(read)
+            except BaseException:
+                read.cancel()
+                raise
+            finally:
+                read.finish()
+                _current_read.reset(token)
+        finally:
+            with self._lock:
+                self._pending_reads -= 1
+
+    async def read_worker(
+        self, func: Callable[..., T], /, *args: Any, **kwargs: Any
+    ) -> T:
+        """A bounded daemon worker; its slot is released by the worker, not awaiters.
+
+        AnyIO's abandon_on_cancel releases its limiter when the await ends. That
+        alone would allow cancelled, still-running SDK threads to grow unbounded.
+        These workers do not occupy the shared mutation/local-work thread pool.
+        """
+        read = _current_read.get()
+        assert read is not None
+        with read.measure("worker_queue"):
+            while True:
+                read.check()
+                with self._lock:
+                    if self._read_workers < self.max_inflight_reads:
+                        self._read_workers += 1
+                        break
+                await self.sleep(0.05)
+        context = copy_context()
+
+        def worker() -> T:
+            try:
+                read.check()
+                return context.run(func, *args, **kwargs)
+            finally:
+                with self._lock:
+                    self._read_workers -= 1
+
+        try:
+            future = run_detached(worker, "broker-read")
+        except BaseException:
+            with self._lock:
+                self._read_workers -= 1
+            raise
+        # Cancellation of this wrapper cannot cancel an already-running Future.
+        # Late values/exceptions stay on that abandoned future, not a new caller.
+        return await asyncio.wrap_future(future)
+
+    @staticmethod
+    def _invoke(func: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
+        read = _current_read.get()
+        if read is None:
+            return func(*args, **kwargs)
+        read.check()
+        with read.measure("sdk"):
+            result = func(*args, **kwargs)
+        # Discard a late response before service cache updates or follow-up calls.
+        read.check()
+        return result
 
     @staticmethod
     def request(operation: str, **kwargs: Any) -> QuotaRequest | None:
@@ -310,12 +587,15 @@ class BrokerRequestDispatcher:
         self, operation: str, func: Callable[..., T], /, *args: Any, **kwargs: Any
     ) -> T:
         """Start one actual SDK call. Never sleep or replay a broker request."""
+        read = _current_read.get()
+        if read is not None:
+            read.check()
         request = self.request(operation, **kwargs)
         lease = self._lease.get()
         if request is None:
             if lease is not None:
                 lease.start(None, None)
-            return func(*args, **kwargs)
+            return self._invoke(func, *args, **kwargs)
         with self.reserve([request]):
             slots = self._slots.get()
             assert slots is not None
@@ -324,7 +604,7 @@ class BrokerRequestDispatcher:
                 slots[key].start()
             else:
                 lease.start(key, slots[key])
-            return func(*args, **kwargs)
+            return self._invoke(func, *args, **kwargs)
 
     async def run_async(
         self,
@@ -337,14 +617,20 @@ class BrokerRequestDispatcher:
         """Await all capacity before dispatch; one deadline covers the bundle."""
         slots: dict[PoolKey, Reservation] = {}
         deadline = self.clock() + self.max_wait_seconds
+        read = _current_read.get()
+        if read is not None:
+            deadline = min(deadline, read.deadline)
         try:
-            for key, request in self._merged(requests).items():
-                slots[key] = await self.limiter(request).acquire(
-                    request.weight, deadline=deadline
-                )
-        except BaseException:
+            with read.measure("quota") if read is not None else nullcontext():
+                for key, request in self._merged(requests).items():
+                    slots[key] = await self.limiter(request).acquire(
+                        request.weight, deadline=deadline
+                    )
+        except BaseException as exc:
             for slot in slots.values():
                 slot.release()
+            if read is not None and isinstance(exc, ProviderRateLimitError):
+                read.check()
             raise
         lease = _DispatchLease(slots)
 
@@ -353,13 +639,19 @@ class BrokerRequestDispatcher:
             token = self._slots.set(slots)
             lease_token = self._lease.set(lease)
             try:
-                return func(*args, **kwargs)
+                with read.measure("processing") if read is not None else nullcontext():
+                    result = func(*args, **kwargs)
+                    if read is not None:
+                        read.check()
+                    return result
             finally:
                 self._slots.reset(token)
                 self._lease.reset(lease_token)
                 lease.finish()
 
         try:
+            if read is not None:
+                return await self.read_worker(dispatch)
             return await anyio.to_thread.run_sync(dispatch, abandon_on_cancel=True)
         finally:
             lease.cancel_pending()

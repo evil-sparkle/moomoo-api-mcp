@@ -238,9 +238,6 @@ def test_runtime_sdk_calls_have_registered_dispatch_gates():
                 continue
             assert node.attr in registered, (path, node.lineno, node.attr)
             observed.add(node.attr)
-            if node.attr == "get_option_chain":
-                assert isinstance(parent, ast.Call) and parent.func is node
-                continue  # Existing explicit reservation immediately precedes it.
             assert isinstance(parent, ast.Call), (path, node.lineno)
             assert (
                 isinstance(parent.func, ast.Attribute) and parent.func.attr == "call"

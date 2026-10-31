@@ -9,6 +9,10 @@ import anyio.to_thread
 import pandas as pd
 import pytest
 
+from moomoo_mcp.services.broker_dispatch import (
+    BrokerReadTimeoutError,
+    BrokerRequestDispatcher,
+)
 from moomoo_mcp.services.market_data_service import (
     OPTION_CHAIN_RATE_LIMIT,
     MarketDataService,
@@ -38,7 +42,10 @@ def governed_context(mcp_app_context, clock):
         OPTION_CHAIN_RATE_LIMIT, clock=clock, sleep=clock.sleep
     )
     mcp_app_context.market_data_service = MarketDataService(
-        quote, option_chain_limiter=limiter
+        quote,
+        dispatcher=BrokerRequestDispatcher(
+            clock=clock, sleep=clock.sleep, option_chain_limiter=limiter
+        ),
     )
     return mcp_app_context
 
@@ -122,37 +129,44 @@ async def test_capacity_expiring_within_deadline_allows_mcp_request(
     assert quote_context(governed_context).get_option_chain.call_count == 11
 
 
-async def test_worker_congestion_cannot_expire_pending_reservations(
+async def occupy_read_worker(service, entered, release):
+    def block():
+        entered.set()
+        assert release.wait(5)
+
+    async with service.dispatcher.read_deadline("test blocker"):
+        await service.dispatcher.read_worker(block)
+
+
+async def test_worker_congestion_deadline_returns_pending_reservations(
     governed_context, clock
 ):
-    pool = anyio.to_thread.current_default_thread_limiter()
-    original = pool.total_tokens
-    pool.total_tokens = 1
-    await pool.acquire()
-    held = True
     service = governed_context.market_data_service
+    service.dispatcher.max_inflight_reads = 1
+    entered, release = Event(), Event()
+    blocker = asyncio.create_task(occupy_read_worker(service, entered, release))
+    await wait_until(entered.is_set)
     tasks = [
         asyncio.create_task(service.get_option_chain_async("US.XYZ")) for _ in range(10)
     ]
     try:
-        await wait_until(lambda: pool.statistics().tasks_waiting == 10)
+        await clock.wait_for_sleepers(10)
+        assert service.dispatcher.read_workers_in_flight == 1
         clock.advance(100)
-        with pytest.raises(ProviderRateLimitError):
-            service.get_option_chain("US.XYZ")
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), 2
+        )
+        assert all(isinstance(result, BrokerReadTimeoutError) for result in results)
         quote_context(governed_context).get_option_chain.assert_not_called()
-        pool.release()
-        held = False
-        await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
-        assert quote_context(governed_context).get_option_chain.call_count == 10
-        with pytest.raises(ProviderRateLimitError):
-            service.get_option_chain("US.XYZ")
+        # Queued work expired unsent: all ten permits can be reused.
+        service.option_chain_limiter.reserve(10).release()
     finally:
-        if held:
-            pool.release()
+        release.set()
+        blocker.cancel()
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        pool.total_tokens = original
+        await asyncio.gather(blocker, *tasks, return_exceptions=True)
+        await wait_until(lambda: service.dispatcher.read_workers_in_flight == 0)
 
 
 async def test_cancellation_while_waiting_for_worker_releases_reservation(
@@ -162,13 +176,13 @@ async def test_cancellation_while_waiting_for_worker_releases_reservation(
     # Nine dispatched attempts leave one slot for the queued request.
     for _ in range(9):
         service.get_option_chain("US.XYZ")
-    pool = anyio.to_thread.current_default_thread_limiter()
-    original = pool.total_tokens
-    pool.total_tokens = 1
-    await pool.acquire()
+    service.dispatcher.max_inflight_reads = 1
+    entered, release = Event(), Event()
+    blocker = asyncio.create_task(occupy_read_worker(service, entered, release))
+    await wait_until(entered.is_set)
     waiting = asyncio.create_task(service.get_option_chain_async("US.CANCELLED"))
     try:
-        await wait_until(lambda: pool.statistics().tasks_waiting == 1)
+        await wait_until(lambda: bool(service.option_chain_limiter._pending))
         waiting.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiting
@@ -180,10 +194,11 @@ async def test_cancellation_while_waiting_for_worker_releases_reservation(
             for call in quote_context(governed_context).get_option_chain.call_args_list
         )
     finally:
+        release.set()
+        blocker.cancel()
         waiting.cancel()
-        await asyncio.gather(waiting, return_exceptions=True)
-        pool.release()
-        pool.total_tokens = original
+        await asyncio.gather(blocker, waiting, return_exceptions=True)
+        await wait_until(lambda: service.dispatcher.read_workers_in_flight == 0)
 
 
 async def test_anyio_cancellation_during_quota_wait_never_dispatches(
@@ -254,7 +269,7 @@ async def test_anyio_cancellation_after_worker_assignment_prevents_dispatch(
         release.set()
         await asyncio.wait_for(finished.wait(), timeout=2)
         assert worker_errors == [
-            "Provider request reservation already released or used"
+            "Read await was cancelled; dispatched SDK calls were not aborted"
         ]
         assert quote.get_option_chain.call_count == 10
         assert all(

@@ -1,9 +1,7 @@
 """Market data service for accessing quote data via Moomoo API."""
 
-from functools import partial
 from typing import Any
 
-import anyio.to_thread
 from moomoo import (
     RET_OK,
     AuType,
@@ -25,7 +23,6 @@ from moomoo_mcp.services.quote_errors import raise_quote_error
 from moomoo_mcp.services.rate_limit import (
     ProviderRequestLimiter,
     RateLimitPolicy,
-    Reservation,
 )
 from moomoo_mcp.services.sdk_response import as_dict, as_frame, as_list
 from moomoo_mcp.services.validation import validate_choice, validate_date_range
@@ -434,13 +431,9 @@ class MarketDataService(BrokerDataReads):
             code, start, end, option_type
         )
         filters = self._option_filters(option_cond_type, data_filter)
-        reservation = self.option_chain_limiter.reserve()
-        try:
-            return self._query_option_chain(
-                reservation, underlying, start, end, normalized_type, filters
-            )
-        finally:
-            reservation.release()
+        return self._query_option_chain(
+            underlying, start, end, normalized_type, filters
+        )
 
     async def get_option_chain_async(
         self,
@@ -457,28 +450,20 @@ class MarketDataService(BrokerDataReads):
         unused reservation is released on cancellation, even if a queued
         worker starts later. A dispatched attempt is never refunded or retried.
         """
-        underlying, normalized_type = self._validate_option_chain(
-            code, start, end, option_type
-        )
-        filters = self._option_filters(option_cond_type, data_filter)
-        reservation = await self.option_chain_limiter.acquire()
-        try:
-            return await anyio.to_thread.run_sync(
-                partial(
-                    self._query_option_chain,
-                    reservation,
-                    underlying,
-                    start,
-                    end,
-                    normalized_type,
-                    filters,
-                ),
-                # Allow cancellation cleanup to release an unused reservation
-                # even after a worker is assigned. start() rejects late work.
-                abandon_on_cancel=True,
+        async with self.dispatcher.read_deadline("get_option_chain"):
+            underlying, normalized_type = self._validate_option_chain(
+                code, start, end, option_type
             )
-        finally:
-            reservation.release()
+            filters = self._option_filters(option_cond_type, data_filter)
+            return await self.dispatcher.run_async(
+                [QuotaRequest("get_option_chain")],
+                self._query_option_chain,
+                underlying,
+                start,
+                end,
+                normalized_type,
+                filters,
+            )
 
     def _validate_option_chain(
         self, code: str, start: str | None, end: str | None, option_type: str
@@ -501,7 +486,6 @@ class MarketDataService(BrokerDataReads):
 
     def _query_option_chain(
         self,
-        reservation: Reservation,
         underlying: str,
         start: str | None,
         end: str | None,
@@ -510,8 +494,9 @@ class MarketDataService(BrokerDataReads):
     ) -> list[dict]:
         if not self.quote_ctx:
             raise RuntimeError("Quote context not connected")
-        reservation.start()
-        ret, data = self.quote_ctx.get_option_chain(
+        ret, data = self.dispatcher.call(
+            "get_option_chain",
+            self.quote_ctx.get_option_chain,
             code=underlying,
             start=start,
             end=end,

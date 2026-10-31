@@ -5,9 +5,10 @@ from typing import Any, Literal
 
 from moomoo import OpenQuoteContext
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from typing_extensions import Self, TypedDict
+from typing_extensions import NotRequired, Self, TypedDict
 
 from moomoo_mcp.client_authorization import tool_visible
+from moomoo_mcp.services.broker_dispatch import ReadTiming
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.query_contracts import TradeQueryError, plain_record
 from moomoo_mcp.services.sdk_response import as_frame
@@ -52,6 +53,7 @@ class DataEvidence(TypedDict):
     errors: dict[str, str]
     data: list[dict[str, Any]]
     limitations: list[str]
+    timing: NotRequired[ReadTiming]
 
 
 def sdk_version() -> str | None:

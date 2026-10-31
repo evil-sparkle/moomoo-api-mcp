@@ -496,6 +496,48 @@ async def test_cancelled_live_worker_still_relocks(governed):
     ] == [True, False]
 
 
+async def test_read_deadline_does_not_interrupt_journaled_write(governed, clock):
+    trade = governed.trade_service
+    trade.dispatcher.read_timeout_seconds = 0.01
+    trade.trade_password = "test-only"
+    entered, release = Event(), Event()
+
+    def place(**_kwargs):
+        entered.set()
+        assert release.wait(5)
+        return RET_OK, pd.DataFrame([{"order_id": "77"}])
+
+    trade.trade_ctx.place_order.side_effect = place
+    task = asyncio.create_task(
+        run_blocking(
+            trade.place_order,
+            "US.AAPL",
+            1.0,
+            1,
+            "BUY",
+            trd_env="REAL",
+            acc_id="123",
+            **real_tokens(trade, "read-deadline-does-not-cancel-write"),
+        )
+    )
+    try:
+        await wait_until(entered.is_set)
+        clock.advance(100)
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert trade.dispatcher.read_workers_in_flight == 0
+        release.set()
+        result = await asyncio.wait_for(task, 2)
+        assert result["state"] == "ACKNOWLEDGED"
+        assert [
+            call.kwargs["is_unlock"]
+            for call in trade.trade_ctx.unlock_trade.call_args_list
+        ] == [True, False]
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def test_worker_congestion_and_cancellation_preserve_mutation_spacing(clock):
     dispatcher = BrokerRequestDispatcher(clock=clock, sleep=clock.sleep)
     workers = anyio.to_thread.current_default_thread_limiter()
