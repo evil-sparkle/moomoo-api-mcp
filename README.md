@@ -591,6 +591,11 @@ reads does not use the REAL write allowlist.
 
 ### 3. Connect an MCP client
 
+For the Options Strategy Lab's private `market_read`-only identity, exact
+catalogue/schema verification, observed contract-field provenance and explicit
+unfiltered expiry fallback, see [Lab scanner broker contract](docs/lab-scanner-contract.md).
+This source contract does not certify a deployed connection or quote rights.
+
 #### HTTP endpoint: Claude Code and other HTTP clients
 
 The container deployment and source launches serve authenticated Streamable HTTP

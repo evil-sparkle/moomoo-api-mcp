@@ -482,6 +482,13 @@ class BrokerRequestDispatcher:
         return await asyncio.wrap_future(future)
 
     @staticmethod
+    def check_read_active() -> None:
+        """Check again before publishing reference observations after processing."""
+        read = _current_read.get()
+        if read is not None:
+            read.check()
+
+    @staticmethod
     def _invoke(func: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
         read = _current_read.get()
         if read is None:

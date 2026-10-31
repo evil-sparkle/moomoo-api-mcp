@@ -169,6 +169,44 @@ async def test_abandoned_reference_read_cannot_update_shared_metadata_cache(read
     assert quote.get_stock_basicinfo.call_count == 2
 
 
+@pytest.mark.parametrize("stop", ["timeout", "cancel"])
+async def test_abandoned_chain_processing_cannot_publish_shared_reference_facts(
+    reads, monkeypatch, stop
+):
+    from moomoo_mcp.services import market_data_service
+
+    service, _quote, clock = reads
+    entered, release = Event(), Event()
+    original = market_data_service.bounded_rows
+
+    def processing(rows):
+        entered.set()
+        assert release.wait(5)
+        return original(rows)
+
+    monkeypatch.setattr(market_data_service, "bounded_rows", processing)
+    task = asyncio.create_task(service.get_option_chain_async("US.TEST"))
+    try:
+        await wait_until(entered.is_set)
+        if stop == "timeout":
+            await clock.wait_for_sleepers()
+            clock.advance(10)
+            with pytest.raises(BrokerReadTimeoutError):
+                await asyncio.wait_for(task, 2)
+        else:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert service.dispatcher.read_workers_in_flight == 1
+        assert service.dispatcher.read_requests_pending == 0
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await wait_until(lambda: service.dispatcher.read_workers_in_flight == 0)
+    assert not service.instrument_adapter._chain_metadata
+
+
 async def test_chain_timeout_crosses_mcp_with_explicit_background_semantics(
     reads, mcp_app_context
 ):

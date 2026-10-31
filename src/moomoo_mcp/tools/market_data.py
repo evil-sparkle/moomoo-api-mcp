@@ -208,7 +208,8 @@ async def get_option_chain(
         - option_type: 'CALL' or 'PUT'.
         - strike_time: Expiration date, in the market's own timezone.
         - strike_price: Strike price.
-        - lot_size: Provider lot/deliverable size, not the monetary multiplier.
+        - lot_size: Provider trading lot size, not deliverable size or
+          monetary multiplier.
           Read option_contract_multiplier from a snapshot or instrument facts.
         - suspension, stock_id, index_option_type, expiration_cycle,
           option_standard_type, option_settlement_mode.
@@ -253,17 +254,24 @@ async def get_option_chain(
                     started,
                     contracts,
                     scope={
-                        "code": code,
+                        "code": code.strip(),
                         "start": start,
                         "end": end,
-                        "option_type": option_type,
-                        "option_cond_type": option_cond_type,
-                        "data_filter": data_filter.model_dump(exclude_none=True)
-                        if data_filter
+                        "option_type": option_type.strip().upper(),
+                        "option_cond_type": option_cond_type.strip().upper(),
+                        "data_filter": (
+                            data_filter.model_dump(exclude_none=True) or None
+                        )
+                        if data_filter is not None
                         else None,
                     },
                     limitations=[
-                        "Provider filter inputs, not fresh liquidity; OI updated daily."
+                        "Provider filter inputs, not fresh liquidity; "
+                        "OI updated daily.",
+                        "Complete response means returned rows within this scope, "
+                        "not a complete provider universe.",
+                        "No automatic unfiltered retry; callers may explicitly omit "
+                        "data_filter for a basic expiry scan.",
                     ],
                 )
                 if include_evidence

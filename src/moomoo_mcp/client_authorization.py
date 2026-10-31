@@ -211,7 +211,14 @@ def authorize_tool(
         ):
             raise ClientAuthorizationError("Client cannot read trading accounts")
         return
-    if name in {"check_health", "get_prepared_trade"}:
+    if name == "get_prepared_trade":
+        if not permission_allowed("real_read") and not permission_allowed(
+            "simulate_read"
+        ):
+            raise ClientAuthorizationError("Client cannot read prepared trades")
+        # Stored intent still checks its resolved account before disclosure.
+        return
+    if name == "check_health":
         # Account discovery, journal health and stored intent enforce scope after
         # resolving their account identities. No tool here grants approval.
         return

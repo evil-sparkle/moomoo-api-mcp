@@ -17,8 +17,16 @@ from moomoo import (
 from moomoo_mcp.services.admission import AdmissionPlan, prepare_market_call
 from moomoo_mcp.services.broker_data_reads import BrokerDataReads
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher, QuotaRequest
-from moomoo_mcp.services.data_evidence import OptionChainFilter, bounded_rows
+from moomoo_mcp.services.clock import utc_now_iso
+from moomoo_mcp.services.data_evidence import (
+    MAX_DATA_ROWS,
+    OptionChainFilter,
+    bounded_rows,
+    frame_records,
+    validate_codes,
+)
 from moomoo_mcp.services.instruments import InstrumentAdapter
+from moomoo_mcp.services.query_contracts import TradeQueryError
 from moomoo_mcp.services.quote_errors import raise_quote_error
 from moomoo_mcp.services.rate_limit import (
     ProviderRequestLimiter,
@@ -494,9 +502,10 @@ class MarketDataService(BrokerDataReads):
     ) -> list[dict]:
         if not self.quote_ctx:
             raise RuntimeError("Quote context not connected")
+        quote_ctx = self.quote_ctx
         ret, data = self.dispatcher.call(
             "get_option_chain",
-            self.quote_ctx.get_option_chain,
+            quote_ctx.get_option_chain,
             code=underlying,
             start=start,
             end=end,
@@ -506,7 +515,21 @@ class MarketDataService(BrokerDataReads):
         if ret != RET_OK:
             raise_quote_error("get_option_chain", data, [underlying])
 
-        return bounded_rows(as_frame("get_option_chain", data).to_dict("records"))
+        observed_at = utc_now_iso()
+        rows = bounded_rows(frame_records("get_option_chain", data))
+        # Validate identifiers before sharing observations or serving a legacy
+        # list. A malformed/duplicate response is unavailable, never an empty scan.
+        if rows:
+            try:
+                validate_codes([row["code"] for row in rows], maximum=MAX_DATA_ROWS)
+            except (KeyError, ValueError):
+                raise TradeQueryError(
+                    "INVALID_RESPONSE",
+                    "get_option_chain",
+                    "invalid/duplicate contract codes",
+                ) from None
+        self.instrument_adapter.remember_option_chain(quote_ctx, rows, observed_at)
+        return rows
 
     @staticmethod
     def _option_filters(condition: str, filters: OptionChainFilter | None) -> dict:
@@ -523,16 +546,20 @@ class MarketDataService(BrokerDataReads):
             values = checked.model_dump(exclude_none=True)
             supported = inspect.signature(OptionDataFilter).parameters
             if set(values) - set(supported):
-                raise RuntimeError(
-                    "Installed SDK does not support requested option filters"
+                raise TradeQueryError(
+                    "CAPABILITY_UNAVAILABLE",
+                    "get_option_chain",
+                    "Installed SDK does not support requested option filters",
                 )
             if values:
                 supplied["data_filter"] = OptionDataFilter(**values)
         if set(supplied) - set(
             inspect.signature(OpenQuoteContext.get_option_chain).parameters
         ):
-            raise RuntimeError(
-                "Installed SDK does not support requested chain parameters"
+            raise TradeQueryError(
+                "CAPABILITY_UNAVAILABLE",
+                "get_option_chain",
+                "Installed SDK does not support requested chain parameters",
             )
         return supplied
 

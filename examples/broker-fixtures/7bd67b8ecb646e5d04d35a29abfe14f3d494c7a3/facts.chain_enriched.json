@@ -1,0 +1,410 @@
+{
+  "broker_double_methods": [
+    "get_option_chain",
+    "get_market_snapshot",
+    "get_stock_basicinfo"
+  ],
+  "case_id": "facts.chain_enriched",
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "prior_discovery": {
+    "request": {
+      "id": "discovery-15",
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {
+          "code": "US.SYNTH",
+          "end": "2026-10-30",
+          "include_evidence": true,
+          "start": "2026-10-30"
+        },
+        "name": "get_option_chain"
+      }
+    },
+    "response": {
+      "id": "discovery-15",
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"schema_version\": \"2026-10-26.1\",\n  \"source_method\": \"get_option_chain\",\n  \"requested_at\": \"2026-10-26T14:30:00Z\",\n  \"received_at\": \"2026-10-26T14:30:00.250Z\",\n  \"sdk_version\": \"10.10.7008\",\n  \"source_revision\": null,\n  \"delay_status\": \"UNKNOWN\",\n  \"entitlement_status\": \"UNKNOWN\",\n  \"timestamp_semantics\": \"Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.\",\n  \"scope\": {\n    \"code\": \"US.SYNTH\",\n    \"start\": \"2026-10-30\",\n    \"end\": \"2026-10-30\",\n    \"option_type\": \"ALL\",\n    \"option_cond_type\": \"ALL\",\n    \"data_filter\": null\n  },\n  \"coverage\": {\n    \"requested\": [],\n    \"returned\": [\n      \"US.SYNTH1261030C100000\"\n    ],\n    \"missing\": [],\n    \"complete_response\": true,\n    \"provider_history_complete\": null,\n    \"truncated\": false,\n    \"total_returned\": 1\n  },\n  \"errors\": {},\n  \"data\": [\n    {\n      \"code\": \"US.SYNTH1261030C100000\",\n      \"stock_owner\": \"US.SYNTH\",\n      \"stock_type\": \"DRVT\",\n      \"option_type\": \"CALL\",\n      \"strike_time\": \"2026-10-30\",\n      \"strike_price\": 100.0,\n      \"lot_size\": 1,\n      \"option_standard_type\": \"NON_STANDARD\",\n      \"option_settlement_mode\": \"PM\",\n      \"suspension\": false\n    }\n  ],\n  \"limitations\": [\n    \"Provider filter inputs, not fresh liquidity; OI updated daily.\",\n    \"Complete response means returned rows within this scope, not a complete provider universe.\",\n    \"No automatic unfiltered retry; callers may explicitly omit data_filter for a basic expiry scan.\"\n  ],\n  \"timing\": {\n    \"deadline_seconds\": 15.0,\n    \"admission_seconds\": 0,\n    \"quota_wait_seconds\": 0,\n    \"worker_queue_seconds\": 0,\n    \"sdk_seconds\": 0,\n    \"total_seconds\": 0,\n    \"sdk_calls_started\": 1,\n    \"sdk_calls_completed\": 1,\n    \"sdk_in_flight\": false\n  }\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "result": {
+            "coverage": {
+              "complete_response": true,
+              "missing": [],
+              "provider_history_complete": null,
+              "requested": [],
+              "returned": [
+                "US.SYNTH1261030C100000"
+              ],
+              "total_returned": 1,
+              "truncated": false
+            },
+            "data": [
+              {
+                "code": "US.SYNTH1261030C100000",
+                "lot_size": 1,
+                "option_settlement_mode": "PM",
+                "option_standard_type": "NON_STANDARD",
+                "option_type": "CALL",
+                "stock_owner": "US.SYNTH",
+                "stock_type": "DRVT",
+                "strike_price": 100.0,
+                "strike_time": "2026-10-30",
+                "suspension": false
+              }
+            ],
+            "delay_status": "UNKNOWN",
+            "entitlement_status": "UNKNOWN",
+            "errors": {},
+            "limitations": [
+              "Provider filter inputs, not fresh liquidity; OI updated daily.",
+              "Complete response means returned rows within this scope, not a complete provider universe.",
+              "No automatic unfiltered retry; callers may explicitly omit data_filter for a basic expiry scan."
+            ],
+            "received_at": "2026-10-26T14:30:00.250Z",
+            "requested_at": "2026-10-26T14:30:00Z",
+            "schema_version": "2026-10-26.1",
+            "scope": {
+              "code": "US.SYNTH",
+              "data_filter": null,
+              "end": "2026-10-30",
+              "option_cond_type": "ALL",
+              "option_type": "ALL",
+              "start": "2026-10-30"
+            },
+            "sdk_version": "10.10.7008",
+            "source_method": "get_option_chain",
+            "source_revision": null,
+            "timestamp_semantics": "Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.",
+            "timing": {
+              "admission_seconds": 0.0,
+              "deadline_seconds": 15.0,
+              "quota_wait_seconds": 0.0,
+              "sdk_calls_completed": 1,
+              "sdk_calls_started": 1,
+              "sdk_in_flight": false,
+              "sdk_seconds": 0.0,
+              "total_seconds": 0.0,
+              "worker_queue_seconds": 0.0
+            }
+          }
+        }
+      }
+    }
+  },
+  "request": {
+    "id": 15,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "codes": [
+          "US.SYNTH1261030C100000"
+        ]
+      },
+      "name": "get_instrument_facts"
+    }
+  },
+  "response": {
+    "id": 15,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"schema_version\": \"2026-10-26.1\",\n  \"source_method\": \"get_stock_basicinfo+get_market_snapshot+get_option_chain\",\n  \"requested_at\": \"2026-10-26T14:30:00Z\",\n  \"received_at\": \"2026-10-26T14:30:00.250Z\",\n  \"sdk_version\": \"10.10.7008\",\n  \"source_revision\": null,\n  \"delay_status\": \"UNKNOWN\",\n  \"entitlement_status\": \"UNKNOWN\",\n  \"timestamp_semantics\": \"Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.\",\n  \"scope\": {\n    \"chain_enrichment\": \"prior_observations_only\"\n  },\n  \"coverage\": {\n    \"requested\": [\n      \"US.SYNTH1261030C100000\"\n    ],\n    \"returned\": [\n      \"US.SYNTH1261030C100000\"\n    ],\n    \"missing\": [],\n    \"complete_response\": true,\n    \"provider_history_complete\": null,\n    \"truncated\": false,\n    \"total_returned\": 1\n  },\n  \"errors\": {},\n  \"data\": [\n    {\n      \"code\": \"US.SYNTH1261030C100000\",\n      \"facts\": {\n        \"is_option\": {\n          \"state\": \"KNOWN\",\n          \"value\": true,\n          \"evidence\": [\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"option_valid\",\n              \"value\": true,\n              \"raw_value\": true,\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            }\n          ]\n        },\n        \"option_type\": {\n          \"state\": \"KNOWN\",\n          \"value\": \"CALL\",\n          \"evidence\": [\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"option_type\",\n              \"value\": \"CALL\",\n              \"raw_value\": \"CALL\",\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            },\n            {\n              \"source_method\": \"get_option_chain\",\n              \"source_field\": \"option_type\",\n              \"value\": \"CALL\",\n              \"raw_value\": \"CALL\",\n              \"observed_at\": \"2026-10-26T14:30:00.050Z\"\n            }\n          ]\n        },\n        \"underlying\": {\n          \"state\": \"KNOWN\",\n          \"value\": \"US.SYNTH\",\n          \"evidence\": [\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"stock_owner\",\n              \"value\": \"US.SYNTH\",\n              \"raw_value\": \"US.SYNTH\",\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            },\n            {\n              \"source_method\": \"get_option_chain\",\n              \"source_field\": \"stock_owner\",\n              \"value\": \"US.SYNTH\",\n              \"raw_value\": \"US.SYNTH\",\n              \"observed_at\": \"2026-10-26T14:30:00.050Z\"\n            }\n          ]\n        },\n        \"expiry\": {\n          \"state\": \"KNOWN\",\n          \"value\": \"2026-10-30\",\n          \"evidence\": [\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"strike_time\",\n              \"value\": \"2026-10-30\",\n              \"raw_value\": \"2026-10-30\",\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            },\n            {\n              \"source_method\": \"get_option_chain\",\n              \"source_field\": \"strike_time\",\n              \"value\": \"2026-10-30\",\n              \"raw_value\": \"2026-10-30\",\n              \"observed_at\": \"2026-10-26T14:30:00.050Z\"\n            }\n          ]\n        },\n        \"strike\": {\n          \"state\": \"KNOWN\",\n          \"value\": 100.0,\n          \"evidence\": [\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"option_strike_price\",\n              \"value\": 100.0,\n              \"raw_value\": 100.0,\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            },\n            {\n              \"source_method\": \"get_option_chain\",\n              \"source_field\": \"strike_price\",\n              \"value\": 100.0,\n              \"raw_value\": 100.0,\n              \"observed_at\": \"2026-10-26T14:30:00.050Z\"\n            }\n          ]\n        },\n        \"classification\": {\n          \"state\": \"KNOWN\",\n          \"value\": \"DRVT\",\n          \"evidence\": [\n            {\n              \"source_method\": \"get_stock_basicinfo\",\n              \"source_field\": \"stock_type\",\n              \"value\": \"DRVT\",\n              \"raw_value\": \"DRVT\",\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            },\n            {\n              \"source_method\": \"get_option_chain\",\n              \"source_field\": \"stock_type\",\n              \"value\": \"DRVT\",\n              \"raw_value\": \"DRVT\",\n              \"observed_at\": \"2026-10-26T14:30:00.050Z\"\n            }\n          ]\n        },\n        \"lot_size\": {\n          \"state\": \"KNOWN\",\n          \"value\": 1.0,\n          \"evidence\": [\n            {\n              \"source_method\": \"get_stock_basicinfo\",\n              \"source_field\": \"lot_size\",\n              \"value\": 1.0,\n              \"raw_value\": 1,\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            },\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"lot_size\",\n              \"value\": 1.0,\n              \"raw_value\": 1,\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            },\n            {\n              \"source_method\": \"get_option_chain\",\n              \"source_field\": \"lot_size\",\n              \"value\": 1.0,\n              \"raw_value\": 1,\n              \"observed_at\": \"2026-10-26T14:30:00.050Z\"\n            }\n          ]\n        },\n        \"currency\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"exercise_style\": {\n          \"state\": \"KNOWN\",\n          \"value\": \"AMERICAN\",\n          \"evidence\": [\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"option_area_type\",\n              \"value\": \"AMERICAN\",\n              \"raw_value\": \"AMERICAN\",\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            }\n          ]\n        },\n        \"settlement_mode\": {\n          \"state\": \"KNOWN\",\n          \"value\": \"PM\",\n          \"evidence\": [\n            {\n              \"source_method\": \"get_option_chain\",\n              \"source_field\": \"option_settlement_mode\",\n              \"value\": \"PM\",\n              \"raw_value\": \"PM\",\n              \"observed_at\": \"2026-10-26T14:30:00.050Z\"\n            }\n          ]\n        },\n        \"settlement_cutoff\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"deliverable_size\": {\n          \"state\": \"KNOWN\",\n          \"value\": 150.0,\n          \"evidence\": [\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"option_contract_size\",\n              \"value\": 150.0,\n              \"raw_value\": 150,\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            }\n          ]\n        },\n        \"deliverable_description\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"monetary_multiplier\": {\n          \"state\": \"KNOWN\",\n          \"value\": 25.0,\n          \"evidence\": [\n            {\n              \"source_method\": \"get_market_snapshot\",\n              \"source_field\": \"option_contract_multiplier\",\n              \"value\": 25.0,\n              \"raw_value\": 25,\n              \"observed_at\": \"2026-10-26T14:30:00.100Z\"\n            }\n          ]\n        },\n        \"standard_status\": {\n          \"state\": \"KNOWN\",\n          \"value\": \"NON_STANDARD\",\n          \"evidence\": [\n            {\n              \"source_method\": \"get_option_chain\",\n              \"source_field\": \"option_standard_type\",\n              \"value\": \"NON_STANDARD\",\n              \"raw_value\": \"NON_STANDARD\",\n              \"observed_at\": \"2026-10-26T14:30:00.050Z\"\n            }\n          ]\n        }\n      },\n      \"snapshot_requested_at\": \"2026-10-26T14:30:00.100Z\",\n      \"snapshot_received_at\": \"2026-10-26T14:30:00.100Z\",\n      \"snapshot_present\": true,\n      \"reference_present\": true,\n      \"chain_observation_present\": true,\n      \"static_cache_ttl_seconds\": 300.0,\n      \"compatibility_verified\": false\n    }\n  ],\n  \"limitations\": [\n    \"Unknown/conflicting lifecycle facts do not establish compatibility.\",\n    \"Basic/observed chain metadata may be cached; snapshots are requested anew.\",\n    \"Chain enrichment uses prior successful discovery only; no chain is queried here.\",\n    \"Lot size is not deliverable size or the monetary multiplier.\",\n    \"Complete source coverage is not complete contract facts or deliverable components.\"\n  ],\n  \"timing\": {\n    \"deadline_seconds\": 15.0,\n    \"admission_seconds\": 0,\n    \"quota_wait_seconds\": 0,\n    \"worker_queue_seconds\": 0,\n    \"sdk_seconds\": 0,\n    \"total_seconds\": 0,\n    \"sdk_calls_started\": 2,\n    \"sdk_calls_completed\": 2,\n    \"sdk_in_flight\": false\n  }\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "coverage": {
+          "complete_response": true,
+          "missing": [],
+          "provider_history_complete": null,
+          "requested": [
+            "US.SYNTH1261030C100000"
+          ],
+          "returned": [
+            "US.SYNTH1261030C100000"
+          ],
+          "total_returned": 1,
+          "truncated": false
+        },
+        "data": [
+          {
+            "chain_observation_present": true,
+            "code": "US.SYNTH1261030C100000",
+            "compatibility_verified": false,
+            "facts": {
+              "classification": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": "DRVT",
+                    "source_field": "stock_type",
+                    "source_method": "get_stock_basicinfo",
+                    "value": "DRVT"
+                  },
+                  {
+                    "observed_at": "2026-10-26T14:30:00.050Z",
+                    "raw_value": "DRVT",
+                    "source_field": "stock_type",
+                    "source_method": "get_option_chain",
+                    "value": "DRVT"
+                  }
+                ],
+                "state": "KNOWN",
+                "value": "DRVT"
+              },
+              "currency": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "deliverable_description": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "deliverable_size": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": 150,
+                    "source_field": "option_contract_size",
+                    "source_method": "get_market_snapshot",
+                    "value": 150.0
+                  }
+                ],
+                "state": "KNOWN",
+                "value": 150.0
+              },
+              "exercise_style": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": "AMERICAN",
+                    "source_field": "option_area_type",
+                    "source_method": "get_market_snapshot",
+                    "value": "AMERICAN"
+                  }
+                ],
+                "state": "KNOWN",
+                "value": "AMERICAN"
+              },
+              "expiry": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": "2026-10-30",
+                    "source_field": "strike_time",
+                    "source_method": "get_market_snapshot",
+                    "value": "2026-10-30"
+                  },
+                  {
+                    "observed_at": "2026-10-26T14:30:00.050Z",
+                    "raw_value": "2026-10-30",
+                    "source_field": "strike_time",
+                    "source_method": "get_option_chain",
+                    "value": "2026-10-30"
+                  }
+                ],
+                "state": "KNOWN",
+                "value": "2026-10-30"
+              },
+              "is_option": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": true,
+                    "source_field": "option_valid",
+                    "source_method": "get_market_snapshot",
+                    "value": true
+                  }
+                ],
+                "state": "KNOWN",
+                "value": true
+              },
+              "lot_size": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": 1,
+                    "source_field": "lot_size",
+                    "source_method": "get_stock_basicinfo",
+                    "value": 1.0
+                  },
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": 1,
+                    "source_field": "lot_size",
+                    "source_method": "get_market_snapshot",
+                    "value": 1.0
+                  },
+                  {
+                    "observed_at": "2026-10-26T14:30:00.050Z",
+                    "raw_value": 1,
+                    "source_field": "lot_size",
+                    "source_method": "get_option_chain",
+                    "value": 1.0
+                  }
+                ],
+                "state": "KNOWN",
+                "value": 1.0
+              },
+              "monetary_multiplier": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": 25,
+                    "source_field": "option_contract_multiplier",
+                    "source_method": "get_market_snapshot",
+                    "value": 25.0
+                  }
+                ],
+                "state": "KNOWN",
+                "value": 25.0
+              },
+              "option_type": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": "CALL",
+                    "source_field": "option_type",
+                    "source_method": "get_market_snapshot",
+                    "value": "CALL"
+                  },
+                  {
+                    "observed_at": "2026-10-26T14:30:00.050Z",
+                    "raw_value": "CALL",
+                    "source_field": "option_type",
+                    "source_method": "get_option_chain",
+                    "value": "CALL"
+                  }
+                ],
+                "state": "KNOWN",
+                "value": "CALL"
+              },
+              "settlement_cutoff": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "settlement_mode": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.050Z",
+                    "raw_value": "PM",
+                    "source_field": "option_settlement_mode",
+                    "source_method": "get_option_chain",
+                    "value": "PM"
+                  }
+                ],
+                "state": "KNOWN",
+                "value": "PM"
+              },
+              "standard_status": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.050Z",
+                    "raw_value": "NON_STANDARD",
+                    "source_field": "option_standard_type",
+                    "source_method": "get_option_chain",
+                    "value": "NON_STANDARD"
+                  }
+                ],
+                "state": "KNOWN",
+                "value": "NON_STANDARD"
+              },
+              "strike": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": 100.0,
+                    "source_field": "option_strike_price",
+                    "source_method": "get_market_snapshot",
+                    "value": 100.0
+                  },
+                  {
+                    "observed_at": "2026-10-26T14:30:00.050Z",
+                    "raw_value": 100.0,
+                    "source_field": "strike_price",
+                    "source_method": "get_option_chain",
+                    "value": 100.0
+                  }
+                ],
+                "state": "KNOWN",
+                "value": 100.0
+              },
+              "underlying": {
+                "evidence": [
+                  {
+                    "observed_at": "2026-10-26T14:30:00.100Z",
+                    "raw_value": "US.SYNTH",
+                    "source_field": "stock_owner",
+                    "source_method": "get_market_snapshot",
+                    "value": "US.SYNTH"
+                  },
+                  {
+                    "observed_at": "2026-10-26T14:30:00.050Z",
+                    "raw_value": "US.SYNTH",
+                    "source_field": "stock_owner",
+                    "source_method": "get_option_chain",
+                    "value": "US.SYNTH"
+                  }
+                ],
+                "state": "KNOWN",
+                "value": "US.SYNTH"
+              }
+            },
+            "reference_present": true,
+            "snapshot_present": true,
+            "snapshot_received_at": "2026-10-26T14:30:00.100Z",
+            "snapshot_requested_at": "2026-10-26T14:30:00.100Z",
+            "static_cache_ttl_seconds": 300.0
+          }
+        ],
+        "delay_status": "UNKNOWN",
+        "entitlement_status": "UNKNOWN",
+        "errors": {},
+        "limitations": [
+          "Unknown/conflicting lifecycle facts do not establish compatibility.",
+          "Basic/observed chain metadata may be cached; snapshots are requested anew.",
+          "Chain enrichment uses prior successful discovery only; no chain is queried here.",
+          "Lot size is not deliverable size or the monetary multiplier.",
+          "Complete source coverage is not complete contract facts or deliverable components."
+        ],
+        "received_at": "2026-10-26T14:30:00.250Z",
+        "requested_at": "2026-10-26T14:30:00Z",
+        "schema_version": "2026-10-26.1",
+        "scope": {
+          "chain_enrichment": "prior_observations_only"
+        },
+        "sdk_version": "10.10.7008",
+        "source_method": "get_stock_basicinfo+get_market_snapshot+get_option_chain",
+        "source_revision": null,
+        "timestamp_semantics": "Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.",
+        "timing": {
+          "admission_seconds": 0.0,
+          "deadline_seconds": 15.0,
+          "quota_wait_seconds": 0.0,
+          "sdk_calls_completed": 2,
+          "sdk_calls_started": 2,
+          "sdk_in_flight": false,
+          "sdk_seconds": 0.0,
+          "total_seconds": 0.0,
+          "worker_queue_seconds": 0.0
+        }
+      }
+    }
+  }
+}

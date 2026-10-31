@@ -40,8 +40,13 @@ async def get_instrument_facts(
     Monetary multiplier, deliverable and lot size remain separate. Each fact
     has source, observation time and KNOWN/UNKNOWN/CONFLICT state. No hardcoded
     multiplier, symbol-derived currency or inferred settlement/cutoff. Static
-    metadata may be cached for 300s; snapshot facts are requested anew. Unknown
-    lifecycle facts cannot establish compatibility for consumer simulation.
+    metadata may be cached for 300s; snapshot facts are requested anew. Prior
+    successful chain discoveries can enrich exact-code facts for the same TTL,
+    with their original observation time; this tool never queries a chain.
+    Chain strike_price and snapshot option_strike_price describe the strike,
+    not the premium multiplier. Unknown lifecycle/deliverable facts cannot
+    establish compatibility for consumer simulation. AM/PM is not a verified
+    settlement cutoff; STANDARD does not establish complete deliverable components.
     """
     return await run_blocking(
         ctx.request_context.lifespan_context.market_data_service.get_instrument_facts,

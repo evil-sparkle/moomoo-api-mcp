@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from moomoo_mcp.catalogue_capture import verify_lab_scanner_catalogue
 from scripts.private_chatgpt_preflight import (
     DEFAULT_URL,
     MAX_RESPONSE_BYTES,
@@ -128,10 +129,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--authorization-file", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--profile", choices=["lab-scanner"])
+    parser.add_argument("--expected-tools-sha256")
     args = parser.parse_args(argv)
     try:
         validate_url(args.url)
         validate_timeout(args.timeout)
+        if args.expected_tools_sha256 and args.profile != "lab-scanner":
+            raise PreflightError(
+                "An expected schema hash requires --profile lab-scanner."
+            )
         if args.output.suffix != ".json" or args.output.exists():
             raise PreflightError("Catalogue output must be a new .json file.")
         client = McpClient(
@@ -140,6 +147,13 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
         )
         record = capture(client)
+        if args.profile == "lab-scanner":
+            try:
+                record["profile_verification"] = verify_lab_scanner_catalogue(
+                    record["tools"], expected_sha256=args.expected_tools_sha256
+                )
+            except ValueError as exc:
+                raise PreflightError(str(exc)) from None
         write_capture(args.output, record)
     except PreflightError as exc:
         print(f"mcp_catalogue: FAIL: {exc}", file=sys.stderr)

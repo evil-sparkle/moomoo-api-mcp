@@ -30,6 +30,8 @@ Each scenario JSON has `fixture_kind`, `case_id`, `permissions`, `request`,
 the response is produced through the registered low-level MCP handler and the
 MCP `JSONRPCResponse` codec with synthetic SDK DataFrame broker doubles. The
 surrounding fixture metadata is not part of the broker response.
+The new `facts.chain_enriched.json` also carries `prior_discovery`, the exact
+synthetic registered chain request/response observed before the facts read.
 
 | Tool | Actual response value path | Contract |
 | --- | --- | --- |
@@ -57,6 +59,8 @@ evidence that any real credential lacks permission. Validate success
 | `facts.conflict.json` | Basicinfo/snapshot lot sizes disagree. State CONFLICT, value null, both observations retained. Never pick the convenient value. |
 | `facts.zero_unknown.json` | Provider zero multiplier/deliverable normalizes to UNKNOWN/null, not a free or zero-sized contract. |
 | `facts.missing_sources.json` | Missing snapshot/reference sources, placeholder fact row and incomplete coverage. A row in `.data` or `.coverage.returned` does not establish complete sources. |
+| `chain.unfiltered_expiry.json` | Explicit basic single-expiry discovery with no data_filter, exact codes, coverage and timing. |
+| `facts.chain_enriched.json` | A prior successful discovery supplies NON_STANDARD/PM with original field provenance. Lot 1, deliverable 150 and multiplier 25 stay separate; currency, cutoff and full deliverable description remain unknown. |
 
 Provider `update_time` remains exactly `2026-10-26 10:29:59.123` where supplied.
 The synthetic UTC request time is `2026-10-26T14:30:00Z`; receipt is
@@ -117,14 +121,17 @@ This bundle unblocks offline adapter/snapshot evolution, not live acceptance.
 
 ## Current runtime fixture pin
 
-The replay generator now targets `6f4e3d7af22f633ff8e4be078c950dacc1c9115f/`,
-which pins bounded read admission, deadlines/timing and all 55 runtime source
-files. Its 14 wire/catalogue JSON files include the additive optional timing
-schema and read-duration evidence. The generator freezes its monotonic clock:
+The replay generator now targets `7bd67b8ecb646e5d04d35a29abfe14f3d494c7a3/`,
+which pins Lab scanner profile verification, observed contract-fact enrichment,
+bounded discovery and all 57 runtime source files. Its 16 wire/catalogue JSON
+files include the additive timing evidence, exact profile verification, explicit
+unfiltered expiry fallback, and prior chain-to-facts provenance. The generator
+freezes its monotonic clock:
 zero duration fields are reproducible synthetic inputs, not latency measurements.
 The historical `2c019d50238d636deea5e49d3b48eac7868ff69b/`,
-`ba005ff7ffb3c32a3366c2b4861a9c71ae79951f/`, and
-`e5488ed9d84cdf4ac3372f82335fa29e96be5964/` sets are preserved unchanged.
+`ba005ff7ffb3c32a3366c2b4861a9c71ae79951f/`,
+`e5488ed9d84cdf4ac3372f82335fa29e96be5964/`, and
+`6f4e3d7af22f633ff8e4be078c950dacc1c9115f/` sets are preserved unchanged.
 Each manifest keeps its own exact source commit/tree, runtime hashes, package
 versions and payload hashes; no old artifact is relabelled.
 The generator remains synthetic and denies SDK context construction, sockets,
