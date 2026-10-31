@@ -28,7 +28,7 @@ from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.tools.trading_contract import server_contract_identity
 
-SOURCE = "e5488ed9d84cdf4ac3372f82335fa29e96be5964"
+SOURCE = "d8aab13379849fecd82f4a381bf8f8d157a92e86"
 ROOT = Path(__file__).resolve().parents[1]
 DESTINATION = ROOT / "examples" / "broker-fixtures" / SOURCE
 NORMAL = "US.SYNTH261030C100000"

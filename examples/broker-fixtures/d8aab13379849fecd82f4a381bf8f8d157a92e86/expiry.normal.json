@@ -1,0 +1,43 @@
+{
+  "broker_double_methods": [
+    "get_option_expiration_date"
+  ],
+  "case_id": "expiry.normal",
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "request": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "code": "US.SYNTH"
+      },
+      "name": "get_option_expiration_date"
+    }
+  },
+  "response": {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"strike_time\": \"2026-10-30\",\n  \"option_expiry_date_distance\": 4,\n  \"expiration_cycle\": \"WEEK\"\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "result": [
+          {
+            "expiration_cycle": "WEEK",
+            "option_expiry_date_distance": 4,
+            "strike_time": "2026-10-30"
+          }
+        ]
+      }
+    }
+  }
+}

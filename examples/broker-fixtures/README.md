@@ -117,12 +117,14 @@ This bundle unblocks offline adapter/snapshot evolution, not live acceptance.
 
 ## Current runtime fixture pin
 
-The replay generator now targets `e5488ed9d84cdf4ac3372f82335fa29e96be5964/`,
-which pins the preparation/admission account-resolution refactor and all 55
-runtime source files. Its 14 wire/catalogue JSON files are byte-identical to the
-prior `ba005ff7ffb3c32a3366c2b4861a9c71ae79951f/` set. Both
-`2c019d50238d636deea5e49d3b48eac7868ff69b/` and
-`ba005ff7ffb3c32a3366c2b4861a9c71ae79951f/` are preserved unchanged for consumers.
+The replay generator now targets `d8aab13379849fecd82f4a381bf8f8d157a92e86/`,
+which pins the read-deadline/timing implementation and all 55 runtime source
+files. Its 14 wire/catalogue JSON files include the additive optional timing
+schema and read-duration evidence. The generator freezes its monotonic clock:
+zero duration fields are reproducible synthetic inputs, not latency measurements.
+The historical `2c019d50238d636deea5e49d3b48eac7868ff69b/`,
+`ba005ff7ffb3c32a3366c2b4861a9c71ae79951f/`, and
+`e5488ed9d84cdf4ac3372f82335fa29e96be5964/` sets are preserved unchanged.
 Each manifest keeps its own exact source commit/tree, runtime hashes, package
 versions and payload hashes; no old artifact is relabelled.
 The generator remains synthetic and denies SDK context construction, sockets,

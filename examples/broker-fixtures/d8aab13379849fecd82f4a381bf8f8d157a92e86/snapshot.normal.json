@@ -1,0 +1,96 @@
+{
+  "broker_double_methods": [
+    "get_market_snapshot"
+  ],
+  "case_id": "snapshot.normal",
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "request": {
+    "id": 6,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "codes": [
+          "US.SYNTH261030C100000"
+        ]
+      },
+      "name": "get_market_snapshot_evidence"
+    }
+  },
+  "response": {
+    "id": 6,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"schema_version\": \"2026-10-26.1\",\n  \"source_method\": \"get_market_snapshot\",\n  \"requested_at\": \"2026-10-26T14:30:00Z\",\n  \"received_at\": \"2026-10-26T14:30:00.250Z\",\n  \"sdk_version\": \"10.10.7008\",\n  \"source_revision\": null,\n  \"delay_status\": \"UNKNOWN\",\n  \"entitlement_status\": \"UNKNOWN\",\n  \"timestamp_semantics\": \"Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.\",\n  \"scope\": {},\n  \"coverage\": {\n    \"requested\": [\n      \"US.SYNTH261030C100000\"\n    ],\n    \"returned\": [\n      \"US.SYNTH261030C100000\"\n    ],\n    \"missing\": [],\n    \"complete_response\": true,\n    \"provider_history_complete\": null,\n    \"truncated\": false,\n    \"total_returned\": 1\n  },\n  \"errors\": {},\n  \"data\": [\n    {\n      \"code\": \"US.SYNTH261030C100000\",\n      \"stock_owner\": \"US.SYNTH\",\n      \"option_valid\": true,\n      \"option_type\": \"CALL\",\n      \"strike_time\": \"2026-10-30\",\n      \"option_strike_price\": 100.0,\n      \"lot_size\": 100,\n      \"option_contract_multiplier\": 100.0,\n      \"option_contract_size\": 100.0,\n      \"option_area_type\": \"AMERICAN\",\n      \"last_price\": 2.1,\n      \"bid_price\": 2.0,\n      \"ask_price\": 2.2,\n      \"bid_vol\": 5,\n      \"ask_vol\": 7,\n      \"update_time\": \"2026-10-26 10:29:59.123\"\n    }\n  ],\n  \"limitations\": [\n    \"No per-side timestamp, delay, NBBO or atomic liquidity guarantee.\"\n  ],\n  \"timing\": {\n    \"deadline_seconds\": 15.0,\n    \"admission_seconds\": 0,\n    \"quota_wait_seconds\": 0,\n    \"worker_queue_seconds\": 0,\n    \"sdk_seconds\": 0,\n    \"total_seconds\": 0,\n    \"sdk_calls_started\": 1,\n    \"sdk_calls_completed\": 1,\n    \"sdk_in_flight\": false\n  }\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "coverage": {
+          "complete_response": true,
+          "missing": [],
+          "provider_history_complete": null,
+          "requested": [
+            "US.SYNTH261030C100000"
+          ],
+          "returned": [
+            "US.SYNTH261030C100000"
+          ],
+          "total_returned": 1,
+          "truncated": false
+        },
+        "data": [
+          {
+            "ask_price": 2.2,
+            "ask_vol": 7,
+            "bid_price": 2.0,
+            "bid_vol": 5,
+            "code": "US.SYNTH261030C100000",
+            "last_price": 2.1,
+            "lot_size": 100,
+            "option_area_type": "AMERICAN",
+            "option_contract_multiplier": 100.0,
+            "option_contract_size": 100.0,
+            "option_strike_price": 100.0,
+            "option_type": "CALL",
+            "option_valid": true,
+            "stock_owner": "US.SYNTH",
+            "strike_time": "2026-10-30",
+            "update_time": "2026-10-26 10:29:59.123"
+          }
+        ],
+        "delay_status": "UNKNOWN",
+        "entitlement_status": "UNKNOWN",
+        "errors": {},
+        "limitations": [
+          "No per-side timestamp, delay, NBBO or atomic liquidity guarantee."
+        ],
+        "received_at": "2026-10-26T14:30:00.250Z",
+        "requested_at": "2026-10-26T14:30:00Z",
+        "schema_version": "2026-10-26.1",
+        "scope": {},
+        "sdk_version": "10.10.7008",
+        "source_method": "get_market_snapshot",
+        "source_revision": null,
+        "timestamp_semantics": "Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.",
+        "timing": {
+          "admission_seconds": 0.0,
+          "deadline_seconds": 15.0,
+          "quota_wait_seconds": 0.0,
+          "sdk_calls_completed": 1,
+          "sdk_calls_started": 1,
+          "sdk_in_flight": false,
+          "sdk_seconds": 0.0,
+          "total_seconds": 0.0,
+          "worker_queue_seconds": 0.0
+        }
+      }
+    }
+  }
+}
