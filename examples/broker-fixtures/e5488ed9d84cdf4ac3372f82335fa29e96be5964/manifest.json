@@ -1,0 +1,294 @@
+{
+  "catalogue_identity": {
+    "build_revision": null,
+    "contract_version": "2026-10-22.1",
+    "package_version": "0.2.1",
+    "sdk_version": "10.10.7008",
+    "source_revision": "unknown",
+    "tools_schema_sha256": "a35791b05a3e6a591deaca8419272bc424b966cd7fbcc140e09f271964a234d7"
+  },
+  "consumer_constraints": {
+    "ask_age": "UNKNOWN",
+    "atomic_package_liquidity": "UNKNOWN",
+    "bid_age": "UNKNOWN",
+    "compatibility": "NOT_VERIFIED",
+    "currency_from_symbol": "FORBIDDEN",
+    "delay": "UNKNOWN",
+    "entitlement": "UNKNOWN",
+    "monetary_multiplier_fallback": "FORBIDDEN",
+    "provider_update_time_timezone": "UNKNOWN",
+    "settlement_cutoff_inference": "FORBIDDEN"
+  },
+  "entitlements": "UNKNOWN",
+  "environment_note": "Source fixture, not a recreation/attestation of the deployed image. Serialization versions are recorded; no network/TLS operation is performed.",
+  "fixture_files_sha256": {
+    "catalogue.market_read.json": "8f1c3494ddee479117cdac6b2c44f821ffb44742cd6dd4d6a7248f77d9b4bd16",
+    "chain.empty.json": "29fe99081fbb8191d29a26421037bb20085747a0f9564019c46f690c58685302",
+    "chain.normal_adjusted.json": "cffe51ebf98c8bb11ef502919e7dc6f2bb67c359001e8e0ffa1c04b2925fa820",
+    "chain.permission_error.json": "f053b082022cef95a45e5e718bdee3099d4990d19f03fd361a430b5d0ce1e616",
+    "expiry.empty.json": "047877b5c51af2eb13618bd534ebbf36efbd4b916b9f7c9deda30999d3c9f16b",
+    "expiry.normal.json": "5dd7eb57412adc27e2de096b10d98056e50771ab4c96fac81e68a87202503c64",
+    "facts.adjusted_non100.json": "04563a41d27430dc0b51cd72632d8b9ac7f94a2b0e204c3a224301162e6e1b7b",
+    "facts.conflict.json": "7a5545b6a68f753aab0ceae37a0cd6a8ba32a1318dcecd42932f0a4a211c704c",
+    "facts.missing_sources.json": "d69599a37d85b98149992caa4630689179682dad19be1b7865dc06091fc083bb",
+    "facts.standard_incomplete.json": "2e6da6a530aede6a825493ad1dbf3dfb732e0a5f36c7e05ec94239016971dd89",
+    "facts.zero_unknown.json": "3c693293f69c542c6cc5d58863110991799fcd56f42047bfcd6754afca43bfd6",
+    "snapshot.missing_timestamp.json": "b653cf49704fa39eb22208842fdb142645606c7f7e2540ca167e7abeabb6a4fa",
+    "snapshot.normal.json": "15c068253c8b0866a4c6125fa45f6bdc55b8fe6197e975ab30c65871f4493ad9",
+    "snapshot.partial_null_zero.json": "1add1a3911cc42b01b40ee3b4c5f37fb02bc7049c79c6e217db9bcb559e15ea1"
+  },
+  "fixture_kind": "SYNTHETIC",
+  "gateway_contacted": false,
+  "generator_certifi": "2026.10.19",
+  "payload_paths": {
+    "get_instrument_facts": "response.result.structuredContent",
+    "get_market_snapshot_evidence": "response.result.structuredContent",
+    "get_option_chain": "response.result.structuredContent.result",
+    "get_option_expiration_date": "response.result.structuredContent.result"
+  },
+  "payload_source_revision": "Preserved from implementation; null is not overwritten with source_commit.",
+  "permissions": [
+    "market_read"
+  ],
+  "pinned_certifi": "2026.10.19",
+  "pinned_pyproject_sha256": "b769aba222bfc597ba9c5c29faf636c235da3efebaba97594d2a264b9c824dd6",
+  "pinned_uv_lock_sha256": "43d4968462a849da89be89bc7b7ba4292480f28db204d17ec57f404312d75aef",
+  "runtime_files": [
+    {
+      "path": "src/moomoo_mcp/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "src/moomoo_mcp/agent_server.py",
+      "sha256": "fbbcff5c6a48840dc5c7f0ea26384d99df9b8d1e8244d9d6e6e98b63752c65b5"
+    },
+    {
+      "path": "src/moomoo_mcp/build_identity.py",
+      "sha256": "0245bbb9e6e7094eb7cc5ed85d8f491f11025809c31c03aeeb048f348903f621"
+    },
+    {
+      "path": "src/moomoo_mcp/client_authorization.py",
+      "sha256": "156d574f92ec31efe1c3efba01117c45717fe26860746edac1f5ba0f0cf22782"
+    },
+    {
+      "path": "src/moomoo_mcp/resources/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "src/moomoo_mcp/server.py",
+      "sha256": "312e5356da67c021648e96294788f6a62707f2d9e812f99974ebd6f47edde771"
+    },
+    {
+      "path": "src/moomoo_mcp/services/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "src/moomoo_mcp/services/admission.py",
+      "sha256": "60e3c95ed95d0c625e785055ed4cd1510e381f2a51549ca1329d9473d8dd78e6"
+    },
+    {
+      "path": "src/moomoo_mcp/services/base_service.py",
+      "sha256": "d2bfc1d260216a2964c14c2c7d652271e53f79570dfec4960488968faff71091"
+    },
+    {
+      "path": "src/moomoo_mcp/services/broker_data_reads.py",
+      "sha256": "eb13e6a26ce970dc943e18fcf56e3fb05da361f6325c9f26a58edd8c885ced63"
+    },
+    {
+      "path": "src/moomoo_mcp/services/broker_dispatch.py",
+      "sha256": "4ffbf7a7c62ed449507f6f7d1a834c34dbd7e259b0a9c687fc156f7883bbbd9b"
+    },
+    {
+      "path": "src/moomoo_mcp/services/clock.py",
+      "sha256": "66d2fa811950f2775fc86fc2df811d0b4769d07952eab0132be57ff3deeccf5c"
+    },
+    {
+      "path": "src/moomoo_mcp/services/data_evidence.py",
+      "sha256": "80a699566eda4f5dc45fb40f52a3a94e0c1246f4b16c8a164e648520882c8bf7"
+    },
+    {
+      "path": "src/moomoo_mcp/services/execution_identity.py",
+      "sha256": "172a5187662c379d7e38ed967d6b79127b168895fdc594f2905cd500daf171f1"
+    },
+    {
+      "path": "src/moomoo_mcp/services/execution_store.py",
+      "sha256": "91eea92898d3deb421bae322c52021da3fe8fc59952bbd30df0954f0c588e721"
+    },
+    {
+      "path": "src/moomoo_mcp/services/health.py",
+      "sha256": "8398cff0e95bca0393f6cc826a430bfba1397798ac54c442216340c0abad4847"
+    },
+    {
+      "path": "src/moomoo_mcp/services/instrument_rules.py",
+      "sha256": "5623d6b68481bffddfa4f02effa00981f4040203a667680e5f9258249f20db95"
+    },
+    {
+      "path": "src/moomoo_mcp/services/instruments.py",
+      "sha256": "b302ea1a3eaa56f0a2c8066d11f52a4a290125544881ac80275768654799a71e"
+    },
+    {
+      "path": "src/moomoo_mcp/services/market_data_service.py",
+      "sha256": "8db977431ee5ee5f8ac3bc7fe053ca94ee9e838e73bde09bdcd3b5ecd46acab7"
+    },
+    {
+      "path": "src/moomoo_mcp/services/order_errors.py",
+      "sha256": "1bd46637bef39fa1ef321b52b7964bc40716e5557bceb19430b4f4a5422590fd"
+    },
+    {
+      "path": "src/moomoo_mcp/services/paper_execution.py",
+      "sha256": "cc221fc1a21c6f84e79da44c5d2e66abdeb213b8b7e9c71e2a17034a4acfca61"
+    },
+    {
+      "path": "src/moomoo_mcp/services/paper_recovery.py",
+      "sha256": "35b18fed1231c12811114fc4c908a9cde006e61807754a2a67328f34aa31bed9"
+    },
+    {
+      "path": "src/moomoo_mcp/services/query_contracts.py",
+      "sha256": "f7fa6de8da9602a48e7e6d049ddb296695545ed2f26d06b38c5611071f4257c6"
+    },
+    {
+      "path": "src/moomoo_mcp/services/query_snapshots.py",
+      "sha256": "515060d916da66927ca198f786bc38e34d85a83081fc62f3308869a87964c147"
+    },
+    {
+      "path": "src/moomoo_mcp/services/quote_errors.py",
+      "sha256": "d51fffc9d923e95bda18a1f1fda1a7c9f09df30a6369d3b748958739a4758417"
+    },
+    {
+      "path": "src/moomoo_mcp/services/rate_limit.py",
+      "sha256": "8c16de97551181d27b8ef1626a9ccae8714fa3ddca8f807288b26c00935d7eef"
+    },
+    {
+      "path": "src/moomoo_mcp/services/real_execution.py",
+      "sha256": "adfe629cfa2f32a33af46fa96044919cf5658c69a1cd96200d30f0cd6dc200ad"
+    },
+    {
+      "path": "src/moomoo_mcp/services/real_recovery.py",
+      "sha256": "3ad92b7f20fb0d29fc6a2a378eef4149e25bdbf411d3cd4968f5133503ca25ef"
+    },
+    {
+      "path": "src/moomoo_mcp/services/recovery.py",
+      "sha256": "208c205864a45d0522555c84e79ba48aff45385515d3dd51986f63a2cdfc1dfd"
+    },
+    {
+      "path": "src/moomoo_mcp/services/sdk_response.py",
+      "sha256": "879c3fcf13aff082223f0b68ccb47e9967b157f52d0b99994bebaab436b82f03"
+    },
+    {
+      "path": "src/moomoo_mcp/services/trade_events.py",
+      "sha256": "2e64bde392d332987a1101dbe5ba5bca6361fbeef306a9edeec867e5a2e7dc27"
+    },
+    {
+      "path": "src/moomoo_mcp/services/trade_preparation.py",
+      "sha256": "5cc9c2decd376e3f8c9d9ffef83ada1521702aff29a36829ce85b8a19f12bc35"
+    },
+    {
+      "path": "src/moomoo_mcp/services/trade_queries.py",
+      "sha256": "b88dd40a0acb68289be3ffb55c3f94280b9f3d3108734d74e0d2030bf611693e"
+    },
+    {
+      "path": "src/moomoo_mcp/services/trade_service.py",
+      "sha256": "a11c5c54a17801f51a1416c4aebdaad965f7dd1f3e1d0a8802a079fa3625b8eb"
+    },
+    {
+      "path": "src/moomoo_mcp/services/trading_capabilities.py",
+      "sha256": "79892f2680cad67e12bf9d0bd79762281936ea3f9507981750cd1516f1acf7c6"
+    },
+    {
+      "path": "src/moomoo_mcp/services/trading_controls.py",
+      "sha256": "9a8fa3ddf210e72ca56e72759b3464bd90dd60c231cdff77ce77ddada7417ef3"
+    },
+    {
+      "path": "src/moomoo_mcp/services/trading_market.py",
+      "sha256": "8db48876469635a1a6350ce7cbe7464302eee0af206fcfa5e4ed1e6f812d545e"
+    },
+    {
+      "path": "src/moomoo_mcp/services/trading_policy.py",
+      "sha256": "7bda1522467843bd434a6e324af187cfe357efdd308266cce38e5caa8545a0fe"
+    },
+    {
+      "path": "src/moomoo_mcp/services/validation.py",
+      "sha256": "a3b74d5e5a4697c2a94561137b418e0a2fd6d9f1b7ee2421325b44a91d4f73bd"
+    },
+    {
+      "path": "src/moomoo_mcp/settings.py",
+      "sha256": "5ef2f4ce5dc085626062ede42c89bccdddac59f2fc2cf161e13485de1b3608be"
+    },
+    {
+      "path": "src/moomoo_mcp/supervisor.py",
+      "sha256": "903724396fd7aa6e1385982964a746a3d9c515e888e0b4e4dce539c0e677b943"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/account.py",
+      "sha256": "502f209c636e3d2ba50d43acf04feb7c6ae3bba3af1530c21cb264b8828dad53"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/annotations.py",
+      "sha256": "e6ecd7f6eea94d2b99a7ac6994762e7cfaac878c3261fef97bab84b03d56755c"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/broker_data.py",
+      "sha256": "40be9bb9fbf1625f832095177e1ef86d3c794ba8761a30988e4a3ed8c00e0041"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/kline_cursor.py",
+      "sha256": "b57c237048cbc35f80db498a4761a45ec93bed2c65d668dfcba66863d1c48e2d"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/market_data.py",
+      "sha256": "cb17f8a6f8cc0654863c15e1153b54b33a87f1fa25c6a7be01ef22f433cfc7ce"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/offload.py",
+      "sha256": "54f9bdefb50b8c22d4a7b1cde845f4a3f3828b0b6f894ab56ac307d7497d90a5"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/serialization.py",
+      "sha256": "39c85a489bfbcc3790a0bfa4f23c6a944da87af1d2979eba8611957a41aad718"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/system.py",
+      "sha256": "53ac62dd112ae9566060b54b3381d1414e2dc1ec9a3624a2935228127136b343"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/trade_inspection.py",
+      "sha256": "d8934babda3643a70bf057d9e4421b09042da0f2204b7d4ccc4373d0d9979ddc"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/trade_preparation.py",
+      "sha256": "b36e22e9774b32bc48c80568850eb1228422959b1f602f390975f3de07ab3686"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/trade_queries.py",
+      "sha256": "eb555c12208f086afdfbcfaa9bee0d52c32a54522041b1e27a55f6ba14d3a060"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/trading.py",
+      "sha256": "31d9f67786f081cae4539fc0ac918f8dd4d6e584cf1b866252f3a92287b0d10a"
+    },
+    {
+      "path": "src/moomoo_mcp/tools/trading_contract.py",
+      "sha256": "2f2f8896ea8f3e61b568b77aa3e400354f525d2af347f6f472695690c1863df8"
+    }
+  ],
+  "runtime_support": "UNKNOWN",
+  "selected_python_signatures": {
+    "get_instrument_facts": "(ctx: mcp.server.fastmcp.server.Context[ServerSession, AppContext, Any], codes: Annotated[list[Annotated[str, Strict(strict=True)]], FieldInfo(annotation=NoneType, required=True, metadata=[MinLen(min_length=1), MaxLen(max_length=100)])]) -> moomoo_mcp.services.data_evidence.DataEvidence",
+    "get_market_snapshot_evidence": "(ctx: mcp.server.fastmcp.server.Context[ServerSession, AppContext, Any], codes: Annotated[list[Annotated[str, Strict(strict=True)]], FieldInfo(annotation=NoneType, required=True, metadata=[MinLen(min_length=1), MaxLen(max_length=100)])]) -> moomoo_mcp.services.data_evidence.DataEvidence",
+    "get_option_chain": "(ctx: mcp.server.fastmcp.server.Context[ServerSession, AppContext, Any], code: str, start: str | None = None, end: str | None = None, option_type: str = 'ALL', option_cond_type: str = 'ALL', data_filter: moomoo_mcp.services.data_evidence.OptionChainFilter | None = None, include_evidence: bool = False) -> list[dict] | moomoo_mcp.services.data_evidence.DataEvidence",
+    "get_option_expiration_date": "(ctx: mcp.server.fastmcp.server.Context[ServerSession, AppContext, Any], code: str) -> list[dict]"
+  },
+  "serialization_packages": {
+    "mcp": "1.25.0",
+    "moomoo-api": "10.10.7008",
+    "pandas": "2.3.3",
+    "pydantic": "2.12.5"
+  },
+  "source_commit": "e5488ed9d84cdf4ac3372f82335fa29e96be5964",
+  "source_tree": "4166741d219e4420243de33435e9595c4d0b9d17",
+  "source_url": "https://github.com/evil-sparkle/moomoo-api-mcp/tree/e5488ed9d84cdf4ac3372f82335fa29e96be5964"
+}

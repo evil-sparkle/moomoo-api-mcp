@@ -8,6 +8,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from moomoo_mcp.client_authorization import check_account_access
 from moomoo_mcp.services.broker_dispatch import QuotaRequest
 from moomoo_mcp.services.execution_identity import validate_token
 from moomoo_mcp.services.instrument_rules import normalize_order_session
@@ -171,6 +172,7 @@ def prepare_trade_call(
 ) -> AdmissionPlan:
     if method in {"preview_order", "prepare_trade_request"}:
         from moomoo_mcp.services.trade_preparation import (
+            _preparation_market,
             bound_parameters,
             validate_preparation,
         )
@@ -186,22 +188,27 @@ def prepare_trade_call(
         environment = request_params["trd_env"]
         if method == "prepare_trade_request":
             validate_preparation(service, prepared_method, request_params)
-            market = None
-            if prepared_method == "place_order":
-                market = service._get_market_from_code(request_params["code"])
-            elif prepared_method == "place_combo_order":
-                legs = service._build_combo_legs(request_params["combo_legs"])
-                market = service._get_market_from_code(legs[0].code)
+            market = _preparation_market(service, prepared_method, request_params)
             if environment == "SIMULATE":
                 assert service.paper is not None
                 account = service.paper._account(request_params["acc_id"])
+                check_account_access(environment, account, write=False)
             else:
                 account = service._resolve_account(
                     environment, market, request_params["acc_id"]
                 )
+                if int(request_params["acc_id"]) != 0:
+                    _, account = service.resolve_read_account(
+                        environment, request_params["acc_id"]
+                    )
+                else:
+                    check_account_access(environment, account, write=False)
             request_params["acc_id"] = str(account)
             params["parameters"] = request_params
-        _, account = service.resolve_read_account(environment, request_params["acc_id"])
+        else:
+            _, account = service.resolve_read_account(
+                environment, request_params["acc_id"]
+            )
         requests = []
         if prepared_method == "place_order":
             requests.extend(

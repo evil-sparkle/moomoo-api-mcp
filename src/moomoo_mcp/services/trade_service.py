@@ -1682,7 +1682,7 @@ class TradeService:
         order_type: str,
         trd_side: str,
         qty: int,
-        price: float | None,
+        price: float | str | None,
         aux_price: float | None,
         session: str = Session.NONE,
     ) -> OrderFacts:
@@ -1707,7 +1707,7 @@ class TradeService:
             trd_side=trd_side,
             qty=qty,
             legs=legs,
-            price=price,
+            price=float(price) if price is not None else None,
             aux_price=aux_price,
         )
 
