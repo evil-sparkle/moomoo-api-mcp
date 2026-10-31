@@ -60,7 +60,7 @@
     },
     {
       "path": "src/moomoo_mcp/agent_server.py",
-      "sha256": "3cc5c76a582eda983a355502b23511cc9d20619c1929101dcfd3c99ea11849d7"
+      "sha256": "d943bfd6cae3c6c753af1128510b13a04aab92903a5526d9b812d629c33df737"
     },
     {
       "path": "src/moomoo_mcp/build_identity.py",
@@ -96,7 +96,7 @@
     },
     {
       "path": "src/moomoo_mcp/services/broker_dispatch.py",
-      "sha256": "96bb14b4d57557d3a74b5cf317bbf22fb1a5f20a6bdac1fec682d04a23ad80de"
+      "sha256": "6b609612e3534f2432a8233fdba0b65eac98a7cd6455f0fa884423abbfa8caf2"
     },
     {
       "path": "src/moomoo_mcp/services/clock.py",
@@ -288,7 +288,7 @@
     "pandas": "2.3.3",
     "pydantic": "2.12.5"
   },
-  "source_commit": "d8aab13379849fecd82f4a381bf8f8d157a92e86",
-  "source_tree": "d0630fcff5b5630c83fd03b506d1779557dc8541",
-  "source_url": "https://github.com/evil-sparkle/moomoo-api-mcp/tree/d8aab13379849fecd82f4a381bf8f8d157a92e86"
+  "source_commit": "6f4e3d7af22f633ff8e4be078c950dacc1c9115f",
+  "source_tree": "6be04e853410b95e10a7e7b8765585e1e4ec8214",
+  "source_url": "https://github.com/evil-sparkle/moomoo-api-mcp/tree/6f4e3d7af22f633ff8e4be078c950dacc1c9115f"
 }

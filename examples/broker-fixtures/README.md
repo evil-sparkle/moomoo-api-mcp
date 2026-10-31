@@ -117,8 +117,8 @@ This bundle unblocks offline adapter/snapshot evolution, not live acceptance.
 
 ## Current runtime fixture pin
 
-The replay generator now targets `d8aab13379849fecd82f4a381bf8f8d157a92e86/`,
-which pins the read-deadline/timing implementation and all 55 runtime source
+The replay generator now targets `6f4e3d7af22f633ff8e4be078c950dacc1c9115f/`,
+which pins bounded read admission, deadlines/timing and all 55 runtime source
 files. Its 14 wire/catalogue JSON files include the additive optional timing
 schema and read-duration evidence. The generator freezes its monotonic clock:
 zero duration fields are reproducible synthetic inputs, not latency measurements.
