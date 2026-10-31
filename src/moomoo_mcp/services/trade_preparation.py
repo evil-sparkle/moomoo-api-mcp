@@ -15,7 +15,6 @@ from moomoo_mcp.services.execution_identity import validate_token
 from moomoo_mcp.services.instrument_rules import (
     instrument_rule_summary,
     normalize_order_session,
-    validate_instrument_order,
     whole_quantity,
 )
 from moomoo_mcp.services.trading_controls import TradingControlError, contract_view
@@ -68,17 +67,9 @@ def _single_facts(
         order_type=parameters["order_type"],
         trd_side=parameters["trd_side"],
         qty=qty,
-        price=numeric,
-        aux_price=parameters.get("aux_price"),
-        session=parameters.get("session", Session.NONE),
-    )
-    validate_instrument_order(
-        operation,
-        instrument=facts.legs[0].instrument,
-        qty=qty,
-        order_type=parameters["order_type"],
         price=price,
         aux_price=parameters.get("aux_price"),
+        session=parameters.get("session", Session.NONE),
     )
     if parameters["trd_side"] not in {"BUY", "SELL"}:
         raise ValueError("trd_side must be BUY or SELL")
@@ -138,6 +129,17 @@ def single_preview(service: TradeService, parameters: dict) -> dict:
     }
 
 
+def _preparation_market(
+    service: TradeService, method: str, request: dict
+) -> str | None:
+    if method == "place_order":
+        return service._get_market_from_code(request["code"])
+    if method == "place_combo_order":
+        legs = service._build_combo_legs(request["combo_legs"])
+        return service._get_market_from_code(legs[0].code)
+    return None
+
+
 def prepare_request(
     service: TradeService, method: str, parameters: dict, *, ttl_seconds: int
 ) -> dict:
@@ -148,12 +150,7 @@ def prepare_request(
     validate_preparation(service, method, request)
     environment = request["trd_env"]
 
-    market = None
-    if method == "place_order":
-        market = service._get_market_from_code(request["code"])
-    elif method == "place_combo_order":
-        legs = service._build_combo_legs(request["combo_legs"])
-        market = service._get_market_from_code(legs[0].code)
+    market = _preparation_market(service, method, request)
     account = service._resolve_account(environment, market, request["acc_id"])
     request["acc_id"] = str(account)
     return _prepare_review(service, method, request, ttl_seconds=ttl_seconds)
@@ -200,12 +197,6 @@ def _prepare_review(
     account = int(request["acc_id"])
     review: dict = {}
     if method == "place_order":
-        if environment == "SIMULATE":
-            assert service.paper is not None
-            from moomoo_mcp.services.admission import _paper_parameters
-
-            kind, paper_request = _paper_parameters(method, request)
-            service.paper._schema(kind, paper_request)
         review = single_preview(service, request)
     elif method == "place_combo_order":
         if environment != "REAL":

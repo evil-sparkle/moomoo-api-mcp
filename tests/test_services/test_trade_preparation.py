@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import cast
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -647,6 +648,21 @@ def test_combo_caller_mutation_cannot_switch_approval_binding_after_admission(bu
     row = rig.stores["REAL"].lookup("combo")
     assert row["marker"] == 0
     assert json.loads(row["request"])["combo_legs"][0]["trd_side"] == "BUY"
+
+
+def test_paper_preparation_validates_schema_once(build):
+    rig = build()
+    assert rig.service.paper is not None
+    with patch.object(
+        rig.service.paper, "_schema", wraps=rig.service.paper._schema
+    ) as schema:
+        prepared = rig.service.prepare_trade_request(
+            "place_order", parameters(rig, "SIMULATE")
+        )
+    schema.assert_called_once()
+    assert prepared["parameters"]["price"] == "10.00"
+    assert prepared["review"]["valuation"]["amount"] == "20.00"
+    assert rig.broker.calls == [] and rig.broker.unlocks == []
 
 
 def test_paper_preview_and_prepare_preserve_exact_grid_validation(build):

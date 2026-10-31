@@ -25,10 +25,15 @@ from tests.assertions import raises_message
 def preparation(tmp_path):
     controls = TradingControls(tmp_path / "controls.sqlite3", create=True)
     journal = ExecutionStore(tmp_path / "real.sqlite3", create=True, environment="REAL")
+    paper_journal = ExecutionStore(
+        tmp_path / "paper" / "execution.sqlite3", create=True
+    )
     service = TradeService(
         dispatcher=BrokerRequestDispatcher(),
         trading_controls=controls,
+        execution_store=paper_journal,
         real_execution_store=journal,
+        simulated_account_allowlist=frozenset({456}),
         policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123})),
     )
     context = MagicMock()
@@ -43,6 +48,7 @@ def preparation(tmp_path):
     )
     service.trade_ctx = context
     yield service, context
+    paper_journal.close()
     journal.close()
     controls.close()
 
@@ -101,11 +107,12 @@ def assert_reads_only(plan):
     )
 
 
-def test_read_only_preview_reserves_snapshot_and_native_maximum(preparation):
+@pytest.mark.parametrize("acc_id", ["0", "123"])
+def test_read_only_preview_reserves_snapshot_and_native_maximum(preparation, acc_id):
     service, context = preparation
     service.policy = TradingPolicy()
     bound = inspect.signature(service.preview_order).bind(
-        "US.AAPL", 10.0, 2, "BUY", "REAL"
+        "US.AAPL", 10.0, 2, "BUY", "REAL", acc_id=acc_id
     )
     bound.apply_defaults()
     plan = service.prepare_admission("preview_order", dict(bound.arguments))
@@ -114,29 +121,60 @@ def test_read_only_preview_reserves_snapshot_and_native_maximum(preparation):
         ("acctradinginfo_query", 123, 1),
     ]
     assert_reads_only(plan)
+    context.get_acc_list.assert_called_once_with()
     context.place_order.assert_not_called()
     context.unlock_trade.assert_not_called()
 
 
-def test_single_preparation_reserves_only_snapshot_and_maximum(preparation):
-    service, _ = preparation
-    plan = prepare_plan(service)
+@pytest.mark.parametrize("acc_id", ["0", "123"])
+def test_single_preparation_reserves_only_snapshot_and_maximum(preparation, acc_id):
+    service, context = preparation
+    plan = prepare_plan(service, acc_id=acc_id)
     assert requests(plan) == [
         ("get_market_snapshot", None, 1),
         ("acctradinginfo_query", 123, 1),
     ]
     assert_reads_only(plan)
+    context.get_acc_list.assert_called_once_with()
+
+
+@pytest.mark.parametrize("acc_id", ["0", "456"])
+def test_paper_preparation_resolves_account_once(preparation, acc_id):
+    service, context = preparation
+    assert service.paper is not None
+    plan = prepare_plan(
+        service,
+        trd_env="SIMULATE",
+        acc_id=acc_id,
+        price="10.00",
+        admission_epoch=service.paper.store.epoch,
+    )
+    assert requests(plan) == [
+        ("get_market_snapshot", None, 1),
+        ("acctradinginfo_query", 456, 1),
+    ]
+    assert_reads_only(plan)
+    context.get_acc_list.assert_called_once_with()
+
+
+def test_explicit_real_preparation_verifies_read_account_membership(preparation):
+    service, context = preparation
+    service.policy = TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({456}))
+    with raises_message(ValueError, "not available"):
+        prepare_plan(service, acc_id="456")
+    context.get_acc_list.assert_called_once_with()
 
 
 @pytest.mark.parametrize("operation", ["NORMAL", "ENABLE", " normal ", " enable "])
 def test_exposing_modification_reserves_target_then_snapshot(preparation, operation):
-    service, _ = preparation
+    service, context = preparation
     plan = prepare_plan(service, "modify_order", modify_order_op=operation)
     assert requests(plan) == [
         ("order_list_query", 123, 1),
         ("get_market_snapshot", None, 1),
     ]
     assert_reads_only(plan)
+    context.get_acc_list.assert_called_once_with()
 
 
 @pytest.mark.parametrize(
@@ -298,3 +336,4 @@ def test_preparation_resolves_write_account_before_read_planning(preparation):
         ("acctradinginfo_query", 123, 1),
     ]
     assert_reads_only(plan)
+    context.get_acc_list.assert_called_once_with()
