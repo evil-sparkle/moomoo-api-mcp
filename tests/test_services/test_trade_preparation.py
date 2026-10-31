@@ -17,6 +17,11 @@ import pandas as pd
 import pytest
 from moomoo import RET_OK, OpenSecTradeContext
 
+from moomoo_mcp.client_authorization import (
+    ClientAuthorizationError,
+    ClientGrants,
+    client_grants_context,
+)
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
 from moomoo_mcp.services.execution_store import ExecutionStore
 from moomoo_mcp.services.order_errors import OrderNotSentError
@@ -407,6 +412,58 @@ def test_prepared_parameters_match_exact_mutation_signature_without_admission(
             assert connection.execute("SELECT COUNT(*) FROM operations").fetchone() == (
                 0,
             )
+
+
+@pytest.mark.parametrize(
+    "environment,acc_id", [("REAL", "0"), ("SIMULATE", "0"), ("SIMULATE", "456")]
+)
+@pytest.mark.parametrize("method", ["modify_order", "cancel_order"])
+@pytest.mark.parametrize("admitted", [False, True])
+@pytest.mark.parametrize("read_allowed", [False, True])
+def test_prepared_target_requires_current_read_grant(
+    build, environment, acc_id, method, admitted, read_allowed
+):
+    rig = build()
+    request = {
+        "order_id": rig.broker.seed(environment),
+        "trd_env": environment,
+        "acc_id": acc_id,
+        "operation_id": "prepared-mutation",
+        "admission_epoch": rig.stores[environment].epoch,
+    }
+    if method == "modify_order":
+        request.update(modify_order_op="NORMAL", qty=3)
+    write_grants = ClientGrants(
+        permissions=frozenset({environment.lower() + "_write"}),
+        real_acc_ids=frozenset({123}),
+        simulate_acc_ids=frozenset({456}),
+    )
+    read_write_grants = replace(
+        write_grants,
+        permissions=write_grants.permissions | {environment.lower() + "_read"},
+    )
+    if admitted:
+        params = {"method": method, "parameters": request, "ttl_seconds": 300}
+        with client_grants_context(read_write_grants):
+            rig.service.prepare_admission("prepare_trade_request", params)
+        request = params["parameters"]
+    assert rig.controls is not None
+    with (
+        client_grants_context(read_write_grants if read_allowed else write_grants),
+        patch.object(rig.controls, "prepare", wraps=rig.controls.prepare) as prepare,
+    ):
+        if read_allowed:
+            prepared = rig.service.prepare_trade_request(method, request)
+            assert prepared["review"]["target"]["order_id"] == request["order_id"]
+            prepare.assert_called_once()
+        else:
+            with pytest.raises(ClientAuthorizationError):
+                rig.service.prepare_trade_request(method, request)
+            prepare.assert_not_called()
+    reads = [name for name, _ in rig.broker.reads]
+    assert ("orders" in reads) is read_allowed
+    assert reads.count("accounts") == int(admitted or acc_id == "0")
+    assert rig.broker.calls == [] and rig.broker.unlocks == []
 
 
 @pytest.mark.parametrize("environment", ["REAL", "SIMULATE"])

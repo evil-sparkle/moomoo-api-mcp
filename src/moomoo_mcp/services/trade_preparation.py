@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from moomoo import Session
 
+from moomoo_mcp.client_authorization import check_account_access
 from moomoo_mcp.services.execution_identity import validate_token
 from moomoo_mcp.services.instrument_rules import (
     instrument_rule_summary,
@@ -152,6 +153,7 @@ def prepare_request(
 
     market = _preparation_market(service, method, request)
     account = service._resolve_account(environment, market, request["acc_id"])
+    check_account_access(environment, account, write=False)
     request["acc_id"] = str(account)
     return _prepare_review(service, method, request, ttl_seconds=ttl_seconds)
 

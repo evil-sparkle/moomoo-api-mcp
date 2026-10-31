@@ -8,6 +8,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from moomoo_mcp.client_authorization import check_account_access
 from moomoo_mcp.services.broker_dispatch import QuotaRequest
 from moomoo_mcp.services.execution_identity import validate_token
 from moomoo_mcp.services.instrument_rules import normalize_order_session
@@ -191,6 +192,7 @@ def prepare_trade_call(
             if environment == "SIMULATE":
                 assert service.paper is not None
                 account = service.paper._account(request_params["acc_id"])
+                check_account_access(environment, account, write=False)
             else:
                 account = service._resolve_account(
                     environment, market, request_params["acc_id"]
@@ -199,6 +201,8 @@ def prepare_trade_call(
                     _, account = service.resolve_read_account(
                         environment, request_params["acc_id"]
                     )
+                else:
+                    check_account_access(environment, account, write=False)
             request_params["acc_id"] = str(account)
             params["parameters"] = request_params
         else:

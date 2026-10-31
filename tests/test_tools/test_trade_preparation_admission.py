@@ -7,6 +7,11 @@ import pandas as pd
 import pytest
 from moomoo import RET_OK, Session
 
+from moomoo_mcp.client_authorization import (
+    ClientAuthorizationError,
+    ClientGrants,
+    client_grants_context,
+)
 from moomoo_mcp.services.admission import _paper_parameters
 from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
 from moomoo_mcp.services.execution_store import ExecutionStore
@@ -163,6 +168,46 @@ def test_explicit_real_preparation_verifies_read_account_membership(preparation)
     with raises_message(ValueError, "not available"):
         prepare_plan(service, acc_id="456")
     context.get_acc_list.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    "environment,acc_id", [("REAL", "0"), ("SIMULATE", "0"), ("SIMULATE", "456")]
+)
+@pytest.mark.parametrize("method", ["place_order", "modify_order", "cancel_order"])
+@pytest.mark.parametrize("read_allowed", [False, True])
+def test_preparation_admission_requires_read_grant_without_rediscovery(
+    preparation, environment, acc_id, method, read_allowed
+):
+    service, context = preparation
+    executor = service.real if environment == "REAL" else service.paper
+    assert executor is not None
+    overrides = {
+        "trd_env": environment,
+        "acc_id": acc_id,
+        "admission_epoch": executor.store.epoch,
+    }
+    if method == "place_order":
+        overrides["price"] = 10.0 if environment == "REAL" else "10.00"
+    permissions = {environment.lower() + "_write"}
+    if read_allowed:
+        permissions.add(environment.lower() + "_read")
+    grants = ClientGrants(
+        permissions=frozenset(permissions),
+        real_acc_ids=frozenset({123}),
+        simulate_acc_ids=frozenset({456}),
+    )
+    with client_grants_context(grants):
+        if read_allowed:
+            plan = prepare_plan(service, method, **overrides)
+            assert_reads_only(plan)
+            account = 123 if environment == "REAL" else 456
+            assert all(item.account_id in {None, account} for item in plan.requests)
+        else:
+            with pytest.raises(ClientAuthorizationError):
+                prepare_plan(service, method, **overrides)
+    context.get_acc_list.assert_called_once_with()
+    context.order_list_query.assert_not_called()
+    context.acctradinginfo_query.assert_not_called()
 
 
 @pytest.mark.parametrize("operation", ["NORMAL", "ENABLE", " normal ", " enable "])
