@@ -83,8 +83,9 @@ async def test_exact_scanner_catalogue_and_schema_hash():
         == server_contract_identity(tools)["tools_schema_sha256"]
     )
     verify_lab_scanner_catalogue(wire, expected_sha256=verified["tools_schema_sha256"])
-    with pytest.raises(ValueError, match="approved schema hash"):
+    with pytest.raises(ValueError) as failure:
         verify_lab_scanner_catalogue(wire, expected_sha256="0" * 64)
+    assert "approved schema hash" in str(failure.value)
     for tool in wire:
         jsonschema.Draft202012Validator.check_schema(tool["inputSchema"])
         if "outputSchema" in tool:

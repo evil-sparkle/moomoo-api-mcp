@@ -318,10 +318,9 @@ def test_chain_lot_and_standard_status_do_not_supply_missing_economics(facts_run
         "settlement_cutoff",
     ):
         assert facts[missing]["state"] == "UNKNOWN"
-    with pytest.raises(
-        InstrumentLookupError, match="no usable option_contract_multiplier"
-    ):
+    with pytest.raises(InstrumentLookupError) as failure:
         service.instrument_adapter([CODE])
+    assert "no usable option_contract_multiplier" in str(failure.value)
 
 
 def test_reference_without_classification_retains_other_observations_not_valuation(
@@ -374,8 +373,9 @@ def test_duplicate_or_unexpected_reference_rows_are_not_silently_selected(
 ):
     service, quote, _clock = facts_runtime
     quote.get_stock_basicinfo.return_value = (0, pd.DataFrame(rows))
-    with pytest.raises(InstrumentLookupError, match="duplicate/unexpected"):
+    with pytest.raises(InstrumentLookupError) as failure:
         service.get_instrument_facts([CODE])
+    assert "duplicate/unexpected" in str(failure.value)
 
 
 @pytest.mark.parametrize("rows", [[{"code": CODE}] * 2, [{}], [{"code": "not-exact"}]])

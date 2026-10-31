@@ -20,6 +20,7 @@ from mcp.server.lowlevel.server import request_ctx
 from mcp.shared.context import RequestContext
 from moomoo import OpenQuoteContext
 
+from moomoo_mcp.catalogue_capture import verify_lab_scanner_catalogue
 from moomoo_mcp.client_authorization import ClientGrants, client_grants_context
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.services.base_service import MoomooService
@@ -28,7 +29,7 @@ from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.tools.trading_contract import server_contract_identity
 
-SOURCE = "6f4e3d7af22f633ff8e4be078c950dacc1c9115f"
+SOURCE = "7bd67b8ecb646e5d04d35a29abfe14f3d494c7a3"
 ROOT = Path(__file__).resolve().parents[1]
 DESTINATION = ROOT / "examples" / "broker-fixtures" / SOURCE
 NORMAL = "US.SYNTH261030C100000"
@@ -138,6 +139,7 @@ async def call_wire(
     contracts=None,
     expiries=None,
     failure=None,
+    discover_first=False,
 ) -> dict:
     quote = MagicMock(spec=OpenQuoteContext)
     quote.get_market_snapshot.return_value = (
@@ -172,6 +174,39 @@ async def call_wire(
         )
     )
     try:
+        prior_discovery = None
+        if discover_first:
+            prior_request = types.CallToolRequest(
+                method="tools/call",
+                params=types.CallToolRequestParams(
+                    name="get_option_chain",
+                    arguments={
+                        "code": "US.SYNTH",
+                        "start": "2026-10-30",
+                        "end": "2026-10-30",
+                        "include_evidence": True,
+                    },
+                ),
+            )
+            prior_result = await mcp._mcp_server.request_handlers[
+                types.CallToolRequest
+            ](prior_request)
+            prior_discovery = {
+                "request": {
+                    "jsonrpc": "2.0",
+                    "id": "discovery-" + str(index),
+                    **prior_request.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    ),
+                },
+                "response": types.JSONRPCResponse(
+                    jsonrpc="2.0",
+                    id="discovery-" + str(index),
+                    result=prior_result.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    ),
+                ).model_dump(mode="json", by_alias=True, exclude_none=True),
+            }
         request = types.CallToolRequest(
             method="tools/call",
             params=types.CallToolRequestParams(name=name, arguments=arguments),
@@ -192,7 +227,7 @@ async def call_wire(
         "get_option_expiration_date",
     }
     assert all(call[0] in allowed for call in quote.mock_calls)
-    return {
+    wire = {
         "request": {
             "jsonrpc": "2.0",
             "id": index,
@@ -201,6 +236,9 @@ async def call_wire(
         "response": response.model_dump(mode="json", by_alias=True, exclude_none=True),
         "broker_double_methods": [call[0] for call in quote.mock_calls],
     }
+    if prior_discovery is not None:
+        wire["prior_discovery"] = prior_discovery
+    return wire
 
 
 async def generate(*, verify_git: bool = False) -> dict[str, dict]:
@@ -336,6 +374,49 @@ async def generate(*, verify_git: bool = False) -> dict[str, dict]:
             },
         ),
         ("facts.missing_sources", SELECTED[3], {"codes": [MISSING]}, {}),
+        (
+            "chain.unfiltered_expiry",
+            SELECTED[1],
+            {
+                "code": "US.SYNTH",
+                "start": "2026-10-30",
+                "end": "2026-10-30",
+                "include_evidence": True,
+            },
+            {
+                "contracts": [
+                    chain_row(),
+                    chain_row(
+                        ADJUSTED, option_standard_type="NON_STANDARD", lot_size=1
+                    ),
+                ]
+            },
+        ),
+        (
+            "facts.chain_enriched",
+            SELECTED[3],
+            {"codes": [ADJUSTED]},
+            {
+                "discover_first": True,
+                "contracts": [
+                    chain_row(
+                        ADJUSTED,
+                        option_standard_type="NON_STANDARD",
+                        lot_size=1,
+                        option_settlement_mode="PM",
+                    )
+                ],
+                "snapshots": [
+                    snapshot(
+                        ADJUSTED,
+                        lot_size=1,
+                        option_contract_size=150,
+                        option_contract_multiplier=25,
+                    )
+                ],
+                "references": [{"code": ADJUSTED, "stock_type": "DRVT", "lot_size": 1}],
+            },
+        ),
     ]
     with ExitStack() as stack:
         stack.enter_context(
@@ -358,6 +439,7 @@ async def generate(*, verify_git: bool = False) -> dict[str, dict]:
             )
         for module, clock in (
             ("moomoo_mcp.tools.market_data", REQUESTED),
+            ("moomoo_mcp.services.market_data_service", "2026-10-26T14:30:00.050Z"),
             ("moomoo_mcp.services.broker_data_reads", REQUESTED),
             ("moomoo_mcp.services.instruments", "2026-10-26T14:30:00.100Z"),
             ("moomoo_mcp.services.data_evidence", RECEIVED),
@@ -377,6 +459,9 @@ async def generate(*, verify_git: bool = False) -> dict[str, dict]:
             "fixture_kind": "SYNTHETIC",
             "permissions": ["market_read"],
             "response": catalog_wire,
+            "profile_verification": verify_lab_scanner_catalogue(
+                catalog_wire["result"]["tools"]
+            ),
         }
         manifest["catalogue_identity"] = server_contract_identity(
             await mcp.list_tools()

@@ -1,0 +1,176 @@
+{
+  "broker_double_methods": [
+    "get_market_snapshot",
+    "get_stock_basicinfo"
+  ],
+  "case_id": "facts.missing_sources",
+  "fixture_kind": "SYNTHETIC",
+  "permissions": [
+    "market_read"
+  ],
+  "request": {
+    "id": 13,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "codes": [
+          "US.SYNTH_MISSING"
+        ]
+      },
+      "name": "get_instrument_facts"
+    }
+  },
+  "response": {
+    "id": 13,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"schema_version\": \"2026-10-26.1\",\n  \"source_method\": \"get_stock_basicinfo+get_market_snapshot\",\n  \"requested_at\": \"2026-10-26T14:30:00Z\",\n  \"received_at\": \"2026-10-26T14:30:00.250Z\",\n  \"sdk_version\": \"10.10.7008\",\n  \"source_revision\": null,\n  \"delay_status\": \"UNKNOWN\",\n  \"entitlement_status\": \"UNKNOWN\",\n  \"timestamp_semantics\": \"Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.\",\n  \"scope\": {\n    \"chain_enrichment\": \"prior_observations_only\"\n  },\n  \"coverage\": {\n    \"requested\": [\n      \"US.SYNTH_MISSING\"\n    ],\n    \"returned\": [\n      \"US.SYNTH_MISSING\"\n    ],\n    \"missing\": [\n      \"US.SYNTH_MISSING\"\n    ],\n    \"complete_response\": false,\n    \"provider_history_complete\": null,\n    \"truncated\": false,\n    \"total_returned\": 1\n  },\n  \"errors\": {\n    \"US.SYNTH_MISSING\": \"INCOMPLETE_FACT_SOURCES\"\n  },\n  \"data\": [\n    {\n      \"code\": \"US.SYNTH_MISSING\",\n      \"facts\": {\n        \"is_option\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"option_type\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"underlying\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"expiry\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"strike\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"classification\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"lot_size\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"currency\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"exercise_style\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"settlement_mode\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"settlement_cutoff\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"deliverable_size\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"deliverable_description\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"monetary_multiplier\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        },\n        \"standard_status\": {\n          \"state\": \"UNKNOWN\",\n          \"value\": null,\n          \"evidence\": []\n        }\n      },\n      \"snapshot_requested_at\": \"2026-10-26T14:30:00.100Z\",\n      \"snapshot_received_at\": \"2026-10-26T14:30:00.100Z\",\n      \"snapshot_present\": false,\n      \"reference_present\": false,\n      \"chain_observation_present\": false,\n      \"static_cache_ttl_seconds\": 300.0,\n      \"compatibility_verified\": false\n    }\n  ],\n  \"limitations\": [\n    \"Unknown/conflicting lifecycle facts do not establish compatibility.\",\n    \"Basic/observed chain metadata may be cached; snapshots are requested anew.\",\n    \"Chain enrichment uses prior successful discovery only; no chain is queried here.\",\n    \"Lot size is not deliverable size or the monetary multiplier.\",\n    \"Complete source coverage is not complete contract facts or deliverable components.\"\n  ],\n  \"timing\": {\n    \"deadline_seconds\": 15.0,\n    \"admission_seconds\": 0,\n    \"quota_wait_seconds\": 0,\n    \"worker_queue_seconds\": 0,\n    \"sdk_seconds\": 0,\n    \"total_seconds\": 0,\n    \"sdk_calls_started\": 2,\n    \"sdk_calls_completed\": 2,\n    \"sdk_in_flight\": false\n  }\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "coverage": {
+          "complete_response": false,
+          "missing": [
+            "US.SYNTH_MISSING"
+          ],
+          "provider_history_complete": null,
+          "requested": [
+            "US.SYNTH_MISSING"
+          ],
+          "returned": [
+            "US.SYNTH_MISSING"
+          ],
+          "total_returned": 1,
+          "truncated": false
+        },
+        "data": [
+          {
+            "chain_observation_present": false,
+            "code": "US.SYNTH_MISSING",
+            "compatibility_verified": false,
+            "facts": {
+              "classification": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "currency": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "deliverable_description": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "deliverable_size": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "exercise_style": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "expiry": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "is_option": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "lot_size": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "monetary_multiplier": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "option_type": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "settlement_cutoff": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "settlement_mode": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "standard_status": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "strike": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              },
+              "underlying": {
+                "evidence": [],
+                "state": "UNKNOWN",
+                "value": null
+              }
+            },
+            "reference_present": false,
+            "snapshot_present": false,
+            "snapshot_received_at": "2026-10-26T14:30:00.100Z",
+            "snapshot_requested_at": "2026-10-26T14:30:00.100Z",
+            "static_cache_ttl_seconds": 300.0
+          }
+        ],
+        "delay_status": "UNKNOWN",
+        "entitlement_status": "UNKNOWN",
+        "errors": {
+          "US.SYNTH_MISSING": "INCOMPLETE_FACT_SOURCES"
+        },
+        "limitations": [
+          "Unknown/conflicting lifecycle facts do not establish compatibility.",
+          "Basic/observed chain metadata may be cached; snapshots are requested anew.",
+          "Chain enrichment uses prior successful discovery only; no chain is queried here.",
+          "Lot size is not deliverable size or the monetary multiplier.",
+          "Complete source coverage is not complete contract facts or deliverable components."
+        ],
+        "received_at": "2026-10-26T14:30:00.250Z",
+        "requested_at": "2026-10-26T14:30:00Z",
+        "schema_version": "2026-10-26.1",
+        "scope": {
+          "chain_enrichment": "prior_observations_only"
+        },
+        "sdk_version": "10.10.7008",
+        "source_method": "get_stock_basicinfo+get_market_snapshot",
+        "source_revision": null,
+        "timestamp_semantics": "Provider fields preserved verbatim; observation times are UTC. Snapshot update_time is not a per-side exchange timestamp.",
+        "timing": {
+          "admission_seconds": 0.0,
+          "deadline_seconds": 15.0,
+          "quota_wait_seconds": 0.0,
+          "sdk_calls_completed": 2,
+          "sdk_calls_started": 2,
+          "sdk_in_flight": false,
+          "sdk_seconds": 0.0,
+          "total_seconds": 0.0,
+          "worker_queue_seconds": 0.0
+        }
+      }
+    }
+  }
+}

@@ -8,6 +8,7 @@ import jsonschema
 import pytest
 from mcp import types
 
+from moomoo_mcp.catalogue_capture import verify_lab_scanner_catalogue
 from tests.broker_fixture_handoff import (
     ADJUSTED,
     DESTINATION,
@@ -68,6 +69,9 @@ def test_catalogue_contains_only_the_actual_market_profile_and_valid_schemas():
     fixture = read("catalogue.market_read")
     assert fixture["permissions"] == ["market_read"]
     tools = {tool["name"]: tool for tool in fixture["response"]["result"]["tools"]}
+    assert fixture["profile_verification"] == verify_lab_scanner_catalogue(
+        list(tools.values())
+    )
     assert (
         not {
             "get_accounts",
@@ -172,6 +176,67 @@ def test_contract_economics_conflicts_and_missing_lifecycle_facts():
         "facts.missing_sources",
     ):
         assert payload(name)["data"][0]["compatibility_verified"] is False
+
+
+def test_observed_chain_facts_retain_wire_provenance_without_inferred_economics():
+    fixture = read("facts.chain_enriched")
+    row = payload("facts.chain_enriched")["data"][0]
+    facts = row["facts"]
+    assert row["chain_observation_present"] is True
+    assert facts["standard_status"]["value"] == "NON_STANDARD"
+    assert facts["settlement_mode"]["value"] == "PM"
+    for name, expected in (
+        ("lot_size", 1),
+        ("deliverable_size", 150),
+        ("monetary_multiplier", 25),
+    ):
+        assert facts[name]["state"] == "KNOWN"
+        assert facts[name]["value"] == expected
+    for name in ("currency", "settlement_cutoff", "deliverable_description"):
+        assert facts[name]["state"] == "UNKNOWN"
+    prior = fixture["prior_discovery"]["response"]["result"]["structuredContent"][
+        "result"
+    ]
+    chain_tool = next(
+        tool
+        for tool in read("catalogue.market_read")["response"]["result"]["tools"]
+        if tool["name"] == "get_option_chain"
+    )
+    jsonschema.validate(
+        fixture["prior_discovery"]["request"]["params"]["arguments"],
+        chain_tool["inputSchema"],
+    )
+    jsonschema.validate({"result": prior}, chain_tool["outputSchema"])
+    types.JSONRPCResponse.model_validate(fixture["prior_discovery"]["response"])
+    assert prior["data"][0]["code"] == row["code"] == ADJUSTED
+    assert facts["standard_status"]["evidence"] == [
+        {
+            "source_method": "get_option_chain",
+            "source_field": "option_standard_type",
+            "observed_at": "2026-10-26T14:30:00.050Z",
+            "raw_value": "NON_STANDARD",
+            "value": "NON_STANDARD",
+        }
+    ]
+    assert fixture["broker_double_methods"] == [
+        "get_option_chain",
+        "get_market_snapshot",
+        "get_stock_basicinfo",
+    ]
+
+
+def test_unfiltered_expiry_fixture_has_timing_and_exact_scope_without_filter():
+    result = payload("chain.unfiltered_expiry")["result"]
+    assert result["scope"]["data_filter"] is None
+    assert result["scope"]["start"] == result["scope"]["end"] == "2026-10-30"
+    assert result["coverage"]["returned"] == [row["code"] for row in result["data"]]
+    assert result["coverage"]["truncated"] is False
+    assert result["coverage"]["provider_history_complete"] is None
+    assert (
+        result["timing"]["sdk_calls_started"]
+        == result["timing"]["sdk_calls_completed"]
+        == 1
+    )
 
 
 @pytest.mark.asyncio
