@@ -23,6 +23,7 @@ from moomoo import OpenQuoteContext
 from moomoo_mcp.client_authorization import ClientGrants, client_grants_context
 from moomoo_mcp.server import AppContext, mcp
 from moomoo_mcp.services.base_service import MoomooService
+from moomoo_mcp.services.broker_dispatch import BrokerRequestDispatcher
 from moomoo_mcp.services.market_data_service import MarketDataService
 from moomoo_mcp.services.trade_service import TradeService
 from moomoo_mcp.tools.trading_contract import server_contract_identity
@@ -154,7 +155,10 @@ async def call_wire(
         0,
         pd.DataFrame(expiries or []),
     )
-    service = MarketDataService(quote)
+    # Reproducible duration evidence, not a performance measurement.
+    service = MarketDataService(
+        quote, dispatcher=BrokerRequestDispatcher(clock=lambda: 0)
+    )
     trade = MagicMock(spec=TradeService)
     base = MagicMock(spec=MoomooService)
     session = MagicMock()

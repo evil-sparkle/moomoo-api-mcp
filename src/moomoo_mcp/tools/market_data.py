@@ -231,39 +231,48 @@ async def get_option_chain(
         or selected filters rather than interpreting a truncated chain as complete.
     """
     market_data_service = ctx.request_context.lifespan_context.market_data_service
-    started = utc_now_iso()
-    filters = {}
-    if option_cond_type != "ALL":
-        filters["option_cond_type"] = option_cond_type
-    if data_filter is not None:
-        filters["data_filter"] = data_filter
-    contracts = await market_data_service.get_option_chain_async(
-        code=code,
-        start=start,
-        end=end,
-        option_type=option_type,
-        **filters,
-    )
-    await ctx.info(f"Retrieved {len(contracts)} option contracts for {code}")
-    if include_evidence:
-        return evidence(
-            "get_option_chain",
-            started,
-            contracts,
-            scope={
-                "code": code,
-                "start": start,
-                "end": end,
-                "option_type": option_type,
-                "option_cond_type": option_cond_type,
-                "data_filter": data_filter.model_dump(exclude_none=True)
-                if data_filter
-                else None,
-            },
-            limitations=[
-                "Provider filter inputs, not fresh liquidity; OI updated daily."
-            ],
+    async with market_data_service.dispatcher.read_deadline("get_option_chain") as read:
+        started = utc_now_iso()
+        filters = {}
+        if option_cond_type != "ALL":
+            filters["option_cond_type"] = option_cond_type
+        if data_filter is not None:
+            filters["data_filter"] = data_filter
+        contracts = await market_data_service.get_option_chain_async(
+            code=code,
+            start=start,
+            end=end,
+            option_type=option_type,
+            **filters,
         )
+        with read.measure("processing"):
+            await ctx.info(f"Retrieved {len(contracts)} option contracts for {code}")
+            result = (
+                evidence(
+                    "get_option_chain",
+                    started,
+                    contracts,
+                    scope={
+                        "code": code,
+                        "start": start,
+                        "end": end,
+                        "option_type": option_type,
+                        "option_cond_type": option_cond_type,
+                        "data_filter": data_filter.model_dump(exclude_none=True)
+                        if data_filter
+                        else None,
+                    },
+                    limitations=[
+                        "Provider filter inputs, not fresh liquidity; OI updated daily."
+                    ],
+                )
+                if include_evidence
+                else None
+            )
+            read.check()
+    if result is not None:
+        result["timing"] = read.timing()
+        return result
     return contracts
 
 

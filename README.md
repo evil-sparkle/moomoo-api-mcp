@@ -828,6 +828,39 @@ Errors name the quota pool and include `retry_after_seconds`, a rounded estimate
 that other callers may affect. Dispatched attempts remain charged on provider
 failure or cancellation. The server never automatically retries broker calls.
 
+Broker reads through `run_blocking` and asynchronous option discovery have one
+**15-second end-to-end deadline**, starting before admission/account discovery.
+It covers read-worker queues, the five-second quota wait, SDK execution and
+response processing. `BrokerRequestDispatcher(read_timeout_seconds=...,
+max_inflight_reads=...)` configures this process-local policy; defaults allow at
+most **8 actual read workers**, including abandoned calls. A worker retains its
+slot until its blocking function exits, not merely until its caller stops
+waiting. Reads use dedicated daemon workers, separate from mutations/local work
+and the existing health probes. If all read workers are stuck, further reads
+expire while queued rather than spawning additional SDK threads.
+
+Before dispatch, cancellation returns unused quota via the dispatch lease.
+After dispatch, the SDK attempt remains charged: only the caller stops waiting.
+`READ_DEADLINE_EXCEEDED` explicitly reports that OpenD **was not aborted** and a
+blocking SDK call may finish in the background. Late SDK responses are discarded
+at the dispatch gate before service cache updates or follow-up calls. Native
+client cancellation remains cancellation, not a fabricated successful/empty
+response. Auto-subscriptions already sent by quote/book reads are not undone.
+Mutation, unlock/lock, preparation and journal recovery transactions retain
+their existing cancellation/protected-permit rules and have no read deadline.
+Direct synchronous Python calls still depend on the SDK's own timeout; Python
+async integrations can use `dispatcher.read_deadline(...)` with `run_async`.
+
+`DataEvidence` returned through `run_blocking` or asynchronous option discovery
+adds an optional `timing` object; legacy fields and list responses are unchanged.
+Read-deadline errors also carry
+`phase` and `timing`, including deadline, admission, quota wait, worker queue,
+cumulative SDK and overall durations (monotonic seconds), attempted/completed
+SDK-call counts and whether an SDK call was still in flight. Admission includes
+its own worker queue and any account-discovery SDK time, so these observations
+are **not additive**. Completed-call counts do not establish provider success;
+timings do not certify quote freshness, exchange time or entitlement.
+
 All limits below are calls per rolling **30 seconds**, with a **0.1-second safety
 margin**. Each operation has an independent pool unless explicitly grouped below.
 Account pools use the resolved account ID, including when a caller supplies

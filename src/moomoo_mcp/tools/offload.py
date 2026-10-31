@@ -22,23 +22,29 @@ import functools
 import inspect
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import anyio.to_thread
 
+from moomoo_mcp.client_authorization import ACCOUNT_TOOLS, MARKET_TOOLS
+from moomoo_mcp.services.data_evidence import EVIDENCE_VERSION
 from moomoo_mcp.services.order_errors import OrderNotSentError, not_sent_message
 from moomoo_mcp.services.rate_limit import ProviderRateLimitError
 
 T = TypeVar("T")
+READ_METHODS = (
+    MARKET_TOOLS | ACCOUNT_TOOLS | {"get_accounts", "get_subscriptions"}
+) - {"reconcile_execution"}
 
 
 async def run_blocking(func: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
     """Await ``func(*args, **kwargs)`` on a worker thread.
 
-    Concurrency is bounded by anyio's default thread limiter (40 workers), so a
-    burst of tool calls queues instead of spawning unbounded threads. That queue
-    is why health never passes through here: its probes run on dedicated workers
-    and are awaited with ``await_futures``, so a saturated pool cannot delay it.
+    Broker reads use a separate, bounded worker budget and one end-to-end
+    deadline, starting before admission/account discovery. Abandoned read
+    workers retain their slots until they exit. Mutations/recovery and local
+    work keep the existing AnyIO path; no read deadline cancels a transaction.
+    Health uses its own probe workers and ``await_futures``.
 
     Args:
         func: Blocking callable, typically a service method.
@@ -55,6 +61,23 @@ async def run_blocking(func: Callable[..., T], /, *args: Any, **kwargs: Any) -> 
         bound = inspect.signature(func).bind(*args, **kwargs)
         bound.apply_defaults()
         original_arguments = dict(bound.arguments)
+        if func.__name__ in READ_METHODS:
+            async with owner.dispatcher.read_deadline(func.__name__) as read:
+                with read.measure("admission"):
+                    plan = await owner.dispatcher.read_worker(
+                        functools.partial(
+                            prepare, owner, func.__name__, bound.arguments
+                        )
+                    )
+                result = await owner.dispatcher.run_async(
+                    plan.requests, func, **bound.arguments
+                )
+            if (
+                isinstance(result, dict)
+                and result.get("schema_version") == EVIDENCE_VERSION
+            ):
+                result["timing"] = read.timing()
+            return cast(T, result)
         plan = await anyio.to_thread.run_sync(
             functools.partial(prepare, owner, func.__name__, bound.arguments)
         )

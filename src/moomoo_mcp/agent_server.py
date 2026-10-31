@@ -16,6 +16,7 @@ from moomoo_mcp.client_authorization import (
     authorize_tool,
     tool_visible,
 )
+from moomoo_mcp.services.broker_dispatch import BrokerReadTimeoutError
 from moomoo_mcp.services.clock import utc_now_iso
 from moomoo_mcp.services.execution_identity import IdentityTokenValidationError
 from moomoo_mcp.services.execution_store import ExecutionConflict, ExecutionStoreError
@@ -437,6 +438,19 @@ def tool_error_result(
             "Inspect the state before any further mutation.",
         )
         uncertain_mutation()
+    elif isinstance(problem, BrokerReadTimeoutError):
+        category(
+            "READ_DEADLINE_EXCEEDED",
+            str(problem),
+            "Treat this read as unavailable. Check health; late SDK results are "
+            "discarded. Do not assume that OpenD aborted the blocking call.",
+        )
+        payload.update(
+            operation=problem.operation,
+            phase=problem.phase,
+            timing=problem.timing,
+            underlying_sdk_cancelled=False,
+        )
     elif isinstance(problem, ProviderRateLimitError):
         category(
             "RATE_LIMITED",
