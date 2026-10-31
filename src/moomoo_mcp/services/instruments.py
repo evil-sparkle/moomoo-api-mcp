@@ -64,11 +64,18 @@ class InstrumentLookupError(RuntimeError):
 
 @dataclass(frozen=True)
 class _StaticFacts:
-    classification: str
+    classification: str | None
     lot_size: float | None
     expires_at: float
     raw: dict[str, Any] = field(default_factory=dict)
     observed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class _ChainFacts:
+    raw: dict[str, Any]
+    observed_at: str
+    expires_at: float
 
 
 def normalize_quote(value: Any) -> float | None:
@@ -161,6 +168,9 @@ class InstrumentAdapter:
         self._metadata_lock = threading.Lock()
         self._metadata_context: weakref.ReferenceType[OpenQuoteContext] | None = None
         self._metadata: OrderedDict[str, _StaticFacts] = OrderedDict()
+        self._chain_lock = threading.Lock()
+        self._chain_context: weakref.ReferenceType[OpenQuoteContext] | None = None
+        self._chain_metadata: OrderedDict[str, _ChainFacts] = OrderedDict()
 
     def __call__(self, codes: Sequence[str]) -> list[InstrumentFacts]:
         """Gather the valuation facts for ``codes``, in the order given.
@@ -192,7 +202,7 @@ class InstrumentAdapter:
                     "is unknown"
                 )
             metadata = static.get(code)
-            if metadata is None:
+            if metadata is None or metadata.classification is None:
                 raise InstrumentLookupError(
                     f"get_stock_basicinfo did not return {code}, so its security "
                     "classification is unknown and it cannot be valued"
@@ -221,6 +231,7 @@ class InstrumentAdapter:
         fail-closed in __call__. A fact's source and age are retained separately.
         No lifecycle assumption is reconstructed from the contract symbol.
         """
+        from moomoo_mcp.services.contract_facts import merge_contract_facts
         from moomoo_mcp.services.data_evidence import validate_codes
 
         validate_codes(codes)
@@ -231,72 +242,26 @@ class InstrumentAdapter:
         snapshots = self._snapshots(context, codes, strict=True)
         snapshot_received = utc_now_iso()
         static = self._static_facts(context, codes)
-        fields = {
-            "is_option": "option_valid",
-            "option_type": "option_type",
-            "underlying": "stock_owner",
-            "expiry": "strike_time",
-            "strike": "option_strike_price",
-            "classification": "stock_type",
-            "lot_size": "lot_size",
-            "currency": "currency",
-            "exercise_style": "option_area_type",
-            "settlement_mode": "option_settlement_mode",
-            "settlement_cutoff": "settlement_cutoff",
-            "deliverable_size": "option_contract_size",
-            "deliverable_description": "deliverable_description",
-            "monetary_multiplier": OPTION_MONETARY_MULTIPLIER_FIELD,
-            "standard_status": "option_standard_type",
-        }
+        chain = self._observed_chain_facts(context, codes)
         result = []
         for code in codes:
             metadata = static.get(code)
             snapshot = snapshots.get(code, {})
             reference = metadata.raw if metadata else {}
-            facts = {}
-            for name, key in fields.items():
-                observations = []
-                for method, record, observed_at in (
-                    (
-                        "get_stock_basicinfo",
-                        reference,
-                        metadata.observed_at if metadata else None,
-                    ),
-                    ("get_market_snapshot", snapshot, snapshot_received),
-                ):
-                    value = record.get(key)
-                    if isinstance(value, float) and not math.isfinite(value):
-                        continue
-                    if value is None or (
-                        isinstance(value, str) and value in {"", "N/A"}
-                    ):
-                        continue
-                    if name in {"lot_size", "deliverable_size", "monetary_multiplier"}:
-                        value = normalize_quote(value)
-                        if value is None:
-                            continue
-                    observations.append(
-                        {
-                            "source_method": method,
-                            "value": value,
-                            "observed_at": observed_at,
-                        }
-                    )
-                conflict = any(
-                    item["value"] != observations[0]["value"]
-                    for item in observations[1:]
+            sources = [
+                (
+                    "get_stock_basicinfo",
+                    reference,
+                    metadata.observed_at if metadata else None,
+                ),
+                ("get_market_snapshot", snapshot, snapshot_received),
+            ]
+            observation = chain.get(code)
+            if observation is not None:
+                sources.append(
+                    ("get_option_chain", observation.raw, observation.observed_at)
                 )
-                facts[name] = {
-                    "state": "CONFLICT"
-                    if conflict
-                    else "KNOWN"
-                    if observations
-                    else "UNKNOWN",
-                    "value": observations[0]["value"]
-                    if observations and not conflict
-                    else None,
-                    "evidence": observations,
-                }
+            facts = merge_contract_facts(sources)
             result.append(
                 {
                     "code": code,
@@ -305,11 +270,69 @@ class InstrumentAdapter:
                     "snapshot_received_at": snapshot_received,
                     "snapshot_present": code in snapshots,
                     "reference_present": code in static,
+                    "chain_observation_present": observation is not None,
                     "static_cache_ttl_seconds": self._metadata_ttl,
                     "compatibility_verified": False,
                 }
             )
         return result
+
+    def _bind_chain_context(self, context: OpenQuoteContext) -> bool:
+        """Under _chain_lock; a retired context must not repopulate the cache."""
+        if self._quote_ctx_provider() is not context:
+            return False
+        previous = self._chain_context() if self._chain_context else None
+        if previous is not context:
+            self._chain_metadata.clear()
+            try:
+                self._chain_context = weakref.ref(context)
+            except TypeError:
+                self._chain_context = None
+                return False
+        now = self._clock()
+        for code in list(self._chain_metadata):
+            if self._chain_metadata[code].expires_at <= now:
+                del self._chain_metadata[code]
+        return True
+
+    def remember_option_chain(
+        self, context: OpenQuoteContext, rows: list[dict[str, Any]], observed_at: str
+    ) -> None:
+        """Retain only observed reference columns, never quotes/Greeks or requests.
+
+        Called only after a successful bounded discovery, not from client inputs.
+        Same TTL/capacity as basic metadata; no extra chain query is made. This
+        cache enriches observational reads only, never trading valuation.
+        """
+        from moomoo_mcp.services.contract_facts import CONTRACT_FIELDS
+
+        fields = {key for keys in CONTRACT_FIELDS.values() for key in keys}
+        with self._chain_lock:
+            if not self._bind_chain_context(context) or self._metadata_ttl == 0:
+                return
+            self.dispatcher.check_read_active()
+            for row in rows:
+                code = row["code"]
+                self._chain_metadata[code] = _ChainFacts(
+                    raw={key: value for key, value in row.items() if key in fields},
+                    observed_at=observed_at,
+                    expires_at=self._clock() + self._metadata_ttl,
+                )
+                self._chain_metadata.move_to_end(code)
+            while len(self._chain_metadata) > self._metadata_capacity:
+                self._chain_metadata.popitem(last=False)
+
+    def _observed_chain_facts(
+        self, context: OpenQuoteContext, codes: list[str]
+    ) -> dict[str, _ChainFacts]:
+        with self._chain_lock:
+            if not self._bind_chain_context(context):
+                return {}
+            return {
+                code: self._chain_metadata[code]
+                for code in codes
+                if code in self._chain_metadata
+            }
 
     def _static_facts(
         self, quote_ctx: OpenQuoteContext, codes: list[str]
@@ -347,9 +370,11 @@ class InstrumentAdapter:
                 fresh = self._classifications(quote_ctx, missing)
                 found.update(fresh)
                 if cacheable and self._metadata_ttl > 0:
+                    self.dispatcher.check_read_active()
                     for code, item in fresh.items():
-                        self._metadata[code] = item
-                        self._metadata.move_to_end(code)
+                        if item.classification is not None:
+                            self._metadata[code] = item
+                            self._metadata.move_to_end(code)
                     while len(self._metadata) > self._metadata_capacity:
                         self._metadata.popitem(last=False)
             return found
@@ -398,12 +423,18 @@ class InstrumentAdapter:
                 code_list=group,
             )
             rows = _rows(f"get_stock_basicinfo({market})", ret, data)
+            returned = [str(row.get("code")) for row in rows]
+            if len(set(returned)) != len(returned) or set(returned) - set(group):
+                raise InstrumentLookupError("Basic info has duplicate/unexpected codes")
             for row in rows:
                 code = str(row.get("code"))
                 reported = row.get("stock_type")
-                if code in group and isinstance(reported, str) and reported.strip():
+                if code in group:
                     found[code] = _StaticFacts(
-                        classification=reported.strip().upper(),
+                        classification=reported.strip().upper()
+                        if isinstance(reported, str)
+                        and reported.strip() not in {"", "N/A"}
+                        else None,
                         lot_size=normalize_quote(row.get("lot_size")),
                         expires_at=self._clock() + self._metadata_ttl,
                         raw=dict(row),
@@ -415,6 +446,7 @@ class InstrumentAdapter:
         self, code: str, metadata: _StaticFacts, snapshot: dict[str, Any]
     ) -> InstrumentFacts:
         classification = metadata.classification
+        assert classification is not None
         multiplier = self._monetary_multiplier(code, classification, snapshot)
         return InstrumentFacts(
             code=code,

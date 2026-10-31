@@ -82,13 +82,25 @@ class BrokerDataReads:
         started = utc_now_iso()
         rows = self.instrument_adapter.read_facts(codes)
         result = evidence(
-            "get_stock_basicinfo+get_market_snapshot",
+            "get_stock_basicinfo+get_market_snapshot"
+            + (
+                "+get_option_chain"
+                if any(row["chain_observation_present"] for row in rows)
+                else ""
+            ),
             started,
             rows,
             requested=codes,
+            scope={"chain_enrichment": "prior_observations_only"},
             limitations=[
                 "Unknown/conflicting lifecycle facts do not establish compatibility.",
-                "Static metadata may be cached; snapshots are requested anew.",
+                "Basic/observed chain metadata may be cached; "
+                "snapshots are requested anew.",
+                "Chain enrichment uses prior successful discovery only; "
+                "no chain is queried here.",
+                "Lot size is not deliverable size or the monetary multiplier.",
+                "Complete source coverage is not complete contract facts "
+                "or deliverable components.",
             ],
         )
         missing = [

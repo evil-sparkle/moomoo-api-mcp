@@ -156,3 +156,49 @@ def test_export_refuses_overwrite_symlink_and_non_json(tmp_path: Path) -> None:
         with pytest.raises(PreflightError):
             catalogue.write_capture(path, {})
     assert existing.read_text() == "keep"
+
+
+@pytest.mark.parametrize("drift", [False, True])
+async def test_cli_lab_scanner_verifies_exact_catalogue_without_claiming_execution(
+    tmp_path, monkeypatch, drift
+):
+    from moomoo_mcp.catalogue_capture import LAB_SCANNER_GRANTS
+    from moomoo_mcp.client_authorization import client_grants_context
+    from moomoo_mcp.server import mcp
+
+    with client_grants_context(LAB_SCANNER_GRANTS):
+        tools = [
+            tool.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for tool in await mcp.list_tools()
+        ]
+    digest = hashlib.sha256(catalogue.canonical_tools(tools)).hexdigest()
+    mocked = client([{"tools": tools}])
+    monkeypatch.setattr(catalogue, "McpClient", lambda **_kwargs: mocked)
+    authorization = tmp_path / "synthetic-header"
+    authorization.write_text(AUTHORIZATION)
+    output = tmp_path / "scanner.json"
+    status = catalogue.main(
+        [
+            "--authorization-file",
+            str(authorization),
+            "--output",
+            str(output),
+            "--profile",
+            "lab-scanner",
+            "--expected-tools-sha256",
+            "0" * 64 if drift else digest,
+        ]
+    )
+    mocked.call_tool.assert_not_called()
+    if drift:
+        assert status == 1
+        assert not output.exists()
+    else:
+        assert status == 0
+        record = json.loads(output.read_text())
+        assert record["profile_verification"]["catalogue_verified"] is True
+        assert (
+            record["profile_verification"]["execution_authorization_verified"] is False
+        )
+        assert record["authorization_profile_verified"] is False
+        assert record["tools_called"] is False
