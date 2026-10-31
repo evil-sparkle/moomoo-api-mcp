@@ -32,6 +32,7 @@ PoolKey = tuple[str, int | None]
 DOC_ROOT = "https://openapi.moomoo.com/moomoo-api-doc/en/"
 READ_TIMEOUT_SECONDS = 15.0
 MAX_INFLIGHT_READS = 8
+MAX_PENDING_READS = 32
 
 
 class ReadTiming(TypedDict):
@@ -44,6 +45,20 @@ class ReadTiming(TypedDict):
     sdk_calls_started: int
     sdk_calls_completed: int
     sdk_in_flight: bool
+
+
+class BrokerReadOverloadError(RuntimeError):
+    """This invocation was rejected before creating a timer or dispatching work."""
+
+    def __init__(self, operation: str, pending: int, maximum: int):
+        self.operation = operation
+        self.pending_reads = pending
+        self.max_pending_reads = maximum
+        super().__init__(
+            f"{operation} read admission is overloaded "
+            f"({pending}/{maximum} pending reads). This invocation was rejected "
+            "before admission or SDK dispatch; existing SDK calls were not aborted."
+        )
 
 
 class BrokerReadTimeoutError(TimeoutError):
@@ -320,6 +335,7 @@ class BrokerRequestDispatcher:
         max_wait_seconds: float = 5.0,
         read_timeout_seconds: float = READ_TIMEOUT_SECONDS,
         max_inflight_reads: int = MAX_INFLIGHT_READS,
+        max_pending_reads: int = MAX_PENDING_READS,
         deadline_sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
     ):
         if not math.isfinite(max_wait_seconds) or max_wait_seconds < 0:
@@ -332,13 +348,21 @@ class BrokerRequestDispatcher:
             or max_inflight_reads < 1
         ):
             raise ValueError("max_inflight_reads must be a positive integer")
+        if (
+            isinstance(max_pending_reads, bool)
+            or not isinstance(max_pending_reads, int)
+            or max_pending_reads < 1
+        ):
+            raise ValueError("max_pending_reads must be a positive integer")
         self.clock = clock
         self.sleep = sleep
         self.max_wait_seconds = max_wait_seconds
         self.read_timeout_seconds = read_timeout_seconds
         self.max_inflight_reads = max_inflight_reads
+        self.max_pending_reads = max_pending_reads
         self._deadline_sleep = deadline_sleep
         self._read_workers = 0
+        self._pending_reads = 0
         self._lock = Lock()
         self._limiters: dict[PoolKey, ProviderRequestLimiter] = {}
         if option_chain_limiter is not None:
@@ -356,49 +380,67 @@ class BrokerRequestDispatcher:
         with self._lock:
             return self._read_workers
 
+    @property
+    def read_requests_pending(self) -> int:
+        """Admitted awaiters, including execution, quota and worker-queue waits."""
+        with self._lock:
+            return self._pending_reads
+
     @asynccontextmanager
     async def read_deadline(self, operation: str):
         """Bound admission, worker queues, quota and execution with one deadline.
 
         Cancellation stops the await, never the synchronous SDK thread. Native
         client cancellation propagates unchanged; a deadline has a typed error.
+        One request slot covers the entire await, including quota and worker
+        queues. Nested scopes reuse that slot; overload never creates a timer.
         """
         existing = _current_read.get()
         if existing is not None:
             yield existing
             return
-        read = _ReadCall(operation, self.read_timeout_seconds, self.clock)
-        token = _current_read.set(read)
-        expired = False
+        with self._lock:
+            if self._pending_reads >= self.max_pending_reads:
+                raise BrokerReadOverloadError(
+                    operation, self._pending_reads, self.max_pending_reads
+                )
+            self._pending_reads += 1
         try:
-            with anyio.CancelScope() as scope:
+            read = _ReadCall(operation, self.read_timeout_seconds, self.clock)
+            token = _current_read.set(read)
+            expired = False
+            try:
+                with anyio.CancelScope() as scope:
 
-                async def expire() -> None:
-                    nonlocal expired
-                    await self._deadline_sleep(max(0, read.deadline - self.clock()))
-                    expired = True
-                    read.cancel()
-                    scope.cancel()
+                    async def expire() -> None:
+                        nonlocal expired
+                        await self._deadline_sleep(max(0, read.deadline - self.clock()))
+                        expired = True
+                        read.cancel()
+                        scope.cancel()
 
-                timer = asyncio.create_task(expire())
-                try:
-                    yield read
-                    read.check()
-                except BaseException:
-                    read.cancel()
-                    raise
-                finally:
-                    timer.cancel()
-                    with anyio.CancelScope(shield=True):
-                        await asyncio.gather(timer, return_exceptions=True)
-            if expired:
-                raise BrokerReadTimeoutError(read)
-        except BaseException:
-            read.cancel()
-            raise
+                    timer = asyncio.create_task(expire())
+                    try:
+                        yield read
+                        read.check()
+                    except BaseException:
+                        read.cancel()
+                        raise
+                    finally:
+                        timer.cancel()
+                        with anyio.CancelScope(shield=True):
+                            await asyncio.gather(timer, return_exceptions=True)
+                if expired:
+                    raise BrokerReadTimeoutError(read)
+            except BaseException:
+                read.cancel()
+                raise
+            finally:
+                read.finish()
+                _current_read.reset(token)
         finally:
-            read.finish()
-            _current_read.reset(token)
+            with self._lock:
+                self._pending_reads -= 1
 
     async def read_worker(
         self, func: Callable[..., T], /, *args: Any, **kwargs: Any

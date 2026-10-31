@@ -12,15 +12,17 @@ from mcp.shared.context import RequestContext
 from moomoo_mcp.server import mcp
 from moomoo_mcp.services.base_service import MoomooService
 from moomoo_mcp.services.broker_dispatch import (
+    BrokerReadOverloadError,
     BrokerReadTimeoutError,
     BrokerRequestDispatcher,
     QuotaRequest,
 )
 from moomoo_mcp.services.market_data_service import MarketDataService
-from moomoo_mcp.services.trading_policy import TradingPolicy
+from moomoo_mcp.services.trading_policy import TradingMode, TradingPolicy
 from moomoo_mcp.tools.offload import run_blocking
 from tests.mcp_helpers import call_mcp_tool
 from tests.rate_limit_clock import FakeClock
+from tests.trade_helpers import real_request
 
 
 async def wait_until(predicate):
@@ -248,10 +250,105 @@ async def test_chain_success_timing_is_additive_and_legacy_rows_are_unchanged(
     assert result["delay_status"] == "UNKNOWN"
 
 
+@pytest.mark.parametrize("active_method", ["snapshot", "chain"])
+async def test_ordinary_and_chain_reads_share_pending_budget_and_overload_diagnostic(
+    reads, mcp_app_context, active_method
+):
+    service, quote, clock = reads
+    dispatcher = service.dispatcher
+    dispatcher.max_pending_reads = 2
+    mcp_app_context.market_data_service = service
+    entered, release = Event(), Event()
+
+    def stuck(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(5)
+        return 0, pd.DataFrame()
+
+    quote.get_market_snapshot.side_effect = stuck
+    quote.get_option_chain.side_effect = stuck
+
+    async def invoke(method):
+        if method == "snapshot":
+            return await run_blocking(service.get_market_snapshot, ["US.TEST"])
+        return await service.get_option_chain_async("US.TEST")
+
+    active = asyncio.create_task(invoke(active_method))
+    queued = None
+    try:
+        await wait_until(entered.is_set)
+        queued = asyncio.create_task(
+            invoke("chain" if active_method == "snapshot" else "snapshot")
+        )
+        await wait_until(lambda: dispatcher.read_requests_pending == 2)
+        with pytest.raises(BrokerReadOverloadError):
+            await run_blocking(service.get_market_snapshot_evidence, ["US.TEST"])
+
+        token = request_ctx.set(
+            RequestContext(
+                request_id="overload-test",
+                meta=None,
+                session=MagicMock(),
+                lifespan_context=mcp_app_context,
+            )
+        )
+        try:
+            result = await mcp._call_tool_with_errors(
+                "get_option_chain", {"code": "US.TEST"}
+            )
+        finally:
+            request_ctx.reset(token)
+        assert result.isError is True
+        diagnostic = result.structuredContent
+        assert diagnostic["error_code"] == "READ_OVERLOADED"
+        assert diagnostic["pending_reads"] == diagnostic["max_pending_reads"] == 2
+        assert diagnostic["admission_rejected"] is True
+        assert diagnostic["underlying_sdk_cancelled"] is False
+        assert diagnostic["retryable"] is False
+        assert "before admission or SDK dispatch" in diagnostic["message"]
+        assert clock() == 0
+        assert dispatcher.read_requests_pending == 2
+        assert dispatcher.read_workers_in_flight == 1
+        assert (
+            quote.get_market_snapshot.call_count + quote.get_option_chain.call_count
+        ) == 1
+    finally:
+        release.set()
+        active.cancel()
+        tasks = [active]
+        if queued is not None:
+            queued.cancel()
+            tasks.append(queued)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await wait_until(lambda: dispatcher.read_workers_in_flight == 0)
+    assert dispatcher.read_requests_pending == 0
+
+
+async def test_nested_chain_deadlines_consume_one_pending_slot(reads, mcp_app_context):
+    service, quote, _clock = reads
+    service.dispatcher.max_pending_reads = 1
+    mcp_app_context.market_data_service = service
+
+    def chain(**_kwargs):
+        assert service.dispatcher.read_requests_pending == 1
+        return 0, pd.DataFrame([{"code": "US.TEST"}])
+
+    quote.get_option_chain.side_effect = chain
+    result = await call_mcp_tool(
+        mcp_app_context,
+        "get_option_chain",
+        {"code": "US.TEST", "include_evidence": True},
+    )
+    assert result.structured["result"]["timing"]["sdk_calls_started"] == 1
+    assert service.dispatcher.read_requests_pending == 0
+    quote.get_option_chain.assert_called_once()
+
+
 async def test_hung_read_does_not_occupy_mutation_pool_or_health_workers(
     reads, mcp_app_context, trade_service_factory
 ):
     service, quote, _clock = reads
+    service.dispatcher.max_pending_reads = 1
     release, entered = Event(), Event()
 
     def stuck(*_args):
@@ -263,19 +360,31 @@ async def test_hung_read_does_not_occupy_mutation_pool_or_health_workers(
     quote.get_global_state.return_value = (0, {"server_ver": "test"})
     base = MoomooService(dispatcher=service.dispatcher)
     base.quote_ctx = quote
-    trade = trade_service_factory(dispatcher=service.dispatcher, policy=TradingPolicy())
+    trade = trade_service_factory(
+        dispatcher=service.dispatcher,
+        policy=TradingPolicy(TradingMode.REAL, real_acc_ids=frozenset({123})),
+    )
     trade.trade_ctx = MagicMock()
     trade.trade_ctx.get_acc_list.return_value = (0, pd.DataFrame())
+    trade.trade_password = "test-only"
+    trade.trade_ctx.unlock_trade.return_value = (0, None)
+    trade.trade_ctx.place_order.return_value = (0, pd.DataFrame([{"order_id": "77"}]))
     mcp_app_context.moomoo_service = base
     mcp_app_context.market_data_service = service
     mcp_app_context.trade_service = trade
     task = asyncio.create_task(run_blocking(service.get_market_snapshot, ["US.TEST"]))
+    queued = None
     try:
         await wait_until(entered.is_set)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert service.dispatcher.read_workers_in_flight == 1
+        assert service.dispatcher.read_requests_pending == 0
+        queued = asyncio.create_task(service.get_option_chain_async("US.TEST"))
+        await wait_until(lambda: service.dispatcher.read_requests_pending == 1)
+        with pytest.raises(BrokerReadOverloadError):
+            await run_blocking(service.get_market_snapshot, ["US.TEST"])
         assert (
             await asyncio.wait_for(run_blocking(lambda: "available"), 2) == "available"
         )
@@ -283,7 +392,31 @@ async def test_hung_read_does_not_occupy_mutation_pool_or_health_workers(
             call_mcp_tool(mcp_app_context, "check_health"), 2
         )
         assert health.structured["status"] == "connected"
+        receipt = await asyncio.wait_for(
+            run_blocking(
+                trade.place_order,
+                "US.TEST",
+                1.0,
+                1,
+                "BUY",
+                trd_env="REAL",
+                acc_id="123",
+                **real_request(trade, "write-under-read-saturation"),
+            ),
+            2,
+        )
+        assert receipt["state"] == "ACKNOWLEDGED"
+        assert [
+            call.kwargs["is_unlock"]
+            for call in trade.trade_ctx.unlock_trade.call_args_list
+        ] == [True, False]
+        assert service.dispatcher.read_workers_in_flight == 1
+        assert service.dispatcher.read_requests_pending == 1
     finally:
         release.set()
+        if queued is not None:
+            queued.cancel()
+            await asyncio.gather(queued, return_exceptions=True)
         await wait_until(lambda: service.dispatcher.read_workers_in_flight == 0)
         base.close()
+    assert service.dispatcher.read_requests_pending == 0

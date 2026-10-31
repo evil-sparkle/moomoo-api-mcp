@@ -832,12 +832,22 @@ Broker reads through `run_blocking` and asynchronous option discovery have one
 **15-second end-to-end deadline**, starting before admission/account discovery.
 It covers read-worker queues, the five-second quota wait, SDK execution and
 response processing. `BrokerRequestDispatcher(read_timeout_seconds=...,
-max_inflight_reads=...)` configures this process-local policy; defaults allow at
-most **8 actual read workers**, including abandoned calls. A worker retains its
+max_inflight_reads=..., max_pending_reads=...)` configures this process-local
+policy; defaults allow at most **8 actual read workers**, including abandoned
+calls. A worker retains its
 slot until its blocking function exits, not merely until its caller stops
 waiting. Reads use dedicated daemon workers, separate from mutations/local work
 and the existing health probes. If all read workers are stuck, further reads
 expire while queued rather than spawning additional SDK threads.
+
+At most **32 admitted read requests** may await results at once, shared across
+ordinary reads and option-chain discovery. This conservative pending-request cap
+includes executing requests, quota waits and worker queues; nested read scopes
+count once. Excess invocations fail fast with `READ_OVERLOADED`, before creating
+a deadline task, reserving quota or dispatching an SDK call. Completion, timeout
+and cancellation return the request slot. An abandoned SDK worker still retains
+its separate worker slot until it exits; freeing the caller's pending slot does
+not free a stuck thread. Health and mutations do not use this read budget.
 
 Before dispatch, cancellation returns unused quota via the dispatch lease.
 After dispatch, the SDK attempt remains charged: only the caller stops waiting.

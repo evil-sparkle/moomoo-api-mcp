@@ -2,12 +2,13 @@
 
 import asyncio
 from threading import Event
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import anyio
 import pytest
 
 from moomoo_mcp.services.broker_dispatch import (
+    BrokerReadOverloadError,
     BrokerReadTimeoutError,
     BrokerRequestDispatcher,
     QuotaRequest,
@@ -48,6 +49,155 @@ def test_read_deadline_must_be_finite_and_positive(value):
 def test_read_worker_limit_must_be_a_positive_integer(value):
     with pytest.raises(ValueError):
         BrokerRequestDispatcher(max_inflight_reads=value)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_pending_read_limit_must_be_a_positive_integer(value):
+    with pytest.raises(ValueError):
+        BrokerRequestDispatcher(max_pending_reads=value)
+
+
+async def test_active_and_pending_saturation_rejects_without_timer_or_worker(bounded):
+    dispatcher, clock = bounded
+    dispatcher.max_pending_reads = 3
+    entered = [Event(), Event()]
+    release = Event()
+    queued_work = Mock(return_value="queued result")
+    rejected_work = Mock()
+
+    def sdk(index):
+        entered[index].set()
+        assert release.wait(5)
+        return index
+
+    async def active(index):
+        async with dispatcher.read_deadline("active"):
+            return await dispatcher.run_async(
+                [], dispatcher.call, "get_market_state", sdk, index
+            )
+
+    async def queued():
+        async with dispatcher.read_deadline("queued"):
+            return await dispatcher.run_async([], queued_work)
+
+    tasks = [asyncio.create_task(active(index)) for index in range(2)]
+    try:
+        await wait_until(lambda: all(event.is_set() for event in entered))
+        tasks.append(asyncio.create_task(queued()))
+        await wait_until(lambda: dispatcher.read_requests_pending == 3)
+        assert dispatcher.read_workers_in_flight == 2
+        with (
+            patch("moomoo_mcp.services.broker_dispatch.asyncio.create_task") as timer,
+            pytest.raises(BrokerReadOverloadError) as failure,
+        ):
+            async with dispatcher.read_deadline("excess"):
+                await dispatcher.run_async([], rejected_work)
+        timer.assert_not_called()
+        rejected_work.assert_not_called()
+        assert failure.value.operation == "excess"
+        assert failure.value.pending_reads == failure.value.max_pending_reads == 3
+        assert "before admission or SDK dispatch" in str(failure.value)
+        assert clock() == 0
+        assert dispatcher.read_requests_pending == 3
+        assert dispatcher.read_workers_in_flight == 2
+        release.set()
+        await wait_until(lambda: dispatcher.read_workers_in_flight == 0)
+        clock.advance(0.05)
+        assert await asyncio.wait_for(asyncio.gather(*tasks), 2) == [
+            0,
+            1,
+            "queued result",
+        ]
+        assert dispatcher.read_requests_pending == 0
+    finally:
+        release.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await wait_until(lambda: dispatcher.read_workers_in_flight == 0)
+
+
+@pytest.mark.parametrize("stop", ["completion", "deadline", "asyncio", "anyio"])
+async def test_pending_slot_cleanup_is_independent_of_abandoned_worker(bounded, stop):
+    dispatcher, clock = bounded
+    dispatcher.max_pending_reads = 1
+    entered, release = Event(), Event()
+    scope = anyio.CancelScope()
+
+    def sdk():
+        entered.set()
+        assert release.wait(5)
+        return "completed"
+
+    async def read():
+        with scope:
+            async with dispatcher.read_deadline("first"):
+                return await dispatcher.run_async(
+                    [], dispatcher.call, "get_market_state", sdk
+                )
+
+    task = asyncio.create_task(read())
+    try:
+        await wait_until(entered.is_set)
+        assert dispatcher.read_requests_pending == 1
+        if stop == "completion":
+            release.set()
+            assert await asyncio.wait_for(task, 2) == "completed"
+        elif stop == "deadline":
+            await clock.wait_for_sleepers()
+            clock.advance(5)
+            with pytest.raises(BrokerReadTimeoutError):
+                await asyncio.wait_for(task, 2)
+        elif stop == "asyncio":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            scope.cancel()
+            await asyncio.wait_for(task, 2)
+        assert dispatcher.read_requests_pending == 0
+        assert dispatcher.read_workers_in_flight == int(stop != "completion")
+        async with dispatcher.read_deadline("replacement"):
+            assert dispatcher.read_requests_pending == 1
+            assert await dispatcher.run_async([], lambda: "new") == "new"
+        assert dispatcher.read_requests_pending == 0
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await wait_until(lambda: dispatcher.read_workers_in_flight == 0)
+
+
+async def test_quota_waits_also_occupy_pending_budget_and_cancel_releases_it(bounded):
+    dispatcher, clock = bounded
+    dispatcher.max_pending_reads = 1
+    request = QuotaRequest("get_market_state")
+    held = dispatcher.limiter(request).reserve(10)
+    sdk = Mock()
+
+    async def read():
+        async with dispatcher.read_deadline("quota"):
+            await dispatcher.run_async([request], sdk)
+
+    task = asyncio.create_task(read())
+    try:
+        await clock.wait_for_sleepers(2)
+        assert dispatcher.read_requests_pending == 1
+        assert dispatcher.read_workers_in_flight == 0
+        with pytest.raises(BrokerReadOverloadError):
+            async with dispatcher.read_deadline("excess"):
+                pytest.fail("overloaded request entered its body")
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert dispatcher.read_requests_pending == 0
+        async with dispatcher.read_deadline("replacement"):
+            assert await dispatcher.run_async([], lambda: "available") == "available"
+        sdk.assert_not_called()
+    finally:
+        held.release()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize("overall_first", [True, False])
